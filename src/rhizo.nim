@@ -79,6 +79,8 @@ const
   sweepLua*      = staticRead("../scripts/sweep.lua")
   reserveNameLua* = staticRead("../scripts/reserve_name.lua")
   resetLua*      = staticRead("../scripts/reset.lua")
+  taskLua*       = staticRead("../scripts/task.lua")
+  decisionLua*   = staticRead("../scripts/decision.lua")
   RhizoVersion*  = "0.1.12"
 
 # Cryptographic Helpers
@@ -111,6 +113,8 @@ let
   sweepSha*      = computeSha1(sweepLua)
   reserveNameSha* = computeSha1(reserveNameLua)
   resetSha*      = computeSha1(resetLua)
+  taskSha*       = computeSha1(taskLua)
+  decisionSha*   = computeSha1(decisionLua)
 
 
 proc secureFilePermissions*(path: string) =
@@ -618,7 +622,7 @@ proc clearCurrentAgent*() =
     discard
 
 
-proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = ""): string =
+proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = true): string =
   if explicitName.len > 0:
     return explicitName
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
@@ -641,9 +645,10 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
       discard
 
   # File-based fallback for shell invocations without session IDs
-  let saved = loadCurrentAgent()
-  if saved.len > 0:
-    return saved
+  if allowGlobalFallback:
+    let saved = loadCurrentAgent()
+    if saved.len > 0:
+      return saved
 
   if fallbackDefault:
     if cfg.agentName.len > 0:
@@ -679,6 +684,53 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
       return (true, pid, host)
   except CatchableError:
     return (false, 0, "")
+
+proc parseIsoOrUnix*(tsStr: string): int64 =
+  if tsStr.len == 0: return 0
+  try:
+    return parseInt(tsStr)
+  except ValueError:
+    discard
+  try:
+    let dt = times.parse(tsStr, "yyyy-MM-dd'T'HH:mm:ss'Z'", utc())
+    return dt.toTime().toUnix()
+  except CatchableError:
+    discard
+  try:
+    let dt = times.parse(tsStr, "yyyy-MM-dd'T'HH:mm:sszzz", utc())
+    return dt.toTime().toUnix()
+  except CatchableError:
+    return 0
+
+proc checkSupervisionAttached*(name: string, force: bool = false) =
+  if force: return
+  when defined(posix):
+    var isDetached = false
+    var reason = ""
+    var st: Stat
+    if fstat(cint(1), st) == 0:
+      if S_ISREG(st.st_mode):
+        isDetached = true
+        reason = "stdout is redirected to a regular file (e.g. nohup.out or log redirection)"
+
+    if getppid() == 1:
+      isDetached = true
+      reason = "process is orphaned (parent PID is 1 / launchd / init)"
+
+    if isDetached:
+      stderr.writeLine("Error: Unsupervised detachment detected for 'rhizo listen " & name & "'!")
+      stderr.writeLine("Reason: " & reason & ".")
+      stderr.writeLine("")
+      stderr.writeLine("Backgrounding 'rhizo listen' with '&' or redirecting output to a file breaks supervisor")
+      stderr.writeLine("contract and will swallow delivered messages. Never run 'nohup rhizo listen &'!")
+      stderr.writeLine("")
+      stderr.writeLine("Harness-owned alternatives:")
+      stderr.writeLine("- OpenCode: Native in-process fiber listens automatically without blocking.")
+      stderr.writeLine("- Antigravity: Launch via run_command(CommandLine=\"rhizo listen " & name & "\", IsDaemon=true).")
+      stderr.writeLine("- Claude Code / CLI: Run foreground blocking 'rhizo listen " & name & "' inside a background task.")
+      stderr.writeLine("- Synchronous: Run 'rhizo listen " & name & "' directly in foreground.")
+      stderr.writeLine("If you explicitly require unsupervised execution, pass '--force'.")
+      quit(1)
 
 # Core Operations
 proc doRegister*(cfg: RhizoConfig, name, tags: string, ttl: int = -1): string =
@@ -787,7 +839,24 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
         parsed["encrypted"] = %false
       except ValueError as e:
         stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping corrupted/undecryptable message: " & e.msg & " (ID: " & id & ")")
-        continue
+    let mockOffset = try:
+      let v = client.get(cfg.prefix & "mock_time_offset")
+      if v != redisNil and v.len > 0: parseInt(v) else: 0
+    except CatchableError: 0
+    let msgUnix = parseIsoOrUnix(ts)
+    if msgUnix > 0:
+      let nowSec = getTime().toUnix() + mockOffset
+      let elapsedSec = max(0.int64, nowSec - msgUnix)
+      let ageHuman = if elapsedSec < 60: $elapsedSec & "s"
+                     elif elapsedSec < 3600: $(elapsedSec div 60) & "m"
+                     else: $(elapsedSec div 3600) & "h"
+      parsed["elapsed_seconds"] = %elapsedSec
+      parsed["age_human"] = %ageHuman
+      if elapsedSec >= 3600:
+        parsed["is_stale"] = %true
+        stderr.writeLine("⚠️  [RHIZO WARNING] Stale message drained! Age: " & ageHuman & " (sent at " & ts & ").")
+      else:
+        parsed["is_stale"] = %false
 
     validMessages.add(parsed)
 
@@ -995,26 +1064,38 @@ proc formatDirectory*(raw: string): string =
   if raw.strip().len == 0:
     return "No agents found."
   var lines = raw.strip().splitLines()
-  var rows: seq[(string, string, string, string, string)] = @[]
+  var rows: seq[(string, string, string, string, string, string)] = @[]
   for line in lines:
     let parts = line.strip().split('|')
     if parts.len >= 3:
       let name = parts[0]
-      let alive = if parts[1] == "1": "ACTIVE" else: "EXPIRED"
+      let isAlive = (parts[1] == "1")
       let tags = parts[2]
       let state = if parts.len > 3 and parts[3].len > 0: parts[3].toUpperAscii else: "IDLE"
-      let activity = if parts.len > 4: parts[4..^1].join("|") else: ""
-      rows.add((name, alive, state, tags, activity))
+      let activity = if parts.len > 4: parts[4].strip() else: ""
+      let hasListener = (parts.len > 5 and parts[5] == "1")
+      let elapsedSec = if parts.len > 6: (try: parseInt(parts[6].strip()) except ValueError: 0) else: 0
+
+      let statusStr = if isAlive: "ACTIVE"
+                      elif elapsedSec < 60: "STALE (" & $elapsedSec & "s)"
+                      elif elapsedSec < 3600: "STALE (" & $(elapsedSec div 60) & "m)"
+                      else: "STALE (" & $(elapsedSec div 3600) & "h)"
+
+      let listenerStr = if hasListener: "LISTENING"
+                        elif isAlive: "DETACHED"
+                        else: "NO_LISTENER"
+
+      rows.add((name, statusStr, listenerStr, state, tags, activity))
     elif line.strip().len > 0:
-      rows.add((line.strip(), "", "", "", ""))
+      rows.add((line.strip(), "", "", "", "", ""))
 
   if rows.len == 0:
     return "No agents found."
 
-  result = "AGENT               STATUS     STATE      TAGS                ACTIVITY\n"
-  result.add("------------------------------------------------------------------------------------\n")
-  for (name, status, state, tags, activity) in rows:
-    result.add(name.alignLeft(20) & status.alignLeft(11) & state.alignLeft(11) & tags.alignLeft(20) & activity & "\n")
+  result = "AGENT               STATUS           LISTENER     STATE        TAGS                ACTIVITY\n"
+  result.add("------------------------------------------------------------------------------------------------------\n")
+  for (name, status, listener, state, tags, activity) in rows:
+    result.add(name.alignLeft(20) & status.alignLeft(17) & listener.alignLeft(13) & state.alignLeft(13) & tags.alignLeft(20) & activity & "\n")
   result = result.strip()
 
 proc formatDirectoryJson*(raw: string): string =
@@ -1024,8 +1105,12 @@ proc formatDirectoryJson*(raw: string): string =
       let parts = line.strip().split('|')
       if parts.len >= 3:
         var obj = newJObject()
+        let isAlive = (parts[1] == "1")
+        let hasListener = (parts.len > 5 and parts[5] == "1")
+        let elapsedSec = if parts.len > 6: (try: parseInt(parts[6].strip()) except ValueError: 0) else: 0
+
         obj["agent"] = %parts[0]
-        obj["status"] = %(if parts[1] == "1": "ACTIVE" else: "EXPIRED")
+        obj["status"] = %(if isAlive: "ACTIVE" else: "STALE")
         var tagArr = newJArray()
         if parts[2].len > 0:
           for t in parts[2].split(','):
@@ -1033,7 +1118,9 @@ proc formatDirectoryJson*(raw: string): string =
             if trimmed.len > 0: tagArr.add(%trimmed)
         obj["tags"] = tagArr
         obj["state"] = %(if parts.len > 3 and parts[3].len > 0: parts[3].toUpperAscii else: "IDLE")
-        obj["activity"] = %(if parts.len > 4: parts[4..^1].join("|") else: "")
+        obj["activity"] = %(if parts.len > 4: parts[4].strip() else: "")
+        obj["listener"] = %(if hasListener: "LISTENING" elif isAlive: "DETACHED" else: "NO_LISTENER")
+        obj["elapsed_seconds"] = %elapsedSec
         list.add(obj)
   return $list
 
@@ -1043,7 +1130,7 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
     return formatDirectoryJson(raw)
   return formatDirectory(raw)
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false)
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false)
 
 proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 600): tuple[name, prefix, codename: string] =
   randomize()
@@ -1139,13 +1226,27 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: string,
             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", isBroadcast: bool = false,
             customTs: string = "", echoResult: bool = true, rearmListen: bool = false, listenTimeoutSec: int = -1,
-            urgency: string = "soon"): string =
+            urgency: string = "soon", format: string = "text"): string =
   randomize()
   let secret = getSecret(cfg)
   let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & fromAgent & "_" & $rand(1000..9999)
   let ts = if customTs.len > 0: customTs else: now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
   let finalBody = if cfg.encrypt: encryptAes(body, secret, cfg) else: body
   let normUrgency = if urgency.toLowerAscii in ["immediate", "now", "urgent"]: "immediate" else: "soon"
+
+  var effectiveReplyTo = replyTo
+  if msgType == "reply":
+    if effectiveReplyTo.startsWith("sc_"):
+      effectiveReplyTo = "scatter:" & effectiveReplyTo
+    elif effectiveReplyTo.len == 0:
+      try:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let pending = client.get(cfg.prefix & "agent:" & fromAgent & ":pending_scatter")
+        if pending != redisNil and pending.len > 0:
+          effectiveReplyTo = pending
+      except CatchableError:
+        discard
 
   # Canonical concatenation for HMAC: id|from|to|type|subject|body|timestamp
   let canonical = id & "|" & fromAgent & "|" & toAgent & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
@@ -1160,8 +1261,8 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let originHost = getOriginHostname()
   if originHost.len > 0:
     node["host"] = %originHost
-  if replyTo.len > 0:
-    node["reply_to"] = %replyTo
+  if effectiveReplyTo.len > 0:
+    node["reply_to"] = %effectiveReplyTo
   else:
     node["reply_to"] = newJNull()
 
@@ -1182,9 +1283,9 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
 
   let effectiveTtl = if cfg.messageTtl > 0: cfg.messageTtl else: 604800
   let isTargetMulticast = isBroadcast or toAgent.startsWith("@") or toAgent == "*"
+  var target = ""
   var res = ""
   if isTargetMulticast:
-    var target = ""
     if toAgent.startsWith("@"):
       let raw = toAgent[1..^1]
       if raw in ["*", "all", "@all"]: target = "*"
@@ -1201,17 +1302,59 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         else:
           target = cfg.project & "," & tags.join(",")
       else:
-        target = cfg.project
+        target = if toAgent.len > 0 and toAgent != "*": (if toAgent.startsWith("@"): toAgent[1..^1] else: toAgent) else: "*"
     else:
-      target = if toAgent.len > 0: toAgent else: cfg.project
+      target = if toAgent.len > 0: toAgent else: "*"
 
     res = runLuaScript(cfg.redisUrl, multicastLua, multicastSha, [cfg.prefix, target, msgJson, $effectiveTtl])
   else:
-    let destQueue = if msgType == "reply" and (replyTo.startsWith("scatter:") or replyTo.startsWith("reply:")): replyTo else: toAgent
+    let destQueue = if msgType == "reply" and (effectiveReplyTo.startsWith("scatter:") or effectiveReplyTo.startsWith("reply:")): effectiveReplyTo else: toAgent
     res = runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, destQueue, msgJson, $effectiveTtl])
+    if destQueue.startsWith("scatter:") and toAgent.len > 0 and toAgent != destQueue:
+      discard runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, toAgent, msgJson, $effectiveTtl])
 
   if echoResult and not rearmListen:
-    echo res
+    if format == "raw":
+      echo res
+    elif format == "json":
+      if isTargetMulticast:
+        var outObj = newJObject()
+        outObj["status"] = %"BROADCAST"
+        outObj["id"] = %id
+        outObj["scope"] = %target
+        outObj["delivered"] = %(try: parseInt(res.strip()) except ValueError: 0)
+        echo $outObj
+      else:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let isAlive = client.exists(cfg.prefix & "heartbeat:" & toAgent)
+        let hasListener = client.exists(cfg.prefix & "listener:" & toAgent)
+        let depth = try: client.lLen(cfg.prefix & "inbox:" & toAgent) except CatchableError: 0
+        var outObj = newJObject()
+        outObj["status"] = %"ENQUEUED"
+        outObj["id"] = %id
+        outObj["recipient"] = %toAgent
+        outObj["recipient_status"] = %(if isAlive: "ACTIVE" else: "OFFLINE")
+        outObj["listener_attached"] = %hasListener
+        outObj["inbox_depth"] = %depth
+        echo $outObj
+    else: # text
+      if isTargetMulticast:
+        let count = try: parseInt(res.strip()) except ValueError: 0
+        echo "BROADCAST " & id & " delivered to " & $count & " agents (scope: " & target & ")"
+        if count == 1 and target != "*" and (target == cfg.project or target == "@" & cfg.project):
+          stderr.writeLine("⚠️  [RHIZO WARNING] Broadcast reached only the sender ('" & fromAgent & "'). Target scope was '" & target & "'. Use '--scope all' or pass '--tags' to target other agents.")
+      else:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let isAlive = client.exists(cfg.prefix & "heartbeat:" & toAgent)
+        let hasListener = client.exists(cfg.prefix & "listener:" & toAgent)
+        let depth = try: client.lLen(cfg.prefix & "inbox:" & toAgent) except CatchableError: 0
+        let statusStr = if isAlive: "ACTIVE" else: "OFFLINE"
+        let listenerStr = if hasListener: "LISTENING" else: "NO_LISTENER"
+        echo "ENQUEUED " & id & " -> " & toAgent & " (status: " & statusStr & ", listener: " & listenerStr & ", inbox_depth: " & $depth & ")"
+        if not hasListener:
+          stderr.writeLine("⚠️  [RHIZO WARNING] Recipient '" & toAgent & "' has no active listener attached! Message queued in inbox (depth: " & $depth & "), but will not be processed until a listener is armed.")
 
   if rearmListen:
     let listenerAgent = if fromAgent.len > 0: fromAgent else: getActiveAgentName(cfg, "", fallbackDefault = true)
@@ -1254,7 +1397,8 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
   except Exception:
     discard
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false) =
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false) =
+  checkSupervisionAttached(name, force)
   let secret = getSecret(cfg)
   let inboxKey = cfg.prefix & "inbox:" & name
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
@@ -1399,6 +1543,32 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
             let elapsed = int(getTime().toUnix() - startTime)
             remaining = max(0, effectiveTimeout - elapsed)
           continue
+
+      let mockOffset = try:
+        let v = client.get(cfg.prefix & "mock_time_offset")
+        if v != redisNil and v.len > 0: parseInt(v) else: 0
+      except CatchableError: 0
+      let msgUnix = parseIsoOrUnix(ts)
+      if msgUnix > 0:
+        let nowSec = getTime().toUnix() + mockOffset
+        let elapsedSec = max(0.int64, nowSec - msgUnix)
+        let ageHuman = if elapsedSec < 60: $elapsedSec & "s"
+                       elif elapsedSec < 3600: $(elapsedSec div 60) & "m"
+                       else: $(elapsedSec div 3600) & "h"
+        parsed["elapsed_seconds"] = %elapsedSec
+        parsed["age_human"] = %ageHuman
+        if elapsedSec >= 3600:
+          parsed["is_stale"] = %true
+          stderr.writeLine("⚠️  [RHIZO WARNING] Stale message received! Age: " & ageHuman & " (sent at " & ts & "). This message may be obsolete.")
+        else:
+          parsed["is_stale"] = %false
+
+      let rTo = parsed.getOrDefault("reply_to").getStr("")
+      if rTo.startsWith("scatter:"):
+        try:
+          discard client.setEx(cfg.prefix & "agent:" & name & ":pending_scatter", 600, rTo)
+        except CatchableError:
+          discard
 
       if notify:
         sendDesktopNotification(parsed)
@@ -2608,6 +2778,7 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
       discard
     let startTime = getTime().toUnix()
     var remaining = timeoutSec
+    stderr.writeLine("[RHIZO SCATTER] Dispatched task '" & scatterId & "' to " & $delivered & " agents. Waiting for quorum (" & $effectiveQuorum & "/" & $delivered & ") with timeout " & $timeoutSec & "s...")
 
     while collectedReplies.len < effectiveQuorum and remaining > 0:
       var popRes: RedisList
@@ -2662,6 +2833,7 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
       if not seenSenders.contains(sender):
         seenSenders.incl(sender)
         collectedReplies.add(parsed)
+        stderr.writeLine("[RHIZO SCATTER] Reply received from '" & sender & "' [" & $collectedReplies.len & "/" & $effectiveQuorum & "]")
 
       let elapsed = int(getTime().toUnix() - startTime)
       remaining = max(0, timeoutSec - elapsed)
@@ -2670,6 +2842,9 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
       discard client.del(@[replyInboxKey])
     except CatchableError:
       discard
+
+    if collectedReplies.len < effectiveQuorum:
+      stderr.writeLine("⚠️  [RHIZO WARNING] Scatter timed out after " & $timeoutSec & "s. Quorum not reached: " & $collectedReplies.len & "/" & $effectiveQuorum & " replies received.")
 
   if rawOutput:
     for r in collectedReplies:
@@ -2740,6 +2915,109 @@ proc resolveVal(val: string): string =
     except CatchableError:
       return val
   return val
+
+proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
+  var evalArgs: seq[string] = @[cfg.prefix, action]
+  for a in args: evalArgs.add(a)
+  return runLuaScript(cfg.redisUrl, taskLua, taskSha, evalArgs)
+
+proc formatTasksTable*(jsonStr: string): string =
+  try:
+    let node = parseJson(jsonStr)
+    if node.kind != JArray or node.len == 0:
+      return "No tasks found."
+    var rows: seq[(string, string, string, string, string)] = @[]
+    for item in node:
+      let id = item.getOrDefault("id").getStr("")
+      let title = item.getOrDefault("title").getStr("")
+      let state = item.getOrDefault("state").getStr("UNASSIGNED")
+      let owner = item.getOrDefault("owner").getStr("-")
+      let lease = try: parseInt(item.getOrDefault("lease_until").getStr("0")) except ValueError: 0
+      let nowSec = getTime().toUnix()
+      let remSec = if lease > nowSec: $(lease - nowSec) & "s" else: "-"
+      rows.add((id, if owner.len > 0: owner else: "-", state, remSec, title))
+    result = "TASK ID              OWNER           STATE          LEASE REMAINING    TITLE\n"
+    result.add("--------------------------------------------------------------------------------------\n")
+    for (id, owner, state, rem, title) in rows:
+      result.add(id.alignLeft(21) & owner.alignLeft(16) & state.alignLeft(15) & rem.alignLeft(19) & title & "\n")
+    result = result.strip()
+  except CatchableError:
+    return jsonStr
+
+proc doDecision*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
+  var evalArgs: seq[string] = @[cfg.prefix, action]
+  for a in args: evalArgs.add(a)
+  return runLuaScript(cfg.redisUrl, decisionLua, decisionSha, evalArgs)
+
+proc formatDecisionsTable*(jsonStr: string): string =
+  try:
+    let node = parseJson(jsonStr)
+    if node.kind != JArray or node.len == 0:
+      return "No decisions found."
+    var rows: seq[(string, string, string, string, string)] = @[]
+    for item in node:
+      let id = item.getOrDefault("id").getStr("")
+      let title = item.getOrDefault("title").getStr("")
+      let status = item.getOrDefault("status").getStr("PROPOSED")
+      let ruledBy = item.getOrDefault("ruled_by").getStr("-")
+      let propBy = item.getOrDefault("proposed_by").getStr("-")
+      rows.add((id, status, if ruledBy.len > 0: ruledBy else: "-", if propBy.len > 0: propBy else: "-", title))
+    result = "DECISION ID          STATUS        RULED BY    PROPOSED BY   TITLE\n"
+    result.add("---------------------------------------------------------------------------------\n")
+    for (id, status, ruled, prop, title) in rows:
+      result.add(id.alignLeft(21) & status.alignLeft(14) & ruled.alignLeft(12) & prop.alignLeft(14) & title & "\n")
+    result = result.strip()
+  except CatchableError:
+    return jsonStr
+
+proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string) =
+  try:
+    var client = connectRedis(cfg.redisUrl)
+    defer: (try: client.close() except CatchableError: discard)
+    var node = newJObject()
+    node["timestamp"] = %(now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'"))
+    node["actor"] = %actor
+    node["action"] = %action
+    node["details"] = %details
+    discard client.lPush(cfg.prefix & "audit_trail", $node)
+    client.lTrim(cfg.prefix & "audit_trail", 0, 999)
+  except CatchableError:
+    discard
+
+proc doAuditList*(cfg: RhizoConfig, limit: int = 50): string =
+  try:
+    var client = connectRedis(cfg.redisUrl)
+    defer: (try: client.close() except CatchableError: discard)
+    var list = newJArray()
+    let items = client.lRange(cfg.prefix & "audit_trail", 0, limit - 1)
+    for it in items:
+      try:
+        list.add(parseJson(it))
+      except CatchableError:
+        discard
+    return $list
+  except CatchableError:
+    return "[]"
+
+proc formatAuditTable*(jsonStr: string): string =
+  try:
+    let node = parseJson(jsonStr)
+    if node.kind != JArray or node.len == 0:
+      return "No audit events recorded."
+    var rows: seq[(string, string, string, string)] = @[]
+    for item in node:
+      let ts = item.getOrDefault("timestamp").getStr("")
+      let actor = item.getOrDefault("actor").getStr("")
+      let action = item.getOrDefault("action").getStr("")
+      let details = item.getOrDefault("details").getStr("")
+      rows.add((ts, actor, action, details))
+    result = "TIMESTAMP                 ACTOR           ACTION          DETAILS\n"
+    result.add("------------------------------------------------------------------------------------------------\n")
+    for (ts, actor, action, details) in rows:
+      result.add(ts.alignLeft(26) & actor.alignLeft(16) & action.alignLeft(16) & details & "\n")
+    result = result.strip()
+  except CatchableError:
+    return jsonStr
 
 # Main Entrypoint / CLI Router
 proc main() =
@@ -3050,14 +3328,14 @@ proc main() =
         stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
         quit(1)
 
-    doListen(cfg, name, timeout, notify, quiet)
+    doListen(cfg, name, timeout, notify, quiet, forceListen)
 
   of "send", "broadcast", "reply":
     let isBroadcast = (subcmd == "broadcast")
     let isReply = (subcmd == "reply")
     var toAgent = ""
     var msgType = if isReply: "reply" else: "task"
-    var fromAgent = getActiveAgentName(cfg, "", fallbackDefault = true)
+    var fromAgent = ""
     var subject = ""
     var body = ""
     var tags: seq[string] = @[]
@@ -3067,6 +3345,7 @@ proc main() =
     var rearmListen = false
     var listenTimeout = -1
     var urgency = "soon"
+    var format = "text"
 
     var i = 1
     while i < args.len:
@@ -3083,6 +3362,8 @@ proc main() =
       elif a == "--body" and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
       elif a in ["--immediate", "-i"]: urgency = "immediate"
       elif a == "--soon": urgency = "soon"
+      elif a == "--json": format = "json"
+      elif a == "--raw": format = "raw"
       elif a.startsWith("--urgency="): urgency = a[10..^1]
       elif a == "--urgency" and i + 1 < args.len: urgency = args[i+1]; inc i
       elif a.startsWith("--delivery="): urgency = a[11..^1]
@@ -3120,6 +3401,22 @@ proc main() =
         elif body == "": body = a
       inc i
 
+    # Identity resolution for sender: strictly process-bound, no silent cross-agent current_agent leakage
+    if fromAgent.len == 0:
+      fromAgent = getActiveAgentName(cfg, fromAgent, fallbackDefault = false, sessionId = cfg.sessionId, allowGlobalFallback = false)
+    if fromAgent.len == 0:
+      if fileExists(".vine.json"):
+        try:
+          let vj = parseJson(readFile(".vine.json"))
+          let w = vj.getOrDefault("worker").getStr(vj.getOrDefault("agent").getStr(""))
+          if w.len > 0: fromAgent = w
+        except CatchableError: discard
+    if fromAgent.len == 0 and cfg.project.len > 0:
+      fromAgent = cfg.project & "-worker"
+    if fromAgent.len == 0:
+      stderr.writeLine("Error: Cannot determine sender identity. Pass '--from <agent>' or export 'RHIZO_AGENT_NAME=<agent>'.")
+      quit(1)
+
     if isBroadcast and toAgent == "":
       if tags.len > 0:
         if "*" in tags or "@all" in tags:
@@ -3127,7 +3424,7 @@ proc main() =
         else:
           toAgent = "@" & tags.join(",")
       else:
-        toAgent = if cfg.project.len > 0: "@" & cfg.project else: "*"
+        toAgent = "*"
 
     if (not isBroadcast and toAgent.len == 0) or subject.len == 0 or body.len == 0:
       if not isBroadcast and toAgent.len == 0:
@@ -3146,7 +3443,7 @@ proc main() =
           stderr.writeLine("Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body> [--immediate|--soon]")
       quit(1)
 
-    discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency)
+    discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format)
 
   of "who":
     var filterTag = cfg.project
@@ -3215,17 +3512,45 @@ proc main() =
         format = "json"
       elif a == "--raw":
         format = "raw"
+      elif a.startsWith("--agent="):
+        explicitName = a[8..^1]
+      elif (a == "--agent" or a == "-a") and i + 1 < args.len:
+        explicitName = args[i+1]
+        inc i
+      elif a.startsWith("--count="):
+        count = parseRequiredInt(a[8..^1], "--count")
+      elif (a == "--count" or a == "-c") and i + 1 < args.len:
+        count = parseRequiredInt(args[i+1], "--count")
+        inc i
       elif not a.startsWith("-"):
         inc positionalIdx
         if positionalIdx == 1:
           try:
             count = parseInt(a)
           except ValueError:
-            stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
-            stderr.writeLine("Usage: rhizo drain [count] [name]")
-            quit(1)
+            var isKnownAgent = false
+            try:
+              var client = connectRedis(cfg.redisUrl)
+              defer: (try: client.close() except CatchableError: discard)
+              if client.sIsMember(cfg.prefix & "active_agents", a) == 1 or client.exists(cfg.prefix & "agent:" & a):
+                isKnownAgent = true
+            except CatchableError:
+              discard
+            if isKnownAgent:
+              explicitName = a
+            else:
+              stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
+              stderr.writeLine("Usage: rhizo drain [count] [name]")
+              quit(1)
         elif positionalIdx == 2:
-          explicitName = a
+          if explicitName.len == 0:
+            explicitName = a
+          else:
+            try:
+              count = parseInt(a)
+            except ValueError:
+              stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
+              quit(1)
       inc i
 
     let name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
@@ -4587,8 +4912,479 @@ proc main() =
       stderr.writeLine("Usage: rhizo guide <install|uninstall|check> [path]")
       quit(1)
 
+  of "task":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo task <create|claim|progress|complete|yield|get|list> [args...]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "create":
+      var taskId = ""
+      var title = ""
+      var deliverable = ""
+      var spec = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--title="): title = a[8..^1]
+        elif a == "--title" and i + 1 < args.len: title = args[i+1]; inc i
+        elif a.startsWith("--deliverable="): deliverable = a[14..^1]
+        elif a == "--deliverable" and i + 1 < args.len: deliverable = args[i+1]; inc i
+        elif a.startsWith("--spec="): spec = resolveVal(a[7..^1])
+        elif a == "--spec" and i + 1 < args.len: spec = resolveVal(args[i+1]); inc i
+        elif not a.startsWith("-"):
+          if taskId.len == 0: taskId = a
+          elif title.len == 0: title = a
+        inc i
+      if taskId.len == 0:
+        stderr.writeLine("Error: Missing task id. Usage: rhizo task create <id> --title <title> [--deliverable <deliv>] [--spec <spec>]")
+        quit(1)
+      let res = doTask(cfg, "create", [taskId, title, deliverable, spec])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, getActiveAgentName(cfg, fallbackDefault = true), "task.create", taskId & " - " & title)
+      echo "CREATED task '" & taskId & "'"
+
+    of "claim":
+      var taskId = ""
+      var worker = ""
+      var leaseSec = 300
+      var strandPath = ""
+      var noVine = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--worker="): worker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif a.startsWith("--lease="): leaseSec = parseRequiredInt(a[8..^1], "--lease")
+        elif a == "--lease" and i + 1 < args.len: leaseSec = parseRequiredInt(args[i+1], "--lease"); inc i
+        elif a.startsWith("--strand="): strandPath = a[9..^1]
+        elif a == "--strand" and i + 1 < args.len: strandPath = args[i+1]; inc i
+        elif a == "--no-vine": noVine = true
+        elif not a.startsWith("-"):
+          if taskId.len == 0: taskId = a
+          elif worker.len == 0: worker = a
+        inc i
+      if taskId.len == 0:
+        stderr.writeLine("Error: Missing task id. Usage: rhizo task claim <id> [--worker <worker>] [--lease <sec>] [--strand <path>] [--no-vine]")
+        quit(1)
+      if worker.len == 0:
+        worker = getActiveAgentName(cfg, fallbackDefault = true)
+      if worker.len == 0:
+        stderr.writeLine("Error: Cannot determine worker name for task claim. Pass '--worker <name>' or export RHIZO_AGENT_NAME=<name>.")
+        quit(1)
+
+      # Auto-provision Vine strand if vine is available and not disabled
+      if not noVine and strandPath.len == 0 and findExe("vine").len > 0:
+        let (vOut, vCode) = execCmdEx("vine new " & quoteShell(taskId))
+        if vCode == 0:
+          strandPath = ".vine/strands/" & taskId
+          stderr.writeLine("[VINE] Provisioned isolated strand: " & strandPath)
+        else:
+          stderr.writeLine("[VINE NOTICE] vine new failed or skipped: " & vOut.strip())
+
+      let res = doTask(cfg, "claim", [taskId, worker, $leaseSec, strandPath])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, worker, "task.claim", taskId & " (lease " & $leaseSec & "s)")
+      if strandPath.len > 0:
+        echo "CLAIMED task '" & taskId & "' for worker '" & worker & "' (lease: " & $leaseSec & "s, strand: " & strandPath & ")"
+      else:
+        echo "CLAIMED task '" & taskId & "' for worker '" & worker & "' (lease: " & $leaseSec & "s)"
+
+    of "progress":
+      var taskId = ""
+      var progressText = ""
+      var renewSec = 300
+      var worker = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--progress="): progressText = a[11..^1]
+        elif a == "--progress" and i + 1 < args.len: progressText = args[i+1]; inc i
+        elif a.startsWith("--renew="): renewSec = parseRequiredInt(a[8..^1], "--renew")
+        elif a == "--renew" and i + 1 < args.len: renewSec = parseRequiredInt(args[i+1], "--renew"); inc i
+        elif a.startsWith("--worker="): worker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if taskId.len == 0: taskId = a
+          elif progressText.len == 0: progressText = a
+        inc i
+      if taskId.len == 0:
+        stderr.writeLine("Error: Missing task id. Usage: rhizo task progress <id> --progress <text> [--renew <sec>]")
+        quit(1)
+      if worker.len == 0:
+        worker = getActiveAgentName(cfg, fallbackDefault = true)
+      let res = doTask(cfg, "progress", [taskId, worker, progressText, $renewSec])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, worker, "task.progress", taskId & ": " & progressText)
+      echo "UPDATED progress on task '" & taskId & "'"
+
+    of "complete":
+      var taskId = ""
+      var worker = ""
+      var gateToken = ""
+      var weave = false
+      var skipGate = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--worker="): worker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif a.startsWith("--gate-token="): gateToken = a[13..^1]
+        elif a == "--gate-token" and i + 1 < args.len: gateToken = args[i+1]; inc i
+        elif a == "--weave": weave = true
+        elif a == "--skip-gate": skipGate = true
+        elif not a.startsWith("-"):
+          if taskId.len == 0: taskId = a
+        inc i
+      if taskId.len == 0:
+        stderr.writeLine("Error: Missing task id. Usage: rhizo task complete <id> [--weave] [--skip-gate]")
+        quit(1)
+      if worker.len == 0:
+        worker = getActiveAgentName(cfg, fallbackDefault = true)
+
+      # Check Vine Two-Key gate if strand was registered
+      let taskDataStr = doTask(cfg, "get", [taskId])
+      var strandPath = ""
+      try:
+        let td = parseJson(taskDataStr)
+        strandPath = td.getOrDefault("strand_path").getStr("")
+      except CatchableError:
+        discard
+
+      if not skipGate and (strandPath.len > 0 or fileExists(".vine.json")) and findExe("vine").len > 0:
+        stderr.writeLine("[VINE] Verifying Two-Key integration gate...")
+        let gateCmd = if strandPath.len > 0: "vine gate --dir " & quoteShell(strandPath) else: "vine gate"
+        let (gateOut, gateCode) = execCmdEx(gateCmd)
+        if gateCode != 0:
+          stderr.writeLine("Error: Vine Two-Key gate failed! Refusing to complete task.")
+          stderr.writeLine(gateOut)
+          quit(1)
+        gateToken = "VINE_GATE_PASSED"
+        stderr.writeLine("[VINE] Two-Key Gate verification PASSED (100% green)")
+
+        if weave:
+          stderr.writeLine("[VINE] Fast-forward weaving strand into trunk...")
+          let weaveCmd = if strandPath.len > 0: "vine weave --dir " & quoteShell(strandPath) else: "vine weave"
+          let (wOut, wCode) = execCmdEx(weaveCmd)
+          if wCode != 0:
+            stderr.writeLine("Error: Vine weave failed: " & wOut)
+            quit(1)
+          stderr.writeLine("[VINE] Trunk weave complete.")
+
+      let res = doTask(cfg, "complete", [taskId, worker, gateToken])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, worker, "task.complete", taskId & (if gateToken.len > 0: " (" & gateToken & ")" else: ""))
+      echo "COMPLETED task '" & taskId & "'"
+
+    of "yield", "abandon":
+      var taskId = ""
+      var worker = ""
+      var reason = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--reason="): reason = a[9..^1]
+        elif a == "--reason" and i + 1 < args.len: reason = args[i+1]; inc i
+        elif a.startsWith("--worker="): worker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if taskId.len == 0: taskId = a
+          elif reason.len == 0: reason = a
+        inc i
+      if taskId.len == 0:
+        stderr.writeLine("Error: Missing task id. Usage: rhizo task yield <id> [--reason <reason>]")
+        quit(1)
+      if worker.len == 0:
+        worker = getActiveAgentName(cfg, fallbackDefault = true)
+      let res = doTask(cfg, "yield", [taskId, worker, reason])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, worker, "task.yield", taskId & (if reason.len > 0: ": " & reason else: ""))
+      echo "YIELDED task '" & taskId & "'"
+
+    of "get":
+      if args.len < 3:
+        stderr.writeLine("Usage: rhizo task get <id> [--json]")
+        quit(1)
+      let taskId = args[2]
+      var jsonOut = false
+      for a in args[3..^1]:
+        if a == "--json": jsonOut = true
+      let res = doTask(cfg, "get", [taskId])
+      if jsonOut:
+        echo res
+      else:
+        try:
+          let node = parseJson(res)
+          if node.len == 0:
+            echo "Task '" & taskId & "' not found."
+          else:
+            for k, v in node.pairs:
+              echo k.alignLeft(16) & ": " & v.getStr($v)
+        except CatchableError:
+          echo res
+
+    of "list":
+      var jsonOut = false
+      for a in args[2..^1]:
+        if a == "--json": jsonOut = true
+      let res = doTask(cfg, "list", [])
+      if jsonOut:
+        echo res
+      else:
+        echo formatTasksTable(res)
+
+    else:
+      stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, complete, yield, get, list")
+      quit(1)
+
+  of "decision":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo decision <propose|approve|reject|verify|get|list> [args...]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "propose":
+      var decId = ""
+      var title = ""
+      var summary = ""
+      var proposedBy = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--title="): title = a[8..^1]
+        elif a == "--title" and i + 1 < args.len: title = args[i+1]; inc i
+        elif a.startsWith("--summary="): summary = resolveVal(a[10..^1])
+        elif a == "--summary" and i + 1 < args.len: summary = resolveVal(args[i+1]); inc i
+        elif a.startsWith("--by="): proposedBy = a[5..^1]
+        elif a == "--by" and i + 1 < args.len: proposedBy = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if decId.len == 0: decId = a
+          elif title.len == 0: title = a
+        inc i
+      if decId.len == 0:
+        stderr.writeLine("Error: Missing decision id. Usage: rhizo decision propose <id> --title <title> [--summary <sum>]")
+        quit(1)
+      if proposedBy.len == 0:
+        proposedBy = getActiveAgentName(cfg, fallbackDefault = true)
+      let res = doDecision(cfg, "propose", [decId, title, summary, proposedBy])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, proposedBy, "decision.propose", decId & " - " & title)
+      echo "PROPOSED decision '" & decId & "'"
+
+    of "approve":
+      var decId = ""
+      var note = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--note="): note = a[7..^1]
+        elif a == "--note" and i + 1 < args.len: note = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if decId.len == 0: decId = a
+          elif note.len == 0: note = a
+        inc i
+      if decId.len == 0:
+        stderr.writeLine("Error: Missing decision id. Usage: rhizo decision approve <id> [--note <note>]")
+        quit(1)
+      let res = doDecision(cfg, "approve", [decId, note])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, "operator", "decision.approve", decId & (if note.len > 0: ": " & note else: ""))
+      echo "APPROVED decision '" & decId & "' by operator"
+
+    of "reject":
+      var decId = ""
+      var reason = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--reason="): reason = a[9..^1]
+        elif a == "--reason" and i + 1 < args.len: reason = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if decId.len == 0: decId = a
+          elif reason.len == 0: reason = a
+        inc i
+      if decId.len == 0:
+        stderr.writeLine("Error: Missing decision id. Usage: rhizo decision reject <id> [--reason <reason>]")
+        quit(1)
+      let res = doDecision(cfg, "reject", [decId, reason])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      doAuditLog(cfg, "operator", "decision.reject", decId & (if reason.len > 0: ": " & reason else: ""))
+      echo "REJECTED decision '" & decId & "' by operator"
+
+    of "verify":
+      if args.len < 3:
+        stderr.writeLine("Usage: rhizo decision verify <id>")
+        quit(1)
+      let decId = args[2]
+      let status = doDecision(cfg, "verify", [decId]).strip()
+      echo status
+      if status == "APPROVED":
+        quit(0)
+      else:
+        quit(1)
+
+    of "get":
+      if args.len < 3:
+        stderr.writeLine("Usage: rhizo decision get <id> [--json]")
+        quit(1)
+      let decId = args[2]
+      var jsonOut = false
+      for a in args[3..^1]:
+        if a == "--json": jsonOut = true
+      let res = doDecision(cfg, "get", [decId])
+      if jsonOut:
+        echo res
+      else:
+        try:
+          let node = parseJson(res)
+          if node.len == 0:
+            echo "Decision '" & decId & "' not found."
+          else:
+            for k, v in node.pairs:
+              echo k.alignLeft(16) & ": " & v.getStr($v)
+        except CatchableError:
+          echo res
+
+    of "list":
+      var jsonOut = false
+      for a in args[2..^1]:
+        if a == "--json": jsonOut = true
+      let res = doDecision(cfg, "list", [])
+      if jsonOut:
+        echo res
+      else:
+        echo formatDecisionsTable(res)
+
+    else:
+      stderr.writeLine("Unknown decision action: '" & action & "'. Valid actions: propose, approve, reject, verify, get, list")
+      quit(1)
+
+  of "audit":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo audit <log|list> [args...]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "log":
+      var actionName = ""
+      var details = ""
+      var actor = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--action="): actionName = a[9..^1]
+        elif a == "--action" and i + 1 < args.len: actionName = args[i+1]; inc i
+        elif a.startsWith("--details="): details = a[10..^1]
+        elif a == "--details" and i + 1 < args.len: details = args[i+1]; inc i
+        elif a.startsWith("--actor="): actor = a[8..^1]
+        elif a == "--actor" and i + 1 < args.len: actor = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if actionName.len == 0: actionName = a
+          elif details.len == 0: details = a
+        inc i
+      if actionName.len == 0:
+        stderr.writeLine("Error: Missing action name. Usage: rhizo audit log --action <name> --details <details> [--actor <actor>]")
+        quit(1)
+      if actor.len == 0:
+        actor = getActiveAgentName(cfg, fallbackDefault = true)
+      doAuditLog(cfg, actor, actionName, details)
+      echo "AUDIT LOGGED: " & actionName
+
+    of "list":
+      var limit = 50
+      var jsonOut = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--limit="): limit = parseRequiredInt(a[8..^1], "--limit")
+        elif a == "--limit" and i + 1 < args.len: limit = parseRequiredInt(args[i+1], "--limit"); inc i
+        elif a == "--json": jsonOut = true
+        inc i
+      let res = doAuditList(cfg, limit)
+      if jsonOut:
+        echo res
+      else:
+        echo formatAuditTable(res)
+
+    else:
+      stderr.writeLine("Unknown audit action: '" & action & "'. Valid actions: log, list")
+      quit(1)
+
+  of "time":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo time <advance|reset|get> [seconds]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    var client = connectRedis(cfg.redisUrl)
+    defer:
+      try: client.close() except CatchableError: discard
+    case action
+    of "advance":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing seconds to advance. Usage: rhizo time advance <seconds>")
+        quit(1)
+      let sec = parseRequiredInt(args[2], "time advance seconds")
+      let key = cfg.prefix & "mock_time_offset"
+      let cur = try:
+        let v = client.get(key)
+        if v != redisNil and v.len > 0: parseInt(v) else: 0
+      except CatchableError: 0
+      let nextVal = cur + sec
+      client.setk(key, $nextVal)
+      echo $nextVal
+    of "reset":
+      discard client.del(@[cfg.prefix & "mock_time_offset"])
+      echo "0"
+    of "get":
+      let cur = try:
+        let v = client.get(cfg.prefix & "mock_time_offset")
+        if v != redisNil and v.len > 0: v else: "0"
+      except CatchableError: "0"
+      echo cur
+    else:
+      stderr.writeLine("Unknown time action: " & action)
+      quit(1)
+
   else:
-    stderr.writeLine("Unknown subcommand: " & subcmd)
+    var suggestion = ""
+    let lowCmd = subcmd.toLowerAscii
+    if lowCmd in ["names", "agents", "list", "ls", "roster", "whoami"]:
+      suggestion = "who"
+    elif lowCmd in ["msg", "tell", "push", "post"]:
+      suggestion = "send"
+    elif lowCmd in ["hear", "read", "tail", "follow"]:
+      suggestion = "listen"
+    elif lowCmd in ["tasks", "todo"]:
+      suggestion = "task"
+    elif lowCmd in ["decisions", "vote", "ruling", "judge"]:
+      suggestion = "decision"
+    elif lowCmd in ["log", "logs", "trail"]:
+      suggestion = "audit"
+    elif lowCmd in ["pop", "consume"]:
+      suggestion = "drain"
+    elif lowCmd in ["clean", "gc", "purge"]:
+      suggestion = "sweep"
+
+    if suggestion.len > 0:
+      stderr.writeLine("Error: Unknown subcommand '" & subcmd & "'. Did you mean 'rhizo " & suggestion & "'?")
+    else:
+      stderr.writeLine("Error: Unknown subcommand: " & subcmd)
     quit(1)
 
 when isMainModule:

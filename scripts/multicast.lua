@@ -25,6 +25,8 @@ if not prefix or prefix == "" then
 end
 
 local target_tags_csv = ARGV[2] or "*"
+local mock_offset = tonumber(redis.call('GET', prefix .. 'mock_time_offset') or 0)
+local now = tonumber(redis.call('TIME')[1]) + mock_offset
 local arg3 = ARGV[3]
 if not arg3 or arg3 == "" then
     return redis.error_reply("ERR: Missing message payload")

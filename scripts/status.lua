@@ -17,12 +17,14 @@ if not name or name == "" then
     return redis.error_reply("ERR: Missing agent name")
 end
 
-local state = ARGV[3] or "idle"
+local state = ARGV[3] or ""
 local activity = ARGV[4] or ""
 local ttl = tonumber(ARGV[5]) or 150
-local now = redis.call('TIME')[1]
+
+local mock_offset = tonumber(redis.call('GET', prefix .. 'mock_time_offset') or 0)
+local now = tonumber(redis.call('TIME')[1]) + mock_offset
 
 redis.call('SET', prefix .. 'heartbeat:' .. name, '1', 'EX', ttl)
-redis.call('HSET', prefix .. 'agent:' .. name, 'state', state, 'activity', activity, 'last_seen', now)
+redis.call('HSET', prefix .. 'agent:' .. name, 'state', state, 'activity', activity, 'last_seen', now, 'heartbeat_ttl', ttl)
 redis.call('SADD', prefix .. 'active_agents', name)
 return "OK"

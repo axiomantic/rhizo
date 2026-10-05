@@ -15,14 +15,15 @@ end
 
 local tags_csv = ARGV[3] or ""
 local ttl = tonumber(ARGV[4]) or 150
-local now = redis.call('TIME')[1]
+
+local mock_offset = tonumber(redis.call('GET', prefix .. 'mock_time_offset') or 0)
+local now = tonumber(redis.call('TIME')[1]) + mock_offset
 
 -- 1. Refresh Heartbeat
 redis.call('SET', prefix .. 'heartbeat:' .. name, '1', 'EX', ttl)
 
 -- 1b. Clear any temporary reservation hold
 redis.call('DEL', prefix .. 'held_name:' .. name)
-
 
 -- 2. Clean up any previous tags if this agent was already registered
 local old_tags = redis.call('HGET', prefix .. 'agent:' .. name, 'tags')
@@ -35,7 +36,7 @@ end
 
 -- 3. Add to active roster and store metadata
 redis.call('SADD', prefix .. 'active_agents', name)
-redis.call('HSET', prefix .. 'agent:' .. name, 'tags', tags_csv, 'last_seen', now)
+redis.call('HSET', prefix .. 'agent:' .. name, 'tags', tags_csv, 'last_seen', now, 'heartbeat_ttl', ttl)
 
 -- 4. Index new tags
 for tag in string.gmatch(tags_csv, "([^,]+)") do

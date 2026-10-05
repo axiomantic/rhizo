@@ -467,16 +467,14 @@ class TestRedisA2AProtocol(unittest.TestCase):
         # 2. Simulate Alice crashing / disconnect: delete her heartbeat
         run_redis("DEL", f"{PREFIX}heartbeat:alice")
 
-        # Query directory -> directory.lua auto-prunes dead Alice
+        # Query directory -> directory.lua reports Alice as STALE (status 0), NEVER silently deleting her
         dir_after_crash = run_eval(LUA_DIRECTORY, 0, PREFIX)
-        self.assertNotIn("alice", dir_after_crash)
+        self.assertIn("alice|0|qa,automation|busy|running benchmark", dir_after_crash)
         self.assertIn("bob|1|qa,manual|idle|", dir_after_crash)
 
-        # Direct Redis inspection: Alice pruned from roster and tag sets
-        self.assertNotIn("alice", run_redis("SMEMBERS", f"{PREFIX}active_agents").split())
-        self.assertNotIn("alice", run_redis("SMEMBERS", f"{PREFIX}tag:qa").split())
-        self.assertNotIn("alice", run_redis("SMEMBERS", f"{PREFIX}tag:automation").split())
-        self.assertEqual(run_redis("EXISTS", f"{PREFIX}agent:alice"), "0")
+        # Direct Redis inspection: Alice is preserved in active_agents and agent hash (marked stale, not deleted)
+        self.assertIn("alice", run_redis("SMEMBERS", f"{PREFIX}active_agents").split())
+        self.assertEqual(run_redis("EXISTS", f"{PREFIX}agent:alice"), "1")
 
         # 3. Send multicast to 'qa' while Alice is offline
         msg1 = json.dumps({
@@ -1459,15 +1457,16 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(len(alive_entries), 1)
         self.assertIn("|1|team,projectX|idle|", alive_entries[0])
 
-        # 7. Assert agent_expiring is completely absent from directory output
+        # 7. Assert agent_expiring is retained in directory output and marked STALE (0)
         expiring_entries = [line for line in directory_lines if line.startswith(f"{agent_expiring}|")]
-        self.assertEqual(len(expiring_entries), 0)
+        self.assertEqual(len(expiring_entries), 1)
+        self.assertIn("|0|team,projectX|idle|", expiring_entries[0])
 
-        # 8. Verify agent_expiring was pruned from active_agents, all tag sets, and metadata hash
-        self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}active_agents", agent_expiring), "0")
-        self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}tag:projectX", agent_expiring), "0")
-        self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}tag:team", agent_expiring), "0")
-        self.assertEqual(run_redis("EXISTS", f"{PREFIX}agent:{agent_expiring}"), "0")
+        # 8. Verify agent_expiring is preserved in active_agents, tag sets, and metadata hash (not silently deleted)
+        self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}active_agents", agent_expiring), "1")
+        self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}tag:projectX", agent_expiring), "1")
+        self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}tag:team", agent_expiring), "1")
+        self.assertEqual(run_redis("EXISTS", f"{PREFIX}agent:{agent_expiring}"), "1")
 
         # 9. Verify alive agent's metadata and set memberships remain fully intact
         self.assertEqual(run_redis("SISMEMBER", f"{PREFIX}active_agents", agent_alive), "1")
