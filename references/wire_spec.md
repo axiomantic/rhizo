@@ -29,8 +29,8 @@ Every message stored in an agent inbox (`${RHIZO_REDIS_PREFIX}inbox:<recipient>`
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `string` | **Yes** | Unique message identifier. Recommended format: `msg_<unix_ts>_<sender>_<random>`. |
-| `from` | `string` | **Yes** | Ephemeral identity name of the sending agent. |
-| `to` | `string` | **Yes** | Direct recipient name (e.g. `bob`), multicast tag (e.g. `@rhizo,qa`), or global broadcast (`*`). |
+| `from` | `string` | **Yes** | Ephemeral identity name of the sending agent (canonicalized case-insensitively). |
+| `to` | `string` | **Yes** | Direct recipient name (e.g. `bob`), multicast tag (e.g. `@rhizo,qa`), or global broadcast (`*`) (canonicalized case-insensitively). |
 | `type` | `string` | **Yes** | One of: `"task"`, `"query"`, `"reply"`, `"status"`. |
 | `reply_to` | `string` \| `null` | **Yes** | ID of the previous message being replied to, or `null` if initiating a conversation. |
 | `tags` | `array[string]` | **Yes** | Routing, project, or ticket tags. |
@@ -39,6 +39,10 @@ Every message stored in an agent inbox (`${RHIZO_REDIS_PREFIX}inbox:<recipient>`
 | `timestamp` | `string` | **Yes** | ISO-8601 UTC timestamp string (e.g. `YYYY-MM-DDTHH:MM:SSZ`). |
 | `sig` | `string` \| `null` | **No** | HMAC-SHA256 hex signature authenticating message contents. |
 | `encrypted` | `boolean` | **No** | Defaults to `false`. When `true`, `body` is AES-256-CBC ciphertext. |
+| `reminders` | `array[object]` | **No** | Active sticky advisories piggybacked onto the message payload. |
+| `elapsed_seconds` | `integer` | **No** | Computed message age in seconds relative to current (or virtual mock) time. |
+| `age_human` | `string` | **No** | Human-readable relative age (e.g. `"14m"`, `"2h"`). |
+| `is_stale` | `boolean` | **No** | Set to `true` if `elapsed_seconds >= 3600` (1 hour) to flag stale messages. |
 
 ---
 
@@ -56,6 +60,9 @@ Every message stored in an agent inbox (`${RHIZO_REDIS_PREFIX}inbox:<recipient>`
 4. **`status`**:
    - Informational broadcast (e.g. "Session shutting down", "Build succeeded").
    - No reply expected.
+5. **`reminder`**:
+   - Standalone sticky advisory dispatched when an agent's cadence window elapses without peer traffic.
+   - Contains `reminder_id` and `priority` fields. No reply expected.
 
 ---
 

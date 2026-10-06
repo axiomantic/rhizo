@@ -29,8 +29,8 @@ Every message stored in an agent inbox (`${RHIZO_REDIS_PREFIX}inbox:<recipient>`
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `string` | **Yes** | Unique message identifier. Recommended format: `msg_<unix_ts>_<sender>_<random>`. |
-| `from` | `string` | **Yes** | Ephemeral identity name of the sending agent. |
-| `to` | `string` | **Yes** | Direct recipient name (e.g. `bob`), multicast tag (e.g. `@rhizo,qa`), or global broadcast (`*`). |
+| `from` | `string` | **Yes** | Ephemeral identity name of the sending agent (canonicalized case-insensitively). |
+| `to` | `string` | **Yes** | Direct recipient name (e.g. `bob`), multicast tag (e.g. `@rhizo,qa`), or global broadcast (`*`) (canonicalized case-insensitively). |
 | `type` | `string` | **Yes** | One of: `"task"`, `"query"`, `"reply"`, `"status"`. |
 | `reply_to` | `string` \| `null` | **Yes** | ID of the previous message being replied to, or `null` if initiating a conversation. |
 | `tags` | `array[string]` | **Yes** | Routing, project, or ticket tags. |

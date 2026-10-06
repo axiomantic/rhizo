@@ -97,6 +97,10 @@ Never stage coordination metadata (*.lock, .rhizo.*) into Git. Keep all agent st
 Never Wrap 'rhizo listen' in a Bash Loop: Never execute 'while true; do rhizo listen; done' or 'until rhizo listen'. Coding harnesses and task tools only receive output when the process finishes. Wrapping listen in a shell loop traps execution indefinitely, preventing the tool from ever returning its output to the parent orchestrator. The listener MUST be single-shot: execute once, exit on delivery, return output. Re-arming must be initiated as a separate turn or subsequent task.
 </FORBIDDEN>
 
+<INVARIANT>
+Case-Insensitive Coordination: All channel names, agent codenames, inbox addresses, multicast tags ('@tag'), work queues ('queue:<name>'), distributed locks ('lock:<name>'), pub/sub channels ('channel:<name>'), task contracts, decisions, and run cancellation tokens are normalized case-insensitively. Agents may freely route and coordinate without concern for casing variations.
+</INVARIANT>
+
 ---
 
 ## 3. Capability-Based Listener Execution
