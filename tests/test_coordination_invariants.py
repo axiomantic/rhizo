@@ -300,6 +300,141 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertIn("decision.propose", actions)
         self.assertIn("decision.approve", actions)
 
+    # -------------------------------------------------------------------------
+    # Reminder System: Lifecycle & Non-Destructive Inspection
+    # -------------------------------------------------------------------------
+    def test_12_reminder_lifecycle_and_non_destructive_peeking(self):
+        """Verify sticky reminder creation, non-destructive JSON inspection, acking, and dismissal."""
+        res_add = self.run_cmd([
+            "remind", "add", "Must use vine strands for all modifications",
+            "--priority", "CRITICAL", "--cadence", "15m", "--ttl", "2h", "--by", "operator"
+        ])
+        self.assertEqual(res_add.returncode, 0)
+        rem = json.loads(res_add.stdout.strip())
+        self.assertEqual(rem["status"], "OK")
+        rem_id = rem["id"]
+        self.assertEqual(rem["priority"], "CRITICAL")
+
+        # Non-destructive inspection for specific agent
+        res_list = self.run_cmd(["remind", "list", "--for", "worker_alpha", "--json"])
+        self.assertEqual(res_list.returncode, 0)
+        list_data = json.loads(res_list.stdout.strip())
+        self.assertEqual(list_data["total"], 1)
+        target_rem = list_data["reminders"][0]
+        self.assertEqual(target_rem["id"], rem_id)
+        self.assertTrue(target_rem["due_for_target"])
+        self.assertFalse(target_rem["acked_by_target"])
+
+        # Ack reminder as worker_alpha
+        res_ack = self.run_cmd(["remind", "ack", rem_id, "--agent", "worker_alpha"])
+        self.assertEqual(res_ack.returncode, 0)
+
+        # Inspect again: now shows acked
+        res_list2 = self.run_cmd(["remind", "list", "--for", "worker_alpha", "--json"])
+        list_data2 = json.loads(res_list2.stdout.strip())
+        target_rem2 = list_data2["reminders"][0]
+        self.assertTrue(target_rem2["acked_by_target"])
+        self.assertIn("worker_alpha", target_rem2["acks"])
+
+        # Dismiss
+        res_del = self.run_cmd(["remind", "dismiss", rem_id])
+        self.assertEqual(res_del.returncode, 0)
+        res_list3 = self.run_cmd(["remind", "list", "--json"])
+        list_data3 = json.loads(res_list3.stdout.strip())
+        self.assertEqual(list_data3["total"], 0)
+
+    # -------------------------------------------------------------------------
+    # Reminder System: Piggybacking & Cadence Cooldown
+    # -------------------------------------------------------------------------
+    def test_13_reminder_piggybacking_and_cadence_cooldown(self):
+        """Verify opportunistic piggybacking onto messages and cadence anti-fatigue cooldown."""
+        self.run_cmd(["open", "worker_piggy", "worker"])
+        res_add = self.run_cmd([
+            "remind", "add", "Do not touch canonical main branch directly",
+            "--priority", "HIGH", "--cadence", "10m"
+        ])
+        self.assertEqual(res_add.returncode, 0)
+
+        # Send first message and drain
+        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 1", "--body", "First task"])
+        res_drain1 = self.run_cmd(["drain", "worker_piggy", "--json"])
+        self.assertEqual(res_drain1.returncode, 0)
+        msgs1 = json.loads(res_drain1.stdout.strip())
+        self.assertEqual(len(msgs1), 1)
+        self.assertIn("reminders", msgs1[0])
+        self.assertEqual(msgs1[0]["reminders"][0]["priority"], "HIGH")
+
+        # Send second message immediately (within 10m cadence)
+        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 2", "--body", "Second task"])
+        res_drain2 = self.run_cmd(["drain", "worker_piggy", "--json"])
+        msgs2 = json.loads(res_drain2.stdout.strip())
+        self.assertEqual(len(msgs2), 1)
+        # Should NOT be piggybacked again immediately (cooldown active!)
+        self.assertNotIn("reminders", msgs2[0])
+
+        # Advance virtual time by 11 minutes (660 seconds)
+        self.run_cmd(["time", "advance", "660"])
+
+        # Send third message after cadence elapsed
+        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 3", "--body", "Third task"])
+        res_drain3 = self.run_cmd(["drain", "worker_piggy", "--json"])
+        msgs3 = json.loads(res_drain3.stdout.strip())
+        self.assertEqual(len(msgs3), 1)
+        # Should now be piggybacked again!
+        self.assertIn("reminders", msgs3[0])
+
+    # -------------------------------------------------------------------------
+    # Reminder System: Fallback Standalone Dispatch
+    # -------------------------------------------------------------------------
+    def test_14_reminder_fallback_standalone_dispatch(self):
+        """Verify standalone broadcast message is dispatched when cadence elapses without peer traffic."""
+        self.run_cmd(["open", "worker_idle", "worker"])
+        self.run_cmd([
+            "remind", "add", "Global emergency: freeze all deployments",
+            "--priority", "CRITICAL", "--cadence", "5m"
+        ])
+
+        # Initial tick: idle worker has not exceeded cadence yet
+        res_tick1 = self.run_cmd(["remind", "tick", "--json"])
+        data_tick1 = json.loads(res_tick1.stdout.strip())
+        # First impression is dispatched
+        self.assertEqual(data_tick1["dispatched"], 1)
+
+        # Check inbox of worker_idle
+        res_drain = self.run_cmd(["drain", "worker_idle", "--json"])
+        msgs = json.loads(res_drain.stdout.strip())
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0]["type"], "reminder")
+        self.assertIn("freeze all deployments", msgs[0]["body"])
+
+    # -------------------------------------------------------------------------
+    # Anti-While-Loop Supervision Guardrail
+    # -------------------------------------------------------------------------
+    def test_15_anti_while_loop_supervision_guardrail(self):
+        """Verify that rhizo listen detects parent while/until loops and rejects execution."""
+        # Run inside a bash while loop
+        bash_cmd = f"set -e; while true; do '{BIN_PATH}' listen test_agent_loop --timeout 1; done"
+        res = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, env=self.env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("bash loop", res.stderr)
+        self.assertIn("SINGLE-SHOT", res.stderr)
+
+    # -------------------------------------------------------------------------
+    # Listener Re-Arm Notice & Identity Reminder
+    # -------------------------------------------------------------------------
+    def test_16_listener_rearm_notice_and_identity(self):
+        """Verify listener prints exact re-arm command, harness advice, and explicit identity reminder."""
+        self.run_cmd(["open", "test_listener_id", "worker"])
+        self.run_cmd(["send", "--to", "test_listener_id", "--subject", "Hello", "--body", "World"],
+                     env_overrides={"RHIZO_AGENT_NAME": "test_sender_id"})
+
+        res = self.run_cmd(["listen", "test_listener_id", "--timeout", "5"], env_overrides={"RHIZO_QUIET": "0"})
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("Listener Identity: @test_listener_id (this is YOU)", res.stderr)
+        self.assertIn("Delivered Message:", res.stderr)
+        self.assertIn("Exact command: rhizo listen test_listener_id", res.stderr)
+        self.assertIn("Never wrap in 'while true' bash loop", res.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

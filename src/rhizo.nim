@@ -81,6 +81,7 @@ const
   resetLua*      = staticRead("../scripts/reset.lua")
   taskLua*       = staticRead("../scripts/task.lua")
   decisionLua*   = staticRead("../scripts/decision.lua")
+  reminderLua*   = staticRead("../scripts/reminder.lua")
   RhizoVersion*  = "0.1.12"
 
 # Cryptographic Helpers
@@ -115,6 +116,7 @@ let
   resetSha*      = computeSha1(resetLua)
   taskSha*       = computeSha1(taskLua)
   decisionSha*   = computeSha1(decisionLua)
+  reminderSha*   = computeSha1(reminderLua)
 
 
 proc secureFilePermissions*(path: string) =
@@ -713,24 +715,134 @@ proc checkSupervisionAttached*(name: string, force: bool = false) =
         isDetached = true
         reason = "stdout is redirected to a regular file (e.g. nohup.out or log redirection)"
 
-    if getppid() == 1:
+    let ppid = getppid()
+    if ppid == 1:
       isDetached = true
       reason = "process is orphaned (parent PID is 1 / launchd / init)"
+    elif ppid > 1:
+      try:
+        let (parentCmd, exitCode) = osproc.execCmdEx("ps -p " & $ppid & " -o args=")
+        if exitCode == 0:
+          let lowerCmd = parentCmd.toLowerAscii
+          if (lowerCmd.contains("while ") or lowerCmd.contains("until ")) and (lowerCmd.contains(" do ") or lowerCmd.contains(";do") or lowerCmd.contains("; do") or lowerCmd.contains("\ndo")):
+            isDetached = true
+            reason = "detected execution inside a bash shell loop ('while' / 'until')"
+      except CatchableError:
+        discard
 
     if isDetached:
-      stderr.writeLine("Error: Unsupervised detachment detected for 'rhizo listen " & name & "'!")
-      stderr.writeLine("Reason: " & reason & ".")
-      stderr.writeLine("")
-      stderr.writeLine("Backgrounding 'rhizo listen' with '&' or redirecting output to a file breaks supervisor")
-      stderr.writeLine("contract and will swallow delivered messages. Never run 'nohup rhizo listen &'!")
-      stderr.writeLine("")
-      stderr.writeLine("Harness-owned alternatives:")
-      stderr.writeLine("- OpenCode: Native in-process fiber listens automatically without blocking.")
-      stderr.writeLine("- Antigravity: Launch via run_command(CommandLine=\"rhizo listen " & name & "\", IsDaemon=true).")
-      stderr.writeLine("- Claude Code / CLI: Run foreground blocking 'rhizo listen " & name & "' inside a background task.")
-      stderr.writeLine("- Synchronous: Run 'rhizo listen " & name & "' directly in foreground.")
-      stderr.writeLine("If you explicitly require unsupervised execution, pass '--force'.")
+      if reason.contains("shell loop"):
+        stderr.writeLine("Error: 'rhizo listen " & name & "' is running inside a bash loop ('while' / 'until')!")
+        stderr.writeLine("Reason: Coding agent harnesses and task tools ONLY receive output when the process finishes.")
+        stderr.writeLine("An infinite shell loop prevents the command from returning, trapping payloads inside the subshell")
+        stderr.writeLine("transcript and hanging the parent orchestrator indefinitely.")
+        stderr.writeLine("")
+        stderr.writeLine("Remedy: Run 'rhizo listen " & name & "' as a SINGLE-SHOT command without any shell loop.")
+        stderr.writeLine("When a message arrives, the process exits cleanly (code 0) so the harness can wake your agent.")
+        stderr.writeLine("If subsequent messages are expected, re-arm 'rhizo listen' in a new task or subsequent turn.")
+        stderr.writeLine("If you explicitly require looping for local debugging, pass '--force'.")
+      else:
+        stderr.writeLine("Error: Unsupervised detachment detected for 'rhizo listen " & name & "'!")
+        stderr.writeLine("Reason: " & reason & ".")
+        stderr.writeLine("")
+        stderr.writeLine("Backgrounding 'rhizo listen' with '&' or redirecting output to a file breaks supervisor")
+        stderr.writeLine("contract and will swallow delivered messages. Never run 'nohup rhizo listen &'!")
+        stderr.writeLine("")
+        stderr.writeLine("Harness-owned alternatives:")
+        stderr.writeLine("- OpenCode: Native in-process fiber listens automatically without blocking.")
+        stderr.writeLine("- Antigravity: Launch via run_command(CommandLine=\"rhizo listen " & name & "\", IsDaemon=true).")
+        stderr.writeLine("- Claude Code / CLI: Run foreground blocking 'rhizo listen " & name & "' inside a background task.")
+        stderr.writeLine("- Synchronous: Run 'rhizo listen " & name & "' directly in foreground.")
+        stderr.writeLine("If you explicitly require unsupervised execution, pass '--force'.")
       quit(1)
+
+proc parseDurationSec*(s: string): int =
+  let trimmed = s.strip().toLowerAscii
+  if trimmed.len == 0: return 0
+  if trimmed.endsWith("s"):
+    return (try: parseInt(trimmed[0..^2]) except ValueError: 0)
+  elif trimmed.endsWith("m"):
+    return (try: parseInt(trimmed[0..^2]) * 60 except ValueError: 0)
+  elif trimmed.endsWith("h"):
+    return (try: parseInt(trimmed[0..^2]) * 3600 except ValueError: 0)
+  elif trimmed.endsWith("d"):
+    return (try: parseInt(trimmed[0..^2]) * 86400 except ValueError: 0)
+  else:
+    return (try: parseInt(trimmed) except ValueError: 0)
+
+proc doRemind*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
+  var evalArgs: seq[string] = @[cfg.prefix, action]
+  for a in args: evalArgs.add(a)
+  return runLuaScript(cfg.redisUrl, reminderLua, reminderSha, evalArgs)
+
+proc formatRemindersTable*(jsonStr: string): string =
+  try:
+    let root = parseJson(jsonStr)
+    let node = root.getOrDefault("reminders")
+    if node == nil or node.kind != JArray or node.len == 0:
+      return "No active reminders."
+    var rows: seq[(string, string, string, string, string)] = @[]
+    for item in node:
+      let id = item.getOrDefault("id").getStr("")
+      let priority = item.getOrDefault("priority").getStr("NORMAL")
+      let scope = item.getOrDefault("scope").getStr("*")
+      let ackCount = item.getOrDefault("ack_count").getInt(0)
+      let text = item.getOrDefault("text").getStr("")
+      rows.add((id, priority, scope, $ackCount, text))
+    result = "REMINDER ID     PRIORITY     SCOPE          ACKS    DIRECTIVE / CONSTRAINT\n"
+    result.add("--------------------------------------------------------------------------------------\n")
+    for (id, prio, sc, acks, txt) in rows:
+      result.add(id.alignLeft(16) & prio.alignLeft(13) & sc.alignLeft(15) & acks.alignLeft(8) & txt & "\n")
+    result = result.strip()
+  except CatchableError:
+    return jsonStr
+
+proc evaluatePiggyback*(cfg: RhizoConfig, agentName: string, maxCap: int = 2): JsonNode =
+  try:
+    let res = runLuaScript(cfg.redisUrl, reminderLua, reminderSha, [cfg.prefix, "evaluate_piggyback", agentName, $maxCap])
+    return parseJson(res)
+  except CatchableError:
+    return newJObject()
+
+proc doRemindTickFallback*(cfg: RhizoConfig): string =
+  let res = runLuaScript(cfg.redisUrl, reminderLua, reminderSha, [cfg.prefix, "tick_candidates"])
+  let secret = getSecret(cfg)
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  var count = 0
+  try:
+    let node = parseJson(res)
+    let candidates = node.getOrDefault("candidates")
+    if candidates != nil and candidates.kind == JArray:
+      for c in candidates:
+        let toAgent = c.getOrDefault("to").getStr("")
+        let remId = c.getOrDefault("rem_id").getStr("")
+        let rtext = c.getOrDefault("text").getStr("")
+        let prio = c.getOrDefault("priority").getStr("NORMAL")
+        let nowSec = getTime().toUnix()
+        let msgId = "msg_rem_" & $client.incr(cfg.prefix & "msg_seq")
+        let ts = $nowSec
+        let subj = "[STANDALONE ADVISORY: " & remId & " (" & prio & ")]"
+        let msgType = "reminder"
+        let canonical = msgId & "|system:reminder|" & toAgent & "|" & msgType & "|" & subj & "|" & rtext & "|" & ts
+        let sig = computeHmacSha256(secret, canonical)
+        var env = newJObject()
+        env["id"] = %msgId
+        env["from"] = %"system:reminder"
+        env["to"] = %toAgent
+        env["type"] = %msgType
+        env["subject"] = %subj
+        env["body"] = %rtext
+        env["timestamp"] = %ts
+        env["sig"] = %sig
+        env["reminder_id"] = %remId
+        env["priority"] = %prio
+        discard client.rPush(cfg.prefix & "inbox:" & toAgent, $env)
+        discard client.hSet(cfg.prefix & "agent:" & toAgent & ":reminder_seen", remId, ts)
+        inc count
+    return $(%*{"dispatched": count})
+  except CatchableError as e:
+    return $(%*{"dispatched": 0, "error": e.msg})
 
 # Core Operations
 proc doRegister*(cfg: RhizoConfig, name, tags: string, ttl: int = -1): string =
@@ -898,6 +1010,13 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       lines.add("  rhizo close " & name)
       lines.add("- See SKILL.md Step 2 for complete harness-specific integration playbooks.")
     return lines.join("\n")
+
+  if validMessages.len > 0:
+    let piggy = evaluatePiggyback(cfg, name, 2)
+    let rems = piggy.getOrDefault("reminders")
+    if rems != nil and rems.kind == JArray and rems.len > 0:
+      for m in validMessages:
+        m["reminders"] = rems
 
   # If caller explicitly asked for 1 message, return single JSON object
   if count == 1:
@@ -1570,13 +1689,27 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         except CatchableError:
           discard
 
+      let piggy = evaluatePiggyback(cfg, name, 2)
+      let rems = piggy.getOrDefault("reminders")
+      if rems != nil and rems.kind == JArray and rems.len > 0:
+        parsed["reminders"] = rems
+        if not quiet and getEnv("RHIZO_QUIET", "0") notin ["1", "true", "yes"]:
+          for r in rems:
+            let rid = r.getOrDefault("id").getStr("")
+            let prio = r.getOrDefault("priority").getStr("NORMAL")
+            let rtext = r.getOrDefault("text").getStr("")
+            stderr.writeLine("┌─── [ACTIVE ADVISORY: " & rid & " (" & prio & ")] ───────────────────────────────────────")
+            stderr.writeLine("│ " & rtext)
+            stderr.writeLine("└──────────────────────────────────────────────────────────────────────────")
+
       if notify:
         sendDesktopNotification(parsed)
       echo $parsed
       if not quiet and getEnv("RHIZO_QUIET", "0") notin ["1", "true", "yes"]:
         let harness = detectHarness(cfg)
         let replySubj = if subject.toLowerAscii.startsWith("re:"): subject else: "Re: " & subject
-        stderr.writeLine("\n[LOCU LIFECYCLE NOTICE] Listener for '" & name & "' delivered message '" & id & "' and EXITED.")
+        stderr.writeLine("\n[LOCU LIFECYCLE NOTICE] Listener for '" & name & "' delivered message '" & id & "' and EXITED (0).")
+        stderr.writeLine("- CRITICAL: Do NOT wrap in 'while true' bash loop. Harness requires process exit to trigger reactive turn!")
         stderr.writeLine("- Detected harness: " & harness & " (consult SKILL.md for capability decision tree)")
         stderr.writeLine("- Expected follow-up action:")
         case harness
@@ -1604,10 +1737,29 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("  1. When finished, reply and re-arm atomically in one command:")
           stderr.writeLine("     rhizo reply --to " & fromAgent & " --reply-to \"" & id & "\" --subject \"" & replySubj & "\" --body \"<results>\" --listen")
           stderr.writeLine("  2. If no reply is needed, wait for next task (zero-timeout infinite wait):")
-          stderr.writeLine("     rhizo listen " & name)
-          stderr.writeLine("  3. If running inside a background subagent (e.g. Claude Task(background=true)): exit now to deliver payload to parent.")
-          stderr.writeLine("  4. If disconnecting or finishing session work completely:")
-          stderr.writeLine("     rhizo close " & name)
+        let rawParams = commandLineParams()
+        var exactCmd = "rhizo"
+        for a in rawParams:
+          if a.contains(" ") or a.contains("\""):
+            exactCmd.add(" " & quoteShell(a))
+          else:
+            exactCmd.add(" " & a)
+
+        stderr.writeLine("")
+        stderr.writeLine("[RE-ARM INSTRUCTION FOR CODING AGENT]")
+        stderr.writeLine("Listener Identity: @" & name & " (this is YOU)")
+        stderr.writeLine("Delivered Message: '" & id & "' from @" & fromAgent)
+        stderr.writeLine("To continue listening, relaunch this EXACT command as a separate background task (NOT a shell loop!):")
+        stderr.writeLine("  Exact command: " & exactCmd)
+        case harness
+        of "antigravity":
+          stderr.writeLine("  Antigravity tool: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
+        of "claude", "cursor", "copilot":
+          stderr.writeLine("  Claude tool: Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
+        else:
+          stderr.writeLine("  Harness tool: Launch '" & exactCmd & "' as single-shot background task")
+        stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
+        stderr.writeLine("")
         stderr.writeLine("(To silence this notice, pass --quiet / -q, or set RHIZO_QUIET=1)")
       return
   finally:
@@ -5361,6 +5513,138 @@ proc main() =
       stderr.writeLine("Unknown time action: " & action)
       quit(1)
 
+  of "remind", "reminder":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo remind <add|dismiss|ack|get|list|tick> [args...]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "add":
+      var text = ""
+      var priority = "NORMAL"
+      var cadenceSec = 900
+      var ttlSec = 0
+      var scope = "*"
+      var target = ""
+      var author = ""
+      var oncePerAgent = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--priority="): priority = a[11..^1]
+        elif a == "--priority" and i + 1 < args.len: priority = args[i+1]; inc i
+        elif a.startsWith("--cadence="): cadenceSec = parseDurationSec(a[10..^1])
+        elif a == "--cadence" and i + 1 < args.len: cadenceSec = parseDurationSec(args[i+1]); inc i
+        elif a.startsWith("--ttl="): ttlSec = parseDurationSec(a[6..^1])
+        elif a == "--ttl" and i + 1 < args.len: ttlSec = parseDurationSec(args[i+1]); inc i
+        elif a.startsWith("--scope="): scope = a[8..^1]
+        elif a == "--scope" and i + 1 < args.len: scope = args[i+1]; inc i
+        elif a.startsWith("--target="): target = a[9..^1]
+        elif a == "--target" and i + 1 < args.len: target = args[i+1]; inc i
+        elif a.startsWith("--by="): author = a[5..^1]
+        elif a == "--by" and i + 1 < args.len: author = args[i+1]; inc i
+        elif a in ["--once", "--once-per-agent"]: oncePerAgent = true
+        elif not a.startsWith("-"):
+          if text.len == 0: text = a
+          else: text.add(" " & a)
+        inc i
+      if text.len == 0:
+        stderr.writeLine("Error: Missing reminder text. Usage: rhizo remind add <text> [--priority <prio>] [--cadence <sec>] [--ttl <sec>]")
+        quit(1)
+      if author.len == 0:
+        author = getActiveAgentName(cfg, fallbackDefault = true)
+      if author.len == 0:
+        author = "operator"
+      let res = doRemind(cfg, "add", [text, priority, author, scope, target, $cadenceSec, $ttlSec, if oncePerAgent: "true" else: "false"])
+      echo res
+
+    of "dismiss":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing reminder id. Usage: rhizo remind dismiss <id>")
+        quit(1)
+      let remId = args[2]
+      let res = doRemind(cfg, "dismiss", [remId])
+      echo res
+
+    of "ack":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing reminder id. Usage: rhizo remind ack <id> [--agent <name>]")
+        quit(1)
+      let remId = args[2]
+      var agentName = ""
+      var i = 3
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--agent="): agentName = a[8..^1]
+        elif a == "--agent" and i + 1 < args.len: agentName = args[i+1]; inc i
+        inc i
+      if agentName.len == 0:
+        agentName = getActiveAgentName(cfg, fallbackDefault = true)
+      if agentName.len == 0:
+        agentName = "operator"
+      let res = doRemind(cfg, "ack", [remId, agentName])
+      echo res
+
+    of "get":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing reminder id. Usage: rhizo remind get <id> [--json]")
+        quit(1)
+      let remId = args[2]
+      var jsonOut = false
+      for a in args[3..^1]:
+        if a == "--json": jsonOut = true
+      let res = doRemind(cfg, "get", [remId])
+      if jsonOut:
+        echo res
+      else:
+        try:
+          let node = parseJson(res)
+          if node.len == 0 or node.getOrDefault("status").getStr("") == "ERROR":
+            echo "Reminder '" & remId & "' not found."
+          else:
+            for k, v in node.pairs:
+              echo k.alignLeft(16) & ": " & (if v.kind == JString: v.getStr() else: $v)
+        except CatchableError:
+          echo res
+
+    of "list":
+      var forAgent = ""
+      var scopeFilter = ""
+      var jsonOut = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--for="): forAgent = a[6..^1]
+        elif a == "--for" and i + 1 < args.len: forAgent = args[i+1]; inc i
+        elif a.startsWith("--scope="): scopeFilter = a[8..^1]
+        elif a == "--scope" and i + 1 < args.len: scopeFilter = args[i+1]; inc i
+        elif a == "--json": jsonOut = true
+        inc i
+      let res = doRemind(cfg, "list", [forAgent, scopeFilter])
+      if jsonOut:
+        echo res
+      else:
+        echo formatRemindersTable(res)
+
+    of "tick":
+      var jsonOut = false
+      for a in args[2..^1]:
+        if a == "--json": jsonOut = true
+      let res = doRemindTickFallback(cfg)
+      if jsonOut:
+        echo res
+      else:
+        try:
+          let node = parseJson(res)
+          let dispatched = node.getOrDefault("dispatched").getInt(0)
+          echo "Dispatched " & $dispatched & " fallback standalone reminder(s)."
+        except CatchableError:
+          echo res
+
+    else:
+      stderr.writeLine("Unknown remind action: '" & action & "'. Valid actions: add, dismiss, ack, get, list, tick")
+      quit(1)
+
   else:
     var suggestion = ""
     let lowCmd = subcmd.toLowerAscii
@@ -5380,6 +5664,8 @@ proc main() =
       suggestion = "drain"
     elif lowCmd in ["clean", "gc", "purge"]:
       suggestion = "sweep"
+    elif lowCmd in ["reminders", "sticky", "banner", "advisory", "notice", "alert", "warn"]:
+      suggestion = "remind"
 
     if suggestion.len > 0:
       stderr.writeLine("Error: Unknown subcommand '" & subcmd & "'. Did you mean 'rhizo " & suggestion & "'?")

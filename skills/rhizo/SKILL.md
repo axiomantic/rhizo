@@ -103,7 +103,7 @@ Inspect your available runtime tools and execute the highest matching tier:
 | :--- | :--- | :--- | :--- |
 | **Tier 1** | In-Process Extension (e.g. OpenCode `opencode-ear.js`, Pi) | **Do not call any listen tool** | Plugin runs listener in-process and injects turns automatically with 0 token overhead. |
 | **Tier 2** | Shell tool with daemon support (e.g. Antigravity `run_command(IsDaemon=true)`) | Run `rhizo listen <agent>` as managed daemon | Maintains direct line of communication in main chat with 0 subagent token overhead. |
-| **Tier 3** | Subagent tool with background support (e.g. Claude Code `Task(background=true)`) | Dispatch subagent running blocking `rhizo listen <agent>` | Subagent blocks until one message arrives, outputs JSON, and exits to wake parent. |
+| **Tier 3** | Subagent tool with background support (e.g. Claude Code `Task(background=true)`) | Dispatch subagent running single-shot `rhizo listen <agent>` | Subagent blocks until one message arrives, prints JSON, and exits 0 to wake parent. **Never wrap in a `while` loop**; loops prevent exit and trap output. |
 | **Tier 4** | Synchronous foreground shell only | **Do not run `rhizo listen`**. Call `rhizo check-inbox` | Blocking foreground shell freezes the turn. Poll explicitly during user turns. |
 
 *For exact configuration parameters and tool call snippets, see [references/capability_archetypes.md](references/capability_archetypes.md).*

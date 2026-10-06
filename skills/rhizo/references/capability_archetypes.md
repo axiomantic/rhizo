@@ -45,6 +45,9 @@ This document maps runtime tool capabilities to their exact invocation patterns.
   <CRITICAL>
   NO DOUBLE-DAEMONS: Inside the subagent, 'rhizo listen' must be SYNCHRONOUS AND BLOCKING. Do not run with '&' or as a daemon inside the subagent. Subagents only notify parent chats upon exit.
   </CRITICAL>
+  <FORBIDDEN>
+  NEVER WRAP IN A WHILE LOOP: Never run 'while true; do rhizo listen <name>; done' or 'until rhizo listen'. Coding harnesses and task tools ONLY notify the parent agent when the subagent or command finishes. Wrapping in a shell loop traps execution indefinitely, preventing the tool from ever returning its output to the parent orchestrator. The listener MUST be single-shot: execute once, exit on delivery, return output to parent. Re-arming must be initiated as a separate turn or subsequent task.
+  </FORBIDDEN>
 - **Tool Action**:
   ```json
   Task({
