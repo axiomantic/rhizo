@@ -22,11 +22,50 @@ if not prefix or prefix == "" then
     return redis.error_reply("ERR: Missing prefix")
 end
 
-local recipient = ARGV[2]
-if not recipient or recipient == "" then
+local function sanitize_name(s)
+    if not s then return "" end
+    s = string.match(s, "^%s*(.-)%s*$") or ""
+    local changed = true
+    while changed and #s >= 2 do
+        changed = false
+        local first = string.sub(s, 1, 1)
+        local last = string.sub(s, -1, -1)
+        if (first == '"' and last == '"') or (first == "'" and last == "'") or (first == "`" and last == "`") or (first == "<" and last == ">") or (first == "[" and last == "]") or (first == "(" and last == ")") then
+            s = string.match(string.sub(s, 2, -2), "^%s*(.-)%s*$") or ""
+            changed = true
+        end
+    end
+    local low = string.lower(s)
+    if string.sub(low, 1, 6) == "agent:" then
+        s = string.sub(s, 7)
+    elseif string.sub(low, 1, 5) == "user:" then
+        s = string.sub(s, 6)
+    elseif string.sub(low, 1, 6) == "inbox:" then
+        s = string.sub(s, 7)
+    end
+    while string.sub(s, 1, 1) == "@" or string.sub(s, 1, 1) == "#" do
+        s = string.sub(s, 2)
+    end
+    while #s > 0 and (string.sub(s, -1, -1) == ":" or string.sub(s, -1, -1) == "," or string.sub(s, -1, -1) == ";") do
+        s = string.sub(s, 1, -2)
+    end
+    return string.lower(string.match(s, "^%s*(.-)%s*$") or "")
+end
+
+local raw_recipient = ARGV[2]
+if not raw_recipient or raw_recipient == "" then
     return redis.error_reply("ERR: Missing recipient")
 end
-recipient = string.lower(recipient)
+local recipient = sanitize_name(raw_recipient)
+if recipient == "" then
+    return redis.error_reply("ERR: Invalid recipient")
+end
+
+-- Resolve alias if configured
+local alias_target = redis.call('HGET', prefix .. 'aliases', recipient)
+if alias_target and alias_target ~= false and alias_target ~= '' then
+    recipient = sanitize_name(alias_target)
+end
 
 local arg3 = ARGV[3]
 if not arg3 or arg3 == "" then
@@ -43,7 +82,7 @@ if string.sub(arg3, 1, 1) == "{" then
 else
     -- Mode B: Structured parameters
     local msg_type = arg3
-    local from_agent = string.lower(ARGV[4] or "unknown")
+    local from_agent = sanitize_name(ARGV[4] or "unknown")
     local subject = ARGV[5] or ""
     local body = ARGV[6] or ""
     local tags_csv = ARGV[7] or ""

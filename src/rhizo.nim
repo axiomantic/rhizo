@@ -82,7 +82,8 @@ const
   taskLua*       = staticRead("../scripts/task.lua")
   decisionLua*   = staticRead("../scripts/decision.lua")
   reminderLua*   = staticRead("../scripts/reminder.lua")
-  RhizoVersion*  = "0.2.0"
+  rerouteLua*    = staticRead("../scripts/reroute.lua")
+  RhizoVersion*  = "0.2.1"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -117,6 +118,7 @@ let
   taskSha*       = computeSha1(taskLua)
   decisionSha*   = computeSha1(decisionLua)
   reminderSha*   = computeSha1(reminderLua)
+  rerouteSha*    = computeSha1(rerouteLua)
 
 
 proc secureFilePermissions*(path: string) =
@@ -133,6 +135,48 @@ proc parseRequiredInt*(val, flagName: string): int =
     stderr.writeLine("Error: Invalid integer for " & flagName & ": '" & val & "'")
     quit(1)
 
+proc sanitizeIdentifier*(raw: string): string =
+  var s = raw.strip()
+  var changed = true
+  while changed and s.len > 0:
+    changed = false
+    if s.len >= 2:
+      if (s.startsWith("\"") and s.endsWith("\"")) or
+         (s.startsWith("'") and s.endsWith("'")) or
+         (s.startsWith("`") and s.endsWith("`")) or
+         (s.startsWith("<") and s.endsWith(">")) or
+         (s.startsWith("[") and s.endsWith("]")) or
+         (s.startsWith("(") and s.endsWith(")")):
+        s = s[1..^2].strip()
+        changed = true
+        continue
+
+    if s.startsWith("@") or s.startsWith("#"):
+      s = s[1..^1].strip()
+      changed = true
+      continue
+
+    let low = s.toLowerAscii
+    var pfxLen = 0
+    if low.startsWith("agent:"): pfxLen = 6
+    elif low.startsWith("user:"): pfxLen = 5
+    elif low.startsWith("bot:"): pfxLen = 4
+    elif low.startsWith("inbox:"): pfxLen = 6
+    elif low.startsWith("channel:"): pfxLen = 8
+    elif low.startsWith("queue:"): pfxLen = 6
+    elif low.startsWith("lock:"): pfxLen = 5
+
+    if pfxLen > 0:
+      s = s[pfxLen..^1].strip()
+      changed = true
+      continue
+
+    if s.endsWith(":") or s.endsWith(",") or s.endsWith(";") or s.endsWith("."):
+      s = s[0..^2].strip()
+      changed = true
+      continue
+
+  return s.toLowerAscii
 
 proc getOpenSslExe*(): string =
   let envExe = getEnv("OPENSSL_BIN", "")
@@ -349,12 +393,13 @@ proc reconnectRedisClientMs*(redisUrl: string, client: var Redis, remainingMs: v
   ## Loops with exponential backoff and full jitter until connection is restored
   ## or until a finite timeout is exhausted. Returns true on successful reconnect,
   ## or false if timeout expired while disconnected.
+  randomize()
   if client != nil:
     try: client.close() except CatchableError: discard
     client = nil
 
   var attempt = 0
-  let baseMs = 100
+  let baseMs = 250
   let capMs = 5000
   let startEpoch = epochTime()
   let initialRemaining = remainingMs
@@ -362,7 +407,7 @@ proc reconnectRedisClientMs*(redisUrl: string, client: var Redis, remainingMs: v
   while isForever or remainingMs > 0:
     let factor = 1 shl min(attempt, 6) # 1, 2, 4, 8, 16, 32, 64
     let maxInterval = min(capMs, baseMs * factor)
-    let sleepMs = if maxInterval > 0: rand(maxInterval) else: baseMs
+    let sleepMs = if maxInterval > baseMs: baseMs + rand(maxInterval - baseMs) else: baseMs + rand(min(100, baseMs))
 
     if not isForever:
       let elapsedMs = int((epochTime() - startEpoch) * 1000)
@@ -590,30 +635,25 @@ proc removeRedisSessionMapping*(cfg: RhizoConfig, sessionKey: string, agentName:
     discard
 
 # Agent Identity Persistence (User-level fallback for plain shell invocations)
-# Note: Workspace-scoped .rhizo.agent is intentionally forbidden to prevent
-# tying directories 1:1 to Rhizo sessions. Identity is strictly scoped to the process
-# environment (RHIZO_AGENT_NAME), the harness session ID, or user fallback.
+# Note: Workspace-scoped and disk-persisted agent identities are strictly forbidden (GVR-008)
+# to prevent cross-agent identity contamination across terminal sessions and workspaces.
+# Identity is strictly scoped to the process environment (RHIZO_AGENT_NAME), explicit CLI flags,
+# or the harness session ID.
 proc currentAgentPath*(): string =
   getHomeDir() / ".config" / "rhizo" / "current_agent"
 
 proc saveCurrentAgent*(name: string) =
-  # User-scoped fallback file only
+  # Deprecated & intentionally disabled (GVR-008). Agent identity is strictly process-scoped.
+  # Clean up any lingering legacy file to prevent cross-agent identity contamination.
   try:
     let p = currentAgentPath()
-    createDir(p.splitPath.head)
-    writeFile(p, name.strip().toLowerAscii & "\n")
-    secureFilePermissions(p)
+    if fileExists(p):
+      removeFile(p)
   except OSError:
     discard
 
 proc loadCurrentAgent*(): string =
-  # User-scoped fallback file only
-  try:
-    let p = currentAgentPath()
-    if fileExists(p):
-      return readFile(p).strip().toLowerAscii
-  except OSError:
-    discard
+  # Deprecated & intentionally disabled (GVR-008). File-persisted identity is prohibited.
   return ""
 
 proc clearCurrentAgent*() =
@@ -625,42 +665,38 @@ proc clearCurrentAgent*() =
     discard
 
 
-proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = true): string =
+proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = false): string =
   if explicitName.len > 0:
-    return explicitName.toLowerAscii
+    return sanitizeIdentifier(explicitName)
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
-    return cfg.agentName.toLowerAscii
+    return sanitizeIdentifier(cfg.agentName)
   let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
   if envName.len > 0:
-    return envName.toLowerAscii
+    return sanitizeIdentifier(envName)
 
   # Session ID resolution
   let sid = if sessionId.len > 0: sessionId elif cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     let localAgent = getLocalSessionAgent(sid)
     if localAgent.len > 0:
-      return localAgent.toLowerAscii
+      return sanitizeIdentifier(localAgent)
     try:
       let redisAgent = getRedisSessionMapping(cfg, sid)
       if redisAgent.len > 0:
-        return redisAgent.toLowerAscii
+        return sanitizeIdentifier(redisAgent)
     except CatchableError:
       discard
 
-  # File-based fallback for shell invocations without session IDs
-  if allowGlobalFallback:
-    let saved = loadCurrentAgent()
-    if saved.len > 0:
-      return saved.toLowerAscii
+  # Note: Global file fallback (loadCurrentAgent) permanently removed to satisfy GVR-008.
 
   if fallbackDefault:
     if cfg.agentName.len > 0:
-      return cfg.agentName.toLowerAscii
-    return if cfg.project.len > 0: (cfg.project & "-worker").toLowerAscii else: "worker"
+      return sanitizeIdentifier(cfg.agentName)
+    return if cfg.project.len > 0: sanitizeIdentifier(cfg.project & "-worker") else: "worker"
   return ""
 
 proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string] =
-  let normName = name.toLowerAscii
+  let normName = sanitizeIdentifier(name)
   var client: Redis
   try:
     client = openRedisClient(cfg.redisUrl)
@@ -849,13 +885,13 @@ proc doRemindTickFallback*(cfg: RhizoConfig): string =
 # Core Operations
 proc doRegister*(cfg: RhizoConfig, name, tags: string, ttl: int = -1): string =
   let effectiveTtl = if ttl > 0: ttl elif cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
-  return runLuaScript(cfg.redisUrl, registerLua, registerSha, [cfg.prefix, name.toLowerAscii, tags, $effectiveTtl])
+  return runLuaScript(cfg.redisUrl, registerLua, registerSha, [cfg.prefix, sanitizeIdentifier(name), tags, $effectiveTtl])
 
 proc doCheckInbox*(cfg: RhizoConfig, name: string): int =
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
-  let inboxKey = cfg.prefix & "inbox:" & name.toLowerAscii
+  let inboxKey = cfg.prefix & "inbox:" & sanitizeIdentifier(name)
   try:
     return client.lLen(inboxKey)
   except CatchableError:
@@ -885,7 +921,7 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
-  var argSeq: seq[string] = @[cfg.prefix, name.toLowerAscii, $count]
+  var argSeq: seq[string] = @[cfg.prefix, sanitizeIdentifier(name), $count]
   var resp: RedisValue
   try:
     resp = client.evalSha(drainSha, @[], argSeq)
@@ -939,8 +975,9 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
     let sig = parsed.getOrDefault("sig").getStr("")
     let isEncrypted = parsed.getOrDefault("encrypted").getBool(false)
 
-    # Validate HMAC
-    let canonical = id & "|" & fromAgent & "|" & toAgent & "|" & msgType & "|" & subject & "|" & body & "|" & ts
+    # Validate HMAC (accounting for transparent rerouting if present)
+    let originalTo = parsed.getOrDefault("original_recipient").getStr(parsed.getOrDefault("rerouted_from").getStr(toAgent))
+    let canonical = id & "|" & fromAgent & "|" & originalTo & "|" & msgType & "|" & subject & "|" & body & "|" & ts
     if not verifyHmac(secret, canonical, sig):
       stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered message (ID: " & id & ")")
       continue
@@ -1252,7 +1289,8 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
     return formatDirectoryJson(raw)
   return formatDirectory(raw)
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false)
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false)
+proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 
 proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 600): tuple[name, prefix, codename: string] =
   randomize()
@@ -1292,10 +1330,10 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   defer:
     try: client.close() except CatchableError: discard
 
-  var name = optName.toLowerAscii
+  var name = sanitizeIdentifier(optName)
   if name.len == 0:
     let reserved = reserveUniqueName(cfg, "", 600)
-    name = reserved.name.toLowerAscii
+    name = sanitizeIdentifier(reserved.name)
   else:
     try:
       if client.exists(cfg.prefix & "heartbeat:" & name):
@@ -1308,6 +1346,7 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     cfg.project
 
   saveCurrentAgent(name)
+  putEnv("RHIZO_AGENT_NAME", name)
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     saveLocalSessionMapping(sid, name)
@@ -1348,11 +1387,25 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: string,
             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", isBroadcast: bool = false,
             customTs: string = "", echoResult: bool = true, rearmListen: bool = false, listenTimeoutSec: int = -1,
-            urgency: string = "soon", format: string = "text"): string =
+            urgency: string = "soon", format: string = "text", listenAgent: string = ""): string =
   randomize()
   let secret = getSecret(cfg)
-  let normTo = if toAgent.startsWith("@"): "@" & toAgent[1..^1].toLowerAscii else: toAgent.toLowerAscii
-  let normFrom = fromAgent.toLowerAscii
+  let rawCleanTo = sanitizeIdentifier(toAgent)
+  let normTo = if toAgent.strip() in ["*", "@*"] or rawCleanTo in ["*", "all", "@all"]: "*" else: rawCleanTo
+  let normFrom = sanitizeIdentifier(fromAgent)
+
+  # Dynamic alias resolution (GVR-012)
+  var resolvedTo = normTo
+  if not (isBroadcast or normTo == "*"):
+    try:
+      var client = connectRedis(cfg.redisUrl)
+      defer: (try: client.close() except CatchableError: discard)
+      let aliasVal = client.hGet(cfg.prefix & "aliases", normTo)
+      if aliasVal != redisNil and aliasVal.len > 0:
+        resolvedTo = sanitizeIdentifier(aliasVal)
+    except CatchableError:
+      discard
+
   let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & normFrom & "_" & $rand(1000..9999)
   let ts = if customTs.len > 0: customTs else: now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
   let finalBody = if cfg.encrypt: encryptAes(body, secret, cfg) else: body
@@ -1373,13 +1426,15 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         discard
 
   # Canonical concatenation for HMAC: id|from|to|type|subject|body|timestamp
-  let canonical = id & "|" & normFrom & "|" & normTo & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
+  let canonical = id & "|" & normFrom & "|" & resolvedTo & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
 
   var node = newJObject()
   node["id"] = %id
   node["from"] = %normFrom
-  node["to"] = %normTo
+  node["to"] = %resolvedTo
+  if resolvedTo != normTo:
+    node["intended_recipient"] = %normTo
   node["type"] = %msgType
   node["urgency"] = %normUrgency
   let originHost = getOriginHostname()
@@ -1392,7 +1447,7 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
 
   var tagArray = newJArray()
   for t in tags:
-    tagArray.add(%t.toLowerAscii)
+    tagArray.add(%sanitizeIdentifier(t))
   if tagArray.len == 0 and cfg.project.len > 0:
     tagArray.add(%cfg.project.toLowerAscii)
   node["tags"] = tagArray
@@ -1406,38 +1461,36 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let msgJson = $node
 
   let effectiveTtl = if cfg.messageTtl > 0: cfg.messageTtl else: 604800
-  let isTargetMulticast = isBroadcast or normTo.startsWith("@") or normTo == "*"
+  let isTargetMulticast = isBroadcast or (tags.len > 0) or (normTo == "*")
   var target = ""
   var res = ""
   if isTargetMulticast:
-    if normTo.startsWith("@"):
-      let raw = normTo[1..^1]
-      if raw in ["*", "all", "@all"]: target = "*"
-      elif raw.startsWith(cfg.project.toLowerAscii): target = raw
-      else: target = cfg.project.toLowerAscii & "," & raw
-    elif normTo == "*":
+    if normTo == "*":
       target = "*"
     elif isBroadcast:
       if tags.len > 0:
         var normTags: seq[string] = @[]
-        for t in tags: normTags.add(t.toLowerAscii)
-        if "*" in normTags or "@all" in normTags:
+        for t in tags: normTags.add(sanitizeIdentifier(t))
+        if "*" in normTags or "all" in normTags or "@all" in normTags:
           target = "*"
         elif cfg.project.toLowerAscii in normTags:
           target = normTags.join(",")
         else:
           target = cfg.project.toLowerAscii & "," & normTags.join(",")
       else:
-        target = if normTo.len > 0 and normTo != "*": (if normTo.startsWith("@"): normTo[1..^1] else: normTo) else: "*"
+        target = if normTo.len > 0 and normTo != "*": normTo else: "*"
     else:
       target = if normTo.len > 0: normTo else: "*"
 
     res = runLuaScript(cfg.redisUrl, multicastLua, multicastSha, [cfg.prefix, target, msgJson, $effectiveTtl])
   else:
-    let destQueue = if msgType == "reply" and (effectiveReplyTo.startsWith("scatter:") or effectiveReplyTo.startsWith("reply:")): effectiveReplyTo else: normTo
+    let destQueue = if msgType == "reply" and (effectiveReplyTo.startsWith("scatter:") or effectiveReplyTo.startsWith("reply:")): effectiveReplyTo else: resolvedTo
     res = runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, destQueue, msgJson, $effectiveTtl])
-    if destQueue.startsWith("scatter:") and normTo.len > 0 and normTo != destQueue:
-      discard runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, normTo, msgJson, $effectiveTtl])
+    if destQueue.startsWith("scatter:") and resolvedTo.len > 0 and resolvedTo != destQueue:
+      discard runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, resolvedTo, msgJson, $effectiveTtl])
+
+  # Record out-of-band audit trail event
+  doAuditLog(cfg, normFrom, "message.send", id & " -> " & (if resolvedTo.len > 0: resolvedTo else: target) & " [" & msgType & "] " & subject)
 
   if echoResult and not rearmListen:
     if format == "raw":
@@ -1453,13 +1506,15 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
       else:
         var client = connectRedis(cfg.redisUrl)
         defer: (try: client.close() except CatchableError: discard)
-        let isAlive = client.exists(cfg.prefix & "heartbeat:" & normTo)
-        let hasListener = client.exists(cfg.prefix & "listener:" & normTo)
-        let depth = try: client.lLen(cfg.prefix & "inbox:" & normTo) except CatchableError: 0
+        let isAlive = client.exists(cfg.prefix & "heartbeat:" & resolvedTo)
+        let hasListener = client.exists(cfg.prefix & "listener:" & resolvedTo)
+        let depth = try: client.lLen(cfg.prefix & "inbox:" & resolvedTo) except CatchableError: 0
         var outObj = newJObject()
         outObj["status"] = %"ENQUEUED"
         outObj["id"] = %id
-        outObj["recipient"] = %normTo
+        outObj["recipient"] = %resolvedTo
+        if resolvedTo != normTo:
+          outObj["alias"] = %normTo
         outObj["recipient_status"] = %(if isAlive: "ACTIVE" else: "OFFLINE")
         outObj["listener_attached"] = %hasListener
         outObj["inbox_depth"] = %depth
@@ -1473,19 +1528,22 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
       else:
         var client = connectRedis(cfg.redisUrl)
         defer: (try: client.close() except CatchableError: discard)
-        let isAlive = client.exists(cfg.prefix & "heartbeat:" & normTo)
-        let hasListener = client.exists(cfg.prefix & "listener:" & normTo)
-        let depth = try: client.lLen(cfg.prefix & "inbox:" & normTo) except CatchableError: 0
+        let isAlive = client.exists(cfg.prefix & "heartbeat:" & resolvedTo)
+        let hasListener = client.exists(cfg.prefix & "listener:" & resolvedTo)
+        let depth = try: client.lLen(cfg.prefix & "inbox:" & resolvedTo) except CatchableError: 0
         let statusStr = if isAlive: "ACTIVE" else: "OFFLINE"
         let listenerStr = if hasListener: "LISTENING" else: "NO_LISTENER"
-        echo "ENQUEUED " & id & " -> " & normTo & " (status: " & statusStr & ", listener: " & listenerStr & ", inbox_depth: " & $depth & ")"
+        let aliasNote = if resolvedTo != normTo: " (aliased from @" & normTo & ")" else: ""
+        echo "ENQUEUED " & id & " -> " & resolvedTo & aliasNote & " (status: " & statusStr & ", listener: " & listenerStr & ", inbox_depth: " & $depth & ")"
         if not hasListener:
-          stderr.writeLine("⚠️  [RHIZO WARNING] Recipient '" & normTo & "' has no active listener attached! Message queued in inbox (depth: " & $depth & "), but will not be processed until a listener is armed.")
+          stderr.writeLine("⚠️  [RHIZO WARNING] Recipient '" & resolvedTo & "' has no active listener attached! Message queued in inbox (depth: " & $depth & "), but will not be processed until a listener is armed.")
 
   if rearmListen:
-    let listenerAgent = if normFrom.len > 0: normFrom else: getActiveAgentName(cfg, "", fallbackDefault = true)
+    let listenerAgent = if listenAgent.len > 0: listenAgent.toLowerAscii
+                        elif normFrom.len > 0: normFrom
+                        else: ""
     if listenerAgent.len == 0:
-      stderr.writeLine("Error: Cannot listen after send: no agent name identified.")
+      stderr.writeLine("Error: Cannot listen after send: no agent name identified. Pass '--listen <agent>' or '--from <agent>'.")
       quit(1)
     let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, listenerAgent)
     if alreadyListening:
@@ -1523,9 +1581,9 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
   except Exception:
     discard
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false) =
-  let name = name.toLowerAscii
-  checkSupervisionAttached(name, force)
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
+  let name = sanitizeIdentifier(name)
+  checkSupervisionAttached(name, force or continuous)
   let secret = getSecret(cfg)
   let inboxKey = cfg.prefix & "inbox:" & name
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
@@ -1649,8 +1707,9 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         stderr.writeLine("[RHIZO LISTENER] Received shutdown signal for agent '" & name & "'. Exiting.")
         return
 
-      # Validate HMAC
-      let canonical = id & "|" & fromAgent & "|" & toAgent & "|" & msgType & "|" & subject & "|" & body & "|" & ts
+      # Validate HMAC (accounting for transparent rerouting if present)
+      let originalTo = parsed.getOrDefault("original_recipient").getStr(parsed.getOrDefault("rerouted_from").getStr(toAgent))
+      let canonical = id & "|" & fromAgent & "|" & originalTo & "|" & msgType & "|" & subject & "|" & body & "|" & ts
       if not verifyHmac(secret, canonical, sig):
         stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered message (ID: " & id & ")")
         if not isForever:
@@ -1713,6 +1772,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       if notify:
         sendDesktopNotification(parsed)
       echo $parsed
+      flushFile(stdout)
+
+      if continuous:
+        continue
+
       if not quiet and getEnv("RHIZO_QUIET", "0") notin ["1", "true", "yes"]:
         let harness = detectHarness(cfg)
         let replySubj = if subject.toLowerAscii.startsWith("re:"): subject else: "Re: " & subject
@@ -1791,11 +1855,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string =
   let effectiveTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
-  return runLuaScript(cfg.redisUrl, statusLua, statusSha, [cfg.prefix, name.toLowerAscii, state.toLowerAscii, activity, $effectiveTtl])
+  return runLuaScript(cfg.redisUrl, statusLua, statusSha, [cfg.prefix, sanitizeIdentifier(name), state.toLowerAscii, activity, $effectiveTtl])
 
-proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: bool = false, rawOutput: bool = false): (string, int) =
-  let normLock = lockName.toLowerAscii
-  let owner = getActiveAgentName(cfg, "").toLowerAscii
+proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: bool = false, rawOutput: bool = false, ownerAgent: string = ""): (string, int) =
+  let normLock = sanitizeIdentifier(lockName)
+  let owner = if ownerAgent.len > 0: sanitizeIdentifier(ownerAgent) else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let fencingArg = if withFencing: "1" else: "0"
   let res = runLuaScript(cfg.redisUrl, lockLua, lockSha, [cfg.prefix, normLock, owner, $ttlSec, fencingArg])
   if res != "0" and not res.startsWith("ERR:"):
@@ -1810,9 +1874,9 @@ proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: 
   else:
     return ("Error: Lock '" & normLock & "' is already held.", 1)
 
-proc doUnlock*(cfg: RhizoConfig, lockName: string): (string, int) =
-  let normLock = lockName.toLowerAscii
-  let owner = getActiveAgentName(cfg, "").toLowerAscii
+proc doUnlock*(cfg: RhizoConfig, lockName: string, ownerAgent: string = ""): (string, int) =
+  let normLock = sanitizeIdentifier(lockName)
+  let owner = if ownerAgent.len > 0: sanitizeIdentifier(ownerAgent) else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let res = runLuaScript(cfg.redisUrl, unlockLua, unlockSha, [cfg.prefix, normLock, owner])
   if res == "1":
     return ("UNLOCKED " & normLock, 0)
@@ -1823,8 +1887,8 @@ proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: 
                 tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = ""): string =
   randomize()
   let secret = getSecret(cfg)
-  let normQueue = queueName.toLowerAscii
-  let normFrom = fromAgent.toLowerAscii
+  let normQueue = sanitizeIdentifier(queueName)
+  let normFrom = sanitizeIdentifier(fromAgent)
   let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & normFrom & "_" & $rand(1000..9999)
   let ts = if customTs.len > 0: customTs else: now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
   let finalBody = if cfg.encrypt: encryptAes(body, secret, cfg) else: body
@@ -1894,7 +1958,7 @@ proc isRunCancelled*(cfg: RhizoConfig, runId: string): bool =
   return isRunCancelled(client, cfg, runId)
 
 proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: string = "") =
-  let normQueue = queueName.toLowerAscii
+  let normQueue = sanitizeIdentifier(queueName)
   let secret = getSecret(cfg)
   let queueKey = if normQueue.startsWith("dlq:"):
                    cfg.prefix & "queue:dlq:{" & normQueue[4..^1] & "}"
@@ -1905,7 +1969,7 @@ proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: s
   let startTime = getTime().toUnix()
   var remaining = effectiveTimeout
 
-  let workerName = getActiveAgentName(cfg, "")
+  let workerName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let hbTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
   let pollChunk = min(60, max(1, hbTtl div 2))
 
@@ -2006,9 +2070,9 @@ proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: s
 proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int
 
 proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSec: int = 120, rawOutput: bool = false, runId: string = "") =
-  let normQueue = queueName.toLowerAscii
+  let normQueue = sanitizeIdentifier(queueName)
   let secret = getSecret(cfg)
-  let workerName = getActiveAgentName(cfg, "")
+  let workerName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
   let effectiveTimeout = if isForever: 0 elif timeoutSec > 0: timeoutSec else: (if cfg.listenTimeout > 0: cfg.listenTimeout else: 60)
   let startTime = epochTime()
@@ -2139,7 +2203,7 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
     backoffMs = min(2000, backoffMs * 2)
 
 proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int =
-  let normQueue = queueName.toLowerAscii
+  let normQueue = sanitizeIdentifier(queueName)
   let resStr = runLuaScript(cfg.redisUrl, ackLua, ackSha, [cfg.prefix, normQueue, taskId])
   var res = 0
   try:
@@ -2154,7 +2218,7 @@ proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int =
   return res
 
 proc doClaimRenew*(cfg: RhizoConfig, queueName, taskId: string, leaseSec: int = 120) =
-  let normQueue = queueName.toLowerAscii
+  let normQueue = sanitizeIdentifier(queueName)
   let res = runLuaScript(cfg.redisUrl, claimRenewLua, claimRenewSha, [cfg.prefix, normQueue, taskId, $leaseSec])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
@@ -3054,7 +3118,7 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
     echo $resArr
 
 proc doPub*(cfg: RhizoConfig, channel, message: string): string =
-  let normChan = channel.toLowerAscii
+  let normChan = sanitizeIdentifier(channel)
   let fullChan = cfg.prefix & "channel:" & normChan
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -3067,7 +3131,7 @@ proc doPub*(cfg: RhizoConfig, channel, message: string): string =
     quit(1)
 
 proc doSub*(cfg: RhizoConfig, channel: string, timeoutSec: int = -1) =
-  let normChan = channel.toLowerAscii
+  let normChan = sanitizeIdentifier(channel)
   let fullChan = cfg.prefix & "channel:" & normChan
   proc asyncSub(): Future[string] {.async.} =
     let parsed = parseRedisUrl(cfg.redisUrl)
@@ -3219,9 +3283,244 @@ proc formatAuditTable*(jsonStr: string): string =
   except CatchableError:
     return jsonStr
 
+proc doHistory*(cfg: RhizoConfig, targetAgent: string = "", limit: int = 50, jsonOutput: bool = false): string =
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+
+  var resultList = newJArray()
+  let normTarget = sanitizeIdentifier(targetAgent)
+  let effectiveLimit = if limit > 0: limit else: 50
+
+  if normTarget.len > 0:
+    # 1. Non-destructively peek into inbox:<agent> using LRANGE
+    let inboxItems = try: client.lRange(cfg.prefix & "inbox:" & normTarget, 0, effectiveLimit - 1) except CatchableError: @[]
+    for item in inboxItems:
+      try:
+        var node = parseJson(item)
+        node["source"] = %"inbox"
+        resultList.add(node)
+      except CatchableError:
+        var rawNode = newJObject()
+        rawNode["raw"] = %item
+        rawNode["source"] = %"inbox"
+        resultList.add(rawNode)
+
+    # 2. Also search audit_trail for matching events
+    let auditItems = try: client.lRange(cfg.prefix & "audit_trail", 0, effectiveLimit - 1) except CatchableError: @[]
+    for item in auditItems:
+      try:
+        let node = parseJson(item)
+        let actor = node.getOrDefault("actor").getStr("").toLowerAscii
+        let details = node.getOrDefault("details").getStr("").toLowerAscii
+        if actor == normTarget or details.contains(normTarget):
+          var aNode = node
+          aNode["source"] = %"audit"
+          resultList.add(aNode)
+      except CatchableError: discard
+  else:
+    # Cluster-wide audit trail
+    let auditItems = try: client.lRange(cfg.prefix & "audit_trail", 0, effectiveLimit - 1) except CatchableError: @[]
+    for item in auditItems:
+      try:
+        var node = parseJson(item)
+        node["source"] = %"audit"
+        resultList.add(node)
+      except CatchableError: discard
+
+  if jsonOutput:
+    return $resultList
+
+  if resultList.len == 0:
+    return if normTarget.len > 0: "No history found for agent '" & normTarget & "'." else: "No audit events recorded."
+
+  # Render formatted table
+  var outStr = "TIMESTAMP                 SOURCE   ACTOR/FROM      TARGET/TO       TYPE/ACTION     DETAILS/SUBJECT\n"
+  outStr.add("------------------------------------------------------------------------------------------------------------------\n")
+  for item in resultList:
+    let src = item.getOrDefault("source").getStr("inbox")
+    let ts = item.getOrDefault("timestamp").getStr("-")
+    let actor = if item.hasKey("from"): item["from"].getStr("") elif item.hasKey("actor"): item["actor"].getStr("") else: "-"
+    let target = if item.hasKey("to"): item["to"].getStr("") else: "-"
+    let action = if item.hasKey("type"): item["type"].getStr("") elif item.hasKey("action"): item["action"].getStr("") else: "-"
+    let details = if item.hasKey("subject"): item["subject"].getStr("") elif item.hasKey("details"): item["details"].getStr("") else: item.getOrDefault("body").getStr("")
+    outStr.add(ts.alignLeft(26) & src.alignLeft(9) & actor.alignLeft(16) & target.alignLeft(16) & action.alignLeft(16) & details & "\n")
+  return outStr.strip()
+
+proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): string =
+  let normName = sanitizeIdentifier(agentName)
+  if normName.len == 0:
+    return "Error: Missing required agent name for probe. Usage: rhizo probe <agent> [--json]"
+
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+
+  var probeTarget = normName
+  let aliasVal = try: client.hGet(cfg.prefix & "aliases", normName) except CatchableError: redisNil
+  var isAlias = false
+  if aliasVal != redisNil and aliasVal.len > 0:
+    probeTarget = sanitizeIdentifier(aliasVal)
+    isAlias = true
+
+  let isAlive = client.exists(cfg.prefix & "heartbeat:" & probeTarget)
+  let hbTtl = if isAlive: client.ttl(cfg.prefix & "heartbeat:" & probeTarget) else: -1
+  let lastSeen = client.hGet(cfg.prefix & "agent:" & probeTarget, "last_seen")
+  let listenerVal = client.get(cfg.prefix & "listener:" & probeTarget)
+  let inboxDepth = try: client.lLen(cfg.prefix & "inbox:" & probeTarget) except CatchableError: 0
+
+  var hasListener = false
+  var listenerPid = 0
+  var listenerHost = ""
+  var pidAlive = false
+
+  if listenerVal != redisNil and listenerVal.len > 0:
+    try:
+      let lNode = parseJson(listenerVal)
+      hasListener = true
+      listenerPid = lNode.getOrDefault("pid").getInt(0)
+      listenerHost = lNode.getOrDefault("host").getStr("")
+      if listenerHost == getHostNameStr() and listenerPid > 0:
+        pidAlive = isPidAlive(listenerPid)
+      else:
+        pidAlive = true
+    except CatchableError:
+      discard
+
+  var status = "HEALTHY"
+  var issues: seq[string] = @[]
+
+  if not isAlive:
+    status = "OFFLINE"
+    issues.add("Heartbeat expired (process not reporting heartbeat)")
+  elif not hasListener:
+    status = "NO_LISTENER"
+    issues.add("No listener registered in Redis")
+  elif not pidAlive:
+    status = "STALLED"
+    issues.add("Listener PID " & $listenerPid & " is dead on host " & listenerHost)
+
+  if inboxDepth > 0 and (not hasListener or not pidAlive or not isAlive):
+    status = "STALLED"
+    issues.add("Inbox has " & $inboxDepth & " unread messages waiting with no active listener")
+
+  if jsonOutput:
+    var j = newJObject()
+    j["agent"] = %normName
+    if isAlias:
+      j["alias_of"] = %probeTarget
+    j["status"] = %status
+    j["heartbeat_active"] = %isAlive
+    j["heartbeat_ttl_sec"] = %hbTtl
+    j["last_seen"] = %(if lastSeen != redisNil: lastSeen else: "")
+    j["listener_registered"] = %hasListener
+    j["listener_pid"] = %listenerPid
+    j["listener_host"] = %listenerHost
+    j["listener_pid_alive"] = %pidAlive
+    j["inbox_depth"] = %inboxDepth
+    var jIssues = newJArray()
+    for iss in issues: jIssues.add(%iss)
+    j["issues"] = jIssues
+    return $j
+
+  var outStr = "====================================================\n"
+  if isAlias:
+    outStr.add("RHIZO AGENT HEALTH PROBE: @" & normName & " (alias for @" & probeTarget & ")\n")
+  else:
+    outStr.add("RHIZO AGENT HEALTH PROBE: @" & normName & "\n")
+  outStr.add("====================================================\n")
+  outStr.add("Health Status      : " & status & "\n")
+  outStr.add("Heartbeat Active   : " & (if isAlive: "YES (TTL: " & $hbTtl & "s)" else: "NO (OFFLINE)") & "\n")
+  if lastSeen != redisNil and lastSeen.len > 0:
+    outStr.add("Last Seen          : " & lastSeen & "\n")
+  outStr.add("Listener Registered: " & (if hasListener: "YES (Host: " & listenerHost & ", PID: " & $listenerPid & ")" else: "NO") & "\n")
+  if hasListener and listenerHost == getHostNameStr():
+    outStr.add("Listener Process   : " & (if pidAlive: "ALIVE (PID " & $listenerPid & ")" else: "DEAD / ZOMBIE (PID " & $listenerPid & ")") & "\n")
+  outStr.add("Unread Inbox Depth : " & $inboxDepth & " messages\n")
+  if issues.len > 0:
+    outStr.add("----------------------------------------------------\n")
+    outStr.add("⚠️  ISSUES DETECTED:\n")
+    for iss in issues:
+      outStr.add("  - " & iss & "\n")
+    outStr.add("RECOMMENDED ACTION:\n")
+    if not hasListener or not pidAlive:
+      outStr.add("  Run: rhizo listen " & normName & "\n")
+    if not isAlive:
+      outStr.add("  Run: rhizo open " & normName & "\n")
+  outStr.add("====================================================")
+  return outStr
+
+proc doAliasSet*(cfg: RhizoConfig, aliasName, canonicalName: string): string =
+  let normAlias = sanitizeIdentifier(aliasName)
+  let normCanon = sanitizeIdentifier(canonicalName)
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  discard client.hSet(cfg.prefix & "aliases", normAlias, normCanon)
+  return "ALIAS: @" & normAlias & " -> @" & normCanon
+
+proc doAliasGet*(cfg: RhizoConfig, aliasName: string): string =
+  let normAlias = sanitizeIdentifier(aliasName)
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  let val = client.hGet(cfg.prefix & "aliases", normAlias)
+  if val == redisNil or val.len == 0:
+    return ""
+  return val
+
+proc doAliasDel*(cfg: RhizoConfig, aliasName: string): bool =
+  let normAlias = sanitizeIdentifier(aliasName)
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  let count = client.hDel(cfg.prefix & "aliases", @[normAlias])
+  return count > 0
+
+proc doAliasList*(cfg: RhizoConfig, jsonOutput: bool = false): string =
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  let rawList = client.hGetAll(cfg.prefix & "aliases")
+  var map = newJObject()
+  var rows: seq[(string, string)] = @[]
+  var idx = 0
+  while idx + 1 < rawList.len:
+    let k = rawList[idx]
+    let v = rawList[idx + 1]
+    map[k] = %v
+    rows.add((k, v))
+    idx += 2
+  if jsonOutput:
+    return $map
+  if rows.len == 0:
+    return "No aliases registered."
+  var outStr = "ALIAS                 CANONICAL RECIPIENT\n"
+  outStr.add("----------------------------------------------------\n")
+  for (k, v) in rows:
+    outStr.add(k.alignLeft(22) & v & "\n")
+  return outStr.strip()
+
+proc doReroute*(cfg: RhizoConfig, fromAgent, toAgent: string, mode: string = "all", jsonOutput: bool = false): string =
+  let normFrom = sanitizeIdentifier(fromAgent)
+  let normTo = sanitizeIdentifier(toAgent)
+  if normFrom.len == 0 or normTo.len == 0:
+    return "ERR: Both source and destination agent names are required"
+  if normFrom == normTo:
+    return "ERR: Source and destination agents must be different"
+
+  let res = runLuaScript(cfg.redisUrl, rerouteLua, rerouteSha, [cfg.prefix, normFrom, normTo, mode])
+  if jsonOutput:
+    return res
+
+  try:
+    let node = parseJson(res)
+    let count = node.getOrDefault("count").getInt(0)
+    let status = node.getOrDefault("status").getStr("")
+    if status == "EMPTY":
+      return "No messages to reroute in inbox for @" & normFrom & "."
+    return "Rerouted " & $count & " message(s) from @" & normFrom & " to @" & normTo & " (status: " & status & ")."
+  except CatchableError:
+    return res
+
 # Main Entrypoint / CLI Router
 proc main() =
   installSignalHandlers()
+  randomize()
   let rawArgs = commandLineParams()
   var cli: CliOverrides
   var positionalArgs: seq[string] = @[]
@@ -3501,6 +3800,7 @@ proc main() =
     var forceListen = false
     var notify = false
     var quiet = false
+    var continuous = false
     var i = 1
     while i < args.len:
       let a = args[i]
@@ -3510,11 +3810,15 @@ proc main() =
         notify = true
       elif a in ["--quiet", "-q", "--no-postamble"]:
         quiet = true
+      elif a in ["--continuous", "--daemon", "-c"]:
+        continuous = true
+      elif a in ["--once"]:
+        continuous = false
       elif not a.startsWith("-"):
         try:
           timeout = parseInt(a)
         except ValueError:
-          if explicitName == "": explicitName = a
+          if explicitName == "": explicitName = sanitizeIdentifier(a)
       inc i
 
     let name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
@@ -3528,7 +3832,7 @@ proc main() =
         stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
         quit(1)
 
-    doListen(cfg, name, timeout, notify, quiet, forceListen)
+    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous)
 
   of "send", "broadcast", "reply":
     let isBroadcast = (subcmd == "broadcast")
@@ -3544,6 +3848,7 @@ proc main() =
     var customTs = ""
     var rearmListen = false
     var listenTimeout = -1
+    var listenAgent = ""
     var urgency = "soon"
     var format = "text"
 
@@ -3582,11 +3887,21 @@ proc main() =
       elif a == "--id" and i + 1 < args.len: msgId = args[i+1]; inc i
       elif a.startsWith("--timestamp="): customTs = a[12..^1]
       elif a == "--timestamp" and i + 1 < args.len: customTs = args[i+1]; inc i
-      elif a in ["--listen", "-l"]:
+      elif a.startsWith("--listen-agent="):
         rearmListen = true
+        listenAgent = sanitizeIdentifier(a[15..^1])
+      elif a == "--listen-agent" and i + 1 < args.len:
+        rearmListen = true
+        listenAgent = sanitizeIdentifier(args[i+1]); inc i
       elif a.startsWith("--listen="):
         rearmListen = true
-        listenTimeout = parseRequiredInt(a[9..^1], "--listen")
+        let val = a[9..^1]
+        try:
+          listenTimeout = parseInt(val)
+        except ValueError:
+          listenAgent = sanitizeIdentifier(val)
+      elif a in ["--listen", "-l"]:
+        rearmListen = true
       elif a.startsWith("--listen-timeout="):
         rearmListen = true
         listenTimeout = parseRequiredInt(a[17..^1], "--listen-timeout")
@@ -3601,7 +3916,7 @@ proc main() =
         elif body == "": body = a
       inc i
 
-    # Identity resolution for sender: strictly process-bound, no silent cross-agent current_agent leakage
+    # Identity resolution for sender: strictly process-bound, no silent cross-agent current_agent leakage (GVR-008)
     if fromAgent.len == 0:
       fromAgent = getActiveAgentName(cfg, fromAgent, fallbackDefault = false, sessionId = cfg.sessionId, allowGlobalFallback = false)
     if fromAgent.len == 0:
@@ -3611,10 +3926,6 @@ proc main() =
           let w = vj.getOrDefault("worker").getStr(vj.getOrDefault("agent").getStr(""))
           if w.len > 0: fromAgent = w
         except CatchableError: discard
-    if fromAgent.len == 0:
-      fromAgent = getActiveAgentName(cfg, fromAgent, fallbackDefault = false, sessionId = cfg.sessionId, allowGlobalFallback = true)
-    if fromAgent.len == 0 and cfg.project.len > 0:
-      fromAgent = cfg.project & "-worker"
     if fromAgent.len == 0:
       stderr.writeLine("Error: Cannot determine sender identity. Pass '--from <agent>' or export 'RHIZO_AGENT_NAME=<agent>'.")
       quit(1)
@@ -3645,7 +3956,7 @@ proc main() =
           stderr.writeLine("Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body> [--immediate|--soon]")
       quit(1)
 
-    discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format)
+    discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent)
 
   of "who":
     var filterTag = cfg.project
@@ -5695,6 +6006,102 @@ proc main() =
       stderr.writeLine("Unknown remind action: '" & action & "'. Valid actions: add, dismiss, ack, get, list, tick")
       quit(1)
 
+  of "history", "log":
+    var targetAgent = ""
+    var limit = 50
+    var jsonOut = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["--json", "-j"]:
+        jsonOut = true
+      elif a.startsWith("--limit="):
+        limit = parseRequiredInt(a[8..^1], "--limit")
+      elif a == "--limit" and i + 1 < args.len:
+        limit = parseRequiredInt(args[i+1], "--limit")
+        inc i
+      elif not a.startsWith("-"):
+        if targetAgent.len == 0: targetAgent = a
+      inc i
+    echo doHistory(cfg, targetAgent, limit, jsonOut)
+
+  of "probe":
+    var targetAgent = ""
+    var jsonOut = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["--json", "-j"]:
+        jsonOut = true
+      elif not a.startsWith("-"):
+        if targetAgent.len == 0: targetAgent = a
+      inc i
+    if targetAgent.len == 0:
+      stderr.writeLine("Usage: rhizo probe <agent> [--json]")
+      quit(1)
+    echo doProbe(cfg, targetAgent, jsonOut)
+
+  of "alias":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo alias <set|get|list|del> [args...]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "set":
+      if args.len < 4:
+        stderr.writeLine("Usage: rhizo alias set <alias> <canonical_name>")
+        quit(1)
+      echo doAliasSet(cfg, args[2], args[3])
+    of "get":
+      if args.len < 3:
+        stderr.writeLine("Usage: rhizo alias get <alias>")
+        quit(1)
+      let canon = doAliasGet(cfg, args[2])
+      if canon.len == 0:
+        stderr.writeLine("Alias '" & args[2] & "' not found.")
+        quit(1)
+      echo canon
+    of "del", "delete", "rm":
+      if args.len < 3:
+        stderr.writeLine("Usage: rhizo alias del <alias>")
+        quit(1)
+      if doAliasDel(cfg, args[2]):
+        echo "Deleted alias '" & args[2] & "'"
+      else:
+        stderr.writeLine("Alias '" & args[2] & "' not found.")
+        quit(1)
+    of "list", "ls":
+      var jsonOut = false
+      for a in args[2..^1]:
+        if a in ["--json", "-j"]: jsonOut = true
+      echo doAliasList(cfg, jsonOut)
+    else:
+      stderr.writeLine("Unknown alias action: '" & action & "'. Valid actions: set, get, del, list")
+      quit(1)
+
+  of "reroute":
+    var positional: seq[string] = @[]
+    var mode = "all"
+    var jsonOut = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["--json", "-j"]:
+        jsonOut = true
+      elif a in ["--all", "--unread"]:
+        mode = a[2..^1]
+      elif a.startsWith("-"):
+        discard
+      else:
+        positional.add(a)
+      inc i
+    if positional.len < 2:
+      stderr.writeLine("Usage: rhizo reroute <from_agent> <to_agent> [--all|--unread] [--json]")
+      quit(1)
+    let fromAgent = positional[0]
+    let toAgent = positional[1]
+    echo doReroute(cfg, fromAgent, toAgent, mode, jsonOut)
+
   else:
     var suggestion = ""
     let lowCmd = subcmd.toLowerAscii
@@ -5708,7 +6115,7 @@ proc main() =
       suggestion = "task"
     elif lowCmd in ["decisions", "vote", "ruling", "judge"]:
       suggestion = "decision"
-    elif lowCmd in ["log", "logs", "trail"]:
+    elif lowCmd in ["audit_trail", "logs", "trail"]:
       suggestion = "audit"
     elif lowCmd in ["pop", "consume"]:
       suggestion = "drain"
@@ -5716,6 +6123,10 @@ proc main() =
       suggestion = "sweep"
     elif lowCmd in ["reminders", "sticky", "banner", "advisory", "notice", "alert", "warn"]:
       suggestion = "remind"
+    elif lowCmd in ["aliases", "redirect"]:
+      suggestion = "alias"
+    elif lowCmd in ["forward", "move-inbox", "transfer"]:
+      suggestion = "reroute"
 
     if suggestion.len > 0:
       stderr.writeLine("Error: Unknown subcommand '" & subcmd & "'. Did you mean 'rhizo " & suggestion & "'?")

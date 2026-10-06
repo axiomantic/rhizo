@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-06
+
+### Added
+- **LLM Variance Normalization**:
+  - Added robust identifier sanitization across all routing endpoints, stripping leading `@` / `#`, enclosing quotes/backticks/brackets (`"`, `'`, `` ` ``, `<...>`, `[...]`, `(...)`), entity prefixes (`agent:`, `user:`, `bot:`, `inbox:`, `channel:`, `queue:`, `lock:`), and trailing punctuation (`:`, `,`, `;`, `.`).
+  - Addressed LLM tendency to address agents as `--to @alice` by cleanly routing directly to `inbox:alice` as a 1:1 direct message rather than triggering multicast.
+- **Dynamic Agent Aliases & Atomic Mailbox Rerouting (`rhizo alias`, `rhizo reroute`)**:
+  - Implemented dynamic alias registry (`rhizo alias set|get|del|list`) backed by `rhizo:aliases`.
+  - Added atomic queue rerouting (`rhizo reroute <from> <to>`) to evacuate stranded inboxes into replacement agents while preserving original FIFO delivery order and preventing self-rerouting.
+  - Implemented multi-hop HMAC signature preservation (`original_recipient`) so rerouted messages verify successfully without cryptographic tamper drops.
+- **Agent Health Assessment (`rhizo probe`)**:
+  - Added `rhizo probe <agent>` to evaluate heartbeat TTL, listener registration, host/PID liveness, inbox backlog, and alias resolution.
+- **Non-Destructive Mailbox Inspection (`rhizo history` / `rhizo log`)**:
+  - Added non-destructive inspection of agent mailboxes and audit trail events via `LRANGE`.
+- **Continuous Listener Streaming (`rhizo listen --continuous` / `--daemon`)**:
+  - Added opt-in streaming loop for background monitoring processes while enforcing active duplicate listener protection.
+
+### Fixed
+- **Multi-Hop Reroute Cryptographic Integrity**: Fixed HMAC verification failure on multi-hop rerouted messages by preserving the original recipient envelope and evaluating HMAC against `original_recipient`.
+- **Argument Parsing in `rhizo send --listen`**: Converted `--listen` to a strictly boolean re-arm flag to prevent greedy absorption of subject/body positional arguments or numeric timeout confusion.
+- **PRNG Backoff Seeding**: Seeded thread-local PRNG with `randomize()` across connection retry handlers and CLI entrypoint to eliminate thundering herd synchronization.
+- **Duplicate Listener Prevention**: Removed `--continuous` bypass to guarantee single active listener per agent regardless of mode unless `--force` is specified.
+
 ## [0.2.0] - 2026-10-06
 
 ### Added

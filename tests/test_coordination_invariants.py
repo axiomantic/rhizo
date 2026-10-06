@@ -356,7 +356,8 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(res_add.returncode, 0)
 
         # Send first message and drain
-        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 1", "--body", "First task"])
+        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 1", "--body", "First task"],
+                     env_overrides={"RHIZO_AGENT_NAME": "sender_piggy"})
         res_drain1 = self.run_cmd(["drain", "worker_piggy", "--json"])
         self.assertEqual(res_drain1.returncode, 0)
         msgs1 = json.loads(res_drain1.stdout.strip())
@@ -365,7 +366,8 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(msgs1[0]["reminders"][0]["priority"], "HIGH")
 
         # Send second message immediately (within 10m cadence)
-        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 2", "--body", "Second task"])
+        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 2", "--body", "Second task"],
+                     env_overrides={"RHIZO_AGENT_NAME": "sender_piggy"})
         res_drain2 = self.run_cmd(["drain", "worker_piggy", "--json"])
         msgs2 = json.loads(res_drain2.stdout.strip())
         self.assertEqual(len(msgs2), 1)
@@ -376,7 +378,8 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.run_cmd(["time", "advance", "660"])
 
         # Send third message after cadence elapsed
-        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 3", "--body", "Third task"])
+        self.run_cmd(["send", "--to", "worker_piggy", "--subject", "Task 3", "--body", "Third task"],
+                     env_overrides={"RHIZO_AGENT_NAME": "sender_piggy"})
         res_drain3 = self.run_cmd(["drain", "worker_piggy", "--json"])
         msgs3 = json.loads(res_drain3.stdout.strip())
         self.assertEqual(len(msgs3), 1)
@@ -596,6 +599,156 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(res_ballot_tally.returncode, 0)
         self.assertEqual(res_ballot_tally.stdout.strip(), "yes")
 
+    def test_18_field_telemetry_remediations(self):
+        """Verify GVR-001, GVR-003, GVR-008, GVR-011, GVR-012 field telemetry remediations."""
+        agent_canonical = "agent-canon-1"
+        agent_alias = "agent-alias-1"
+        agent_sender = "agent-sender-1"
+
+        # 1. Alias CRUD
+        res_alias_set = self.run_cmd(["alias", "set", agent_alias, agent_canonical])
+        self.assertEqual(res_alias_set.returncode, 0)
+        self.assertIn(f"@{agent_alias} -> @{agent_canonical}", res_alias_set.stdout)
+
+        res_alias_get = self.run_cmd(["alias", "get", agent_alias])
+        self.assertEqual(res_alias_get.returncode, 0)
+        self.assertEqual(res_alias_get.stdout.strip(), agent_canonical)
+
+        res_alias_list = self.run_cmd(["alias", "list", "--json"])
+        self.assertEqual(res_alias_list.returncode, 0)
+        alias_map = json.loads(res_alias_list.stdout.strip())
+        self.assertEqual(alias_map.get(agent_alias), agent_canonical)
+
+        # 2. Transparent Alias Delivery
+        # Send message to alias; verify it routes directly into canonical inbox
+        res_send = self.run_cmd(["send", "--to", agent_alias, "--subject", "Task for Alias", "--body", "Payload 1", "--from", agent_sender])
+        self.assertEqual(res_send.returncode, 0)
+
+        # Non-destructive check on canonical inbox via rhizo history
+        res_hist_canon = self.run_cmd(["history", agent_canonical, "--json"])
+        self.assertEqual(res_hist_canon.returncode, 0)
+        hist_items = json.loads(res_hist_canon.stdout.strip())
+        inbox_items = [h for h in hist_items if h.get("source") == "inbox"]
+        self.assertEqual(len(inbox_items), 1)
+        self.assertEqual(inbox_items[0]["to"], agent_canonical)
+        self.assertEqual(inbox_items[0]["subject"], "Task for Alias")
+
+        # 3. Health Probe (GVR-011)
+        res_probe = self.run_cmd(["probe", agent_canonical, "--json"])
+        self.assertEqual(res_probe.returncode, 0)
+        probe_data = json.loads(res_probe.stdout.strip())
+        self.assertEqual(probe_data["agent"], agent_canonical)
+        self.assertEqual(probe_data["inbox_depth"], 1)
+        self.assertIn("issues", probe_data)
+
+        # 4. Atomic Inbox Rerouting (GVR-012)
+        agent_target_2 = "agent-worker-2"
+        res_reroute = self.run_cmd(["reroute", agent_canonical, agent_target_2, "--json"])
+        self.assertEqual(res_reroute.returncode, 0)
+        reroute_data = json.loads(res_reroute.stdout.strip())
+        self.assertEqual(reroute_data["count"], 1)
+        self.assertEqual(reroute_data["status"], "REROUTED")
+
+        # Canonical inbox should now be empty; agent_target_2 inbox should have the message
+        res_hist_target = self.run_cmd(["history", agent_target_2, "--json"])
+        self.assertEqual(res_hist_target.returncode, 0)
+        t_hist = json.loads(res_hist_target.stdout.strip())
+        t_inbox = [h for h in t_hist if h.get("source") == "inbox"]
+        self.assertEqual(len(t_inbox), 1)
+        self.assertEqual(t_inbox[0]["to"], agent_target_2)
+        self.assertEqual(t_inbox[0]["rerouted_from"], agent_canonical)
+
+        # 5. Non-Destructive Invariant
+        # Verification that rhizo history did not consume the message
+        res_drain = self.run_cmd(["drain", "1", agent_target_2, "--json"])
+        self.assertEqual(res_drain.returncode, 0)
+        drained_msg = json.loads(res_drain.stdout.strip())
+        self.assertIsInstance(drained_msg, dict)
+        self.assertEqual(drained_msg["subject"], "Task for Alias")
+
+        # 6. Strict Sender Identity Abort (GVR-008)
+        # Without --from or RHIZO_AGENT_NAME or .vine.json, send MUST fail loudly
+        res_fail_send = self.run_cmd(["send", "--to", agent_target_2, "--subject", "No Sender", "--body", "Should fail"],
+                                     env_overrides={"RHIZO_AGENT_NAME": ""})
+        self.assertNotEqual(res_fail_send.returncode, 0)
+        self.assertIn("Cannot determine sender identity", res_fail_send.stderr)
+
+        # 7. Alias Deletion
+        res_alias_del = self.run_cmd(["alias", "del", agent_alias])
+        self.assertEqual(res_alias_del.returncode, 0)
+        res_alias_get2 = self.run_cmd(["alias", "get", agent_alias])
+        self.assertNotEqual(res_alias_get2.returncode, 0)
+
+    def test_19_llm_variance_and_multihop_reroute_invariants(self):
+        """Verify LLM variance normalization and multi-hop reroute HMAC preservation."""
+        # 1. LLM Variance Normalization in direct message sending
+        # --to "@agent-norm-1" must deliver to inbox:agent-norm-1 (one-to-one, NOT multicast)
+        res_send_at = self.run_cmd(["send", "--to", "@agent-norm-1", "--subject", "Hello At", "--body", "At payload", "--from", "agent-sender-2"])
+        self.assertEqual(res_send_at.returncode, 0)
+
+        # Inspect inbox:agent-norm-1 directly
+        res_hist_at = self.run_cmd(["history", "@agent-norm-1", "--json"])
+        self.assertEqual(res_hist_at.returncode, 0)
+        items_at = [h for h in json.loads(res_hist_at.stdout.strip()) if h.get("source") == "inbox"]
+        self.assertEqual(len(items_at), 1)
+        self.assertEqual(items_at[0]["to"], "agent-norm-1")
+        self.assertEqual(items_at[0]["subject"], "Hello At")
+
+        # More variations: quotes, backticks, brackets, prefixes
+        variations = [
+            ("<@agent-norm-2>", "agent-norm-2"),
+            ("\"agent:@agent-norm-3:\"", "agent-norm-3"),
+            ("`inbox:agent-norm-4`", "agent-norm-4"),
+        ]
+        for raw_dest, canonical_name in variations:
+            res_v = self.run_cmd(["send", "--to", raw_dest, "--subject", f"Subj {canonical_name}", "--body", "Payload", "--from", "agent-sender-2"])
+            self.assertEqual(res_v.returncode, 0)
+            res_h = self.run_cmd(["history", canonical_name, "--json"])
+            self.assertEqual(res_h.returncode, 0)
+            items = [h for h in json.loads(res_h.stdout.strip()) if h.get("source") == "inbox"]
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["to"], canonical_name)
+
+        # Probe with leading @
+        res_probe_at = self.run_cmd(["probe", "@agent-norm-1", "--json"])
+        self.assertEqual(res_probe_at.returncode, 0)
+        probe_at_data = json.loads(res_probe_at.stdout.strip())
+        self.assertEqual(probe_at_data["agent"], "agent-norm-1")
+        self.assertEqual(probe_at_data["inbox_depth"], 1)
+
+        # 2. Multi-Hop Reroute with Cryptographic HMAC Preservation (CRIT-1)
+        # Hop 0: Send to hop-agent-a
+        res_hop0 = self.run_cmd(["send", "--to", "hop-agent-a", "--subject", "Multi-Hop Task", "--body", "Secret payload", "--from", "hop-sender"])
+        self.assertEqual(res_hop0.returncode, 0)
+
+        # Hop 1: Reroute hop-agent-a -> hop-agent-b
+        res_reroute_1 = self.run_cmd(["reroute", "hop-agent-a", "hop-agent-b", "--json"])
+        self.assertEqual(res_reroute_1.returncode, 0)
+        self.assertEqual(json.loads(res_reroute_1.stdout.strip())["count"], 1)
+
+        # Hop 2: Reroute with flags before positional: reroute --json hop-agent-b hop-agent-c
+        res_reroute_2 = self.run_cmd(["reroute", "--json", "hop-agent-b", "hop-agent-c"])
+        self.assertEqual(res_reroute_2.returncode, 0)
+        self.assertEqual(json.loads(res_reroute_2.stdout.strip())["count"], 1)
+
+        # Hop 3: Drain hop-agent-c. Verifies cryptographic HMAC validation does NOT drop the message!
+        res_drain_c = self.run_cmd(["drain", "1", "hop-agent-c", "--json"])
+        self.assertEqual(res_drain_c.returncode, 0)
+        self.assertNotIn("SECURITY", res_drain_c.stderr)
+        msg_c = json.loads(res_drain_c.stdout.strip())
+        self.assertEqual(msg_c["subject"], "Multi-Hop Task")
+        self.assertEqual(msg_c["original_recipient"], "hop-agent-a")
+        self.assertEqual(msg_c["to"], "hop-agent-c")
+
+        # 3. Self-Reroute Rejection
+        res_self = self.run_cmd(["reroute", "hop-agent-c", "hop-agent-c"])
+        self.assertIn("ERR: Source and destination agents must be different", res_self.stdout)
+
+        # 4. Case-Insensitive Pub/Sub channels
+        res_pub = self.run_cmd(["pub", "CHANNEL:METRICS", "heartbeat payload"])
+        self.assertEqual(res_pub.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
