@@ -42,7 +42,7 @@ if string.sub(arg3, 1, 1) == "{" then
 else
     -- Mode B: Structured parameters
     local msg_type = arg3
-    local from_agent = ARGV[4] or "unknown"
+    local from_agent = string.lower(ARGV[4] or "unknown")
     local subject = ARGV[5] or ""
     local body = ARGV[6] or ""
     local tags_csv = ARGV[7] or ""
@@ -67,7 +67,7 @@ else
 
     local tags = {}
     for tag in string.gmatch(tags_csv, "([^,]+)") do
-        local tr = string.match(tag, "^%s*(.-)%s*$")
+        local tr = string.lower(string.match(tag, "^%s*(.-)%s*$"))
         if tr ~= "" then table.insert(tags, tr) end
     end
 
@@ -103,7 +103,7 @@ if target_tags_csv == "*" or target_tags_csv == "@all" then
 else
     local tag_keys = {}
     for tag in string.gmatch(target_tags_csv, "([^,]+)") do
-        local trimmed = string.match(tag, "^%s*(.-)%s*$")
+        local trimmed = string.lower(string.match(tag, "^%s*(.-)%s*$"))
         if trimmed ~= "" then
             table.insert(tag_keys, prefix .. 'tag:' .. trimmed)
         end
@@ -121,19 +121,20 @@ end
 
 local delivered = 0
 for _, agent in ipairs(targets) do
-    if redis.call('EXISTS', prefix .. 'heartbeat:' .. agent) == 1 then
-        redis.call('LPUSH', prefix .. 'inbox:' .. agent, msg_json)
-        redis.call('EXPIRE', prefix .. 'inbox:' .. agent, inbox_ttl)
+    local norm_agent = string.lower(agent)
+    if redis.call('EXISTS', prefix .. 'heartbeat:' .. norm_agent) == 1 then
+        redis.call('LPUSH', prefix .. 'inbox:' .. norm_agent, msg_json)
+        redis.call('EXPIRE', prefix .. 'inbox:' .. norm_agent, inbox_ttl)
         delivered = delivered + 1
     else
         -- Prune dead agent from active roster and all tag sets
-        redis.call('SREM', prefix .. 'active_agents', agent)
-        local agent_tags = redis.call('HGET', prefix .. 'agent:' .. agent, 'tags') or ""
+        redis.call('SREM', prefix .. 'active_agents', norm_agent)
+        local agent_tags = redis.call('HGET', prefix .. 'agent:' .. norm_agent, 'tags') or ""
         for t in string.gmatch(agent_tags, "([^,]+)") do
-            local tr = string.match(t, "^%s*(.-)%s*$")
-            if tr ~= "" then redis.call('SREM', prefix .. 'tag:' .. tr, agent) end
+            local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
+            if tr ~= "" then redis.call('SREM', prefix .. 'tag:' .. tr, norm_agent) end
         end
-        redis.call('DEL', prefix .. 'agent:' .. agent)
+        redis.call('DEL', prefix .. 'agent:' .. norm_agent)
     end
 end
 return delivered

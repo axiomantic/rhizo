@@ -18,6 +18,9 @@ if not action or action == "" then
 end
 
 local room = ARGV[3] or "default"
+if room and room ~= "" then
+    room = string.lower(room)
+end
 local key = ARGV[4] or ""
 local val = ARGV[5] or ""
 local ttl = tonumber(ARGV[6]) or 604800

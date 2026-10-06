@@ -14,6 +14,7 @@ local qname = ARGV[2]
 if not qname or qname == "" then
     return redis.error_reply("ERR: Missing queue name")
 end
+qname = string.lower(qname)
 
 local msg_json = ARGV[3]
 if not msg_json or msg_json == "" then

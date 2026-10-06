@@ -501,7 +501,7 @@ proc saveLocalSessionMapping*(sessionKey, agentName: string) =
     createDir(p.splitPath.head)
     var m = loadLocalSessionMap()
     var entry = newJObject()
-    entry["agent"] = %agentName
+    entry["agent"] = %agentName.toLowerAscii
     entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
     m[sessionKey] = entry
     writeFile(p, pretty(m) & "\n")
@@ -526,9 +526,9 @@ proc getLocalSessionAgent*(sessionKey: string): string =
   if m.hasKey(sessionKey):
     let node = m[sessionKey]
     if node.kind == JObject and node.hasKey("agent"):
-      return node["agent"].getStr()
+      return node["agent"].getStr().toLowerAscii
     elif node.kind == JString:
-      return node.getStr()
+      return node.getStr().toLowerAscii
   return ""
 
 # Redis Session Mapping
@@ -546,11 +546,11 @@ proc getRedisSessionMapping*(cfg: RhizoConfig, sessionKey: string): string =
       try:
         let parsed = parseJson(val)
         if parsed.kind == JObject and parsed.hasKey("agent"):
-          return parsed["agent"].getStr()
+          return parsed["agent"].getStr().toLowerAscii
         elif parsed.kind == JString:
-          return parsed.getStr()
+          return parsed.getStr().toLowerAscii
       except CatchableError:
-        return val
+        return val.toLowerAscii
   except CatchableError:
     discard
   return ""
@@ -564,12 +564,13 @@ proc setRedisSessionMapping*(cfg: RhizoConfig, sessionKey, agentName: string) =
   defer:
     try: client.close() except CatchableError: discard
   try:
+    let normAgent = agentName.toLowerAscii
     var entry = newJObject()
-    entry["agent"] = %agentName
+    entry["agent"] = %normAgent
     entry["session_id"] = %sessionKey
     entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
     discard client.hSet(cfg.prefix & "sessions", sessionKey, $entry)
-    discard client.hSet(cfg.prefix & "agent_sessions", agentName, sessionKey)
+    discard client.hSet(cfg.prefix & "agent_sessions", normAgent, sessionKey)
   except CatchableError:
     discard
 
@@ -584,7 +585,7 @@ proc removeRedisSessionMapping*(cfg: RhizoConfig, sessionKey: string, agentName:
   try:
     discard client.hDel(cfg.prefix & "sessions", @[sessionKey])
     if agentName.len > 0:
-      discard client.hDel(cfg.prefix & "agent_sessions", @[agentName])
+      discard client.hDel(cfg.prefix & "agent_sessions", @[agentName.toLowerAscii])
   except CatchableError:
     discard
 
@@ -600,7 +601,7 @@ proc saveCurrentAgent*(name: string) =
   try:
     let p = currentAgentPath()
     createDir(p.splitPath.head)
-    writeFile(p, name.strip() & "\n")
+    writeFile(p, name.strip().toLowerAscii & "\n")
     secureFilePermissions(p)
   except OSError:
     discard
@@ -610,7 +611,7 @@ proc loadCurrentAgent*(): string =
   try:
     let p = currentAgentPath()
     if fileExists(p):
-      return readFile(p).strip()
+      return readFile(p).strip().toLowerAscii
   except OSError:
     discard
   return ""
@@ -626,23 +627,23 @@ proc clearCurrentAgent*() =
 
 proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = true): string =
   if explicitName.len > 0:
-    return explicitName
+    return explicitName.toLowerAscii
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
-    return cfg.agentName
+    return cfg.agentName.toLowerAscii
   let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
   if envName.len > 0:
-    return envName
+    return envName.toLowerAscii
 
   # Session ID resolution
   let sid = if sessionId.len > 0: sessionId elif cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     let localAgent = getLocalSessionAgent(sid)
     if localAgent.len > 0:
-      return localAgent
+      return localAgent.toLowerAscii
     try:
       let redisAgent = getRedisSessionMapping(cfg, sid)
       if redisAgent.len > 0:
-        return redisAgent
+        return redisAgent.toLowerAscii
     except CatchableError:
       discard
 
@@ -650,15 +651,16 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
   if allowGlobalFallback:
     let saved = loadCurrentAgent()
     if saved.len > 0:
-      return saved
+      return saved.toLowerAscii
 
   if fallbackDefault:
     if cfg.agentName.len > 0:
-      return cfg.agentName
-    return if cfg.project.len > 0: cfg.project & "-worker" else: "worker"
+      return cfg.agentName.toLowerAscii
+    return if cfg.project.len > 0: (cfg.project & "-worker").toLowerAscii else: "worker"
   return ""
 
 proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string] =
+  let normName = name.toLowerAscii
   var client: Redis
   try:
     client = openRedisClient(cfg.redisUrl)
@@ -668,7 +670,7 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
     try: client.close() except CatchableError: discard
 
   try:
-    let val = client.get(cfg.prefix & "listener:" & name)
+    let val = client.get(cfg.prefix & "listener:" & normName)
     if val == redisNil or val.len == 0:
       return (false, 0, "")
     let node = parseJson(val)
@@ -678,7 +680,7 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
     if host == currentHost and pid > 0:
       if not isPidAlive(pid):
         # Stale lock: process is no longer alive on this machine
-        discard client.del(@[cfg.prefix & "listener:" & name])
+        discard client.del(@[cfg.prefix & "listener:" & normName])
         return (false, 0, "")
       else:
         return (true, pid, host)
@@ -847,13 +849,13 @@ proc doRemindTickFallback*(cfg: RhizoConfig): string =
 # Core Operations
 proc doRegister*(cfg: RhizoConfig, name, tags: string, ttl: int = -1): string =
   let effectiveTtl = if ttl > 0: ttl elif cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
-  return runLuaScript(cfg.redisUrl, registerLua, registerSha, [cfg.prefix, name, tags, $effectiveTtl])
+  return runLuaScript(cfg.redisUrl, registerLua, registerSha, [cfg.prefix, name.toLowerAscii, tags, $effectiveTtl])
 
 proc doCheckInbox*(cfg: RhizoConfig, name: string): int =
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
-  let inboxKey = cfg.prefix & "inbox:" & name
+  let inboxKey = cfg.prefix & "inbox:" & name.toLowerAscii
   try:
     return client.lLen(inboxKey)
   except CatchableError:
@@ -883,7 +885,7 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
-  var argSeq: seq[string] = @[cfg.prefix, name, $count]
+  var argSeq: seq[string] = @[cfg.prefix, name.toLowerAscii, $count]
   var resp: RedisValue
   try:
     resp = client.evalSha(drainSha, @[], argSeq)
@@ -1032,20 +1034,21 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
   return $arr
 
 proc doUnregister*(cfg: RhizoConfig, name: string): string =
+  let normName = name.toLowerAscii
   let saved = loadCurrentAgent()
-  if saved == name or name.len == 0:
+  if saved.toLowerAscii == normName or normName.len == 0:
     clearCurrentAgent()
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     removeLocalSessionMapping(sid)
-    removeRedisSessionMapping(cfg, sid, name)
+    removeRedisSessionMapping(cfg, sid, normName)
   try:
     var client = openRedisClient(cfg.redisUrl)
     defer: (try: client.close() except CatchableError: discard)
-    discard client.del(@[cfg.prefix & "listener:" & name])
+    discard client.del(@[cfg.prefix & "listener:" & normName])
   except CatchableError:
     discard
-  return runLuaScript(cfg.redisUrl, unregisterLua, unregisterSha, [cfg.prefix, name])
+  return runLuaScript(cfg.redisUrl, unregisterLua, unregisterSha, [cfg.prefix, normName])
 
 proc cleanupOldTmpFiles*() =
   let tmpDir = getHomeDir() / ".config" / "rhizo" / "tmp"
@@ -1118,8 +1121,8 @@ proc doReset*(cfg: RhizoConfig, optProject: string = "", forceAll: bool = false,
   if forceAll:
     return doNuke(cfg, asJson)
 
-  let proj = if optProject.len > 0: optProject.strip()
-             elif cfg.project.len > 0: cfg.project.strip()
+  let proj = if optProject.len > 0: optProject.strip().toLowerAscii
+             elif cfg.project.len > 0: cfg.project.strip().toLowerAscii
              else: ""
 
   if proj.len == 0:
@@ -1177,7 +1180,7 @@ proc doReset*(cfg: RhizoConfig, optProject: string = "", forceAll: bool = false,
     return "Reset project '" & proj & "' in namespace '" & cfg.prefix & "': closed " & $closedAgents.len & " agents, deleted " & $deletedCount & " keys."
 
 proc doTag*(cfg: RhizoConfig, name, action, tags: string): string =
-  return runLuaScript(cfg.redisUrl, tagLua, tagSha, [cfg.prefix, name, action, tags])
+  return runLuaScript(cfg.redisUrl, tagLua, tagSha, [cfg.prefix, name.toLowerAscii, action.toLowerAscii, tags])
 
 proc formatDirectory*(raw: string): string =
   if raw.strip().len == 0:
@@ -1244,7 +1247,7 @@ proc formatDirectoryJson*(raw: string): string =
   return $list
 
 proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false): string =
-  let raw = runLuaScript(cfg.redisUrl, directoryLua, directorySha, [cfg.prefix, filterTag])
+  let raw = runLuaScript(cfg.redisUrl, directoryLua, directorySha, [cfg.prefix, filterTag.toLowerAscii])
   if asJson:
     return formatDirectoryJson(raw)
   return formatDirectory(raw)
@@ -1289,10 +1292,10 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   defer:
     try: client.close() except CatchableError: discard
 
-  var name = optName
+  var name = optName.toLowerAscii
   if name.len == 0:
     let reserved = reserveUniqueName(cfg, "", 600)
-    name = reserved.name
+    name = reserved.name.toLowerAscii
   else:
     try:
       if client.exists(cfg.prefix & "heartbeat:" & name):
@@ -1348,7 +1351,9 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
             urgency: string = "soon", format: string = "text"): string =
   randomize()
   let secret = getSecret(cfg)
-  let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & fromAgent & "_" & $rand(1000..9999)
+  let normTo = if toAgent.startsWith("@"): "@" & toAgent[1..^1].toLowerAscii else: toAgent.toLowerAscii
+  let normFrom = fromAgent.toLowerAscii
+  let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & normFrom & "_" & $rand(1000..9999)
   let ts = if customTs.len > 0: customTs else: now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
   let finalBody = if cfg.encrypt: encryptAes(body, secret, cfg) else: body
   let normUrgency = if urgency.toLowerAscii in ["immediate", "now", "urgent"]: "immediate" else: "soon"
@@ -1361,20 +1366,20 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
       try:
         var client = connectRedis(cfg.redisUrl)
         defer: (try: client.close() except CatchableError: discard)
-        let pending = client.get(cfg.prefix & "agent:" & fromAgent & ":pending_scatter")
+        let pending = client.get(cfg.prefix & "agent:" & normFrom & ":pending_scatter")
         if pending != redisNil and pending.len > 0:
           effectiveReplyTo = pending
       except CatchableError:
         discard
 
   # Canonical concatenation for HMAC: id|from|to|type|subject|body|timestamp
-  let canonical = id & "|" & fromAgent & "|" & toAgent & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
+  let canonical = id & "|" & normFrom & "|" & normTo & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
 
   var node = newJObject()
   node["id"] = %id
-  node["from"] = %fromAgent
-  node["to"] = %toAgent
+  node["from"] = %normFrom
+  node["to"] = %normTo
   node["type"] = %msgType
   node["urgency"] = %normUrgency
   let originHost = getOriginHostname()
@@ -1387,9 +1392,9 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
 
   var tagArray = newJArray()
   for t in tags:
-    tagArray.add(%t)
+    tagArray.add(%t.toLowerAscii)
   if tagArray.len == 0 and cfg.project.len > 0:
-    tagArray.add(%cfg.project)
+    tagArray.add(%cfg.project.toLowerAscii)
   node["tags"] = tagArray
 
   node["subject"] = %subject
@@ -1401,36 +1406,38 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let msgJson = $node
 
   let effectiveTtl = if cfg.messageTtl > 0: cfg.messageTtl else: 604800
-  let isTargetMulticast = isBroadcast or toAgent.startsWith("@") or toAgent == "*"
+  let isTargetMulticast = isBroadcast or normTo.startsWith("@") or normTo == "*"
   var target = ""
   var res = ""
   if isTargetMulticast:
-    if toAgent.startsWith("@"):
-      let raw = toAgent[1..^1]
+    if normTo.startsWith("@"):
+      let raw = normTo[1..^1]
       if raw in ["*", "all", "@all"]: target = "*"
-      elif raw.startsWith(cfg.project): target = raw
-      else: target = cfg.project & "," & raw
-    elif toAgent == "*":
+      elif raw.startsWith(cfg.project.toLowerAscii): target = raw
+      else: target = cfg.project.toLowerAscii & "," & raw
+    elif normTo == "*":
       target = "*"
     elif isBroadcast:
       if tags.len > 0:
-        if "*" in tags or "@all" in tags:
+        var normTags: seq[string] = @[]
+        for t in tags: normTags.add(t.toLowerAscii)
+        if "*" in normTags or "@all" in normTags:
           target = "*"
-        elif cfg.project in tags:
-          target = tags.join(",")
+        elif cfg.project.toLowerAscii in normTags:
+          target = normTags.join(",")
         else:
-          target = cfg.project & "," & tags.join(",")
+          target = cfg.project.toLowerAscii & "," & normTags.join(",")
       else:
-        target = if toAgent.len > 0 and toAgent != "*": (if toAgent.startsWith("@"): toAgent[1..^1] else: toAgent) else: "*"
+        target = if normTo.len > 0 and normTo != "*": (if normTo.startsWith("@"): normTo[1..^1] else: normTo) else: "*"
     else:
-      target = if toAgent.len > 0: toAgent else: "*"
+      target = if normTo.len > 0: normTo else: "*"
 
     res = runLuaScript(cfg.redisUrl, multicastLua, multicastSha, [cfg.prefix, target, msgJson, $effectiveTtl])
   else:
-    let destQueue = if msgType == "reply" and (effectiveReplyTo.startsWith("scatter:") or effectiveReplyTo.startsWith("reply:")): effectiveReplyTo else: toAgent
+    let destQueue = if msgType == "reply" and (effectiveReplyTo.startsWith("scatter:") or effectiveReplyTo.startsWith("reply:")): effectiveReplyTo else: normTo
     res = runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, destQueue, msgJson, $effectiveTtl])
-    if destQueue.startsWith("scatter:") and toAgent.len > 0 and toAgent != destQueue:
-      discard runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, toAgent, msgJson, $effectiveTtl])
+    if destQueue.startsWith("scatter:") and normTo.len > 0 and normTo != destQueue:
+      discard runLuaScript(cfg.redisUrl, sendO2oLua, sendO2oSha, [cfg.prefix, normTo, msgJson, $effectiveTtl])
 
   if echoResult and not rearmListen:
     if format == "raw":
@@ -1446,13 +1453,13 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
       else:
         var client = connectRedis(cfg.redisUrl)
         defer: (try: client.close() except CatchableError: discard)
-        let isAlive = client.exists(cfg.prefix & "heartbeat:" & toAgent)
-        let hasListener = client.exists(cfg.prefix & "listener:" & toAgent)
-        let depth = try: client.lLen(cfg.prefix & "inbox:" & toAgent) except CatchableError: 0
+        let isAlive = client.exists(cfg.prefix & "heartbeat:" & normTo)
+        let hasListener = client.exists(cfg.prefix & "listener:" & normTo)
+        let depth = try: client.lLen(cfg.prefix & "inbox:" & normTo) except CatchableError: 0
         var outObj = newJObject()
         outObj["status"] = %"ENQUEUED"
         outObj["id"] = %id
-        outObj["recipient"] = %toAgent
+        outObj["recipient"] = %normTo
         outObj["recipient_status"] = %(if isAlive: "ACTIVE" else: "OFFLINE")
         outObj["listener_attached"] = %hasListener
         outObj["inbox_depth"] = %depth
@@ -1462,21 +1469,21 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         let count = try: parseInt(res.strip()) except ValueError: 0
         echo "BROADCAST " & id & " delivered to " & $count & " agents (scope: " & target & ")"
         if count == 1 and target != "*" and (target == cfg.project or target == "@" & cfg.project):
-          stderr.writeLine("⚠️  [RHIZO WARNING] Broadcast reached only the sender ('" & fromAgent & "'). Target scope was '" & target & "'. Use '--scope all' or pass '--tags' to target other agents.")
+          stderr.writeLine("⚠️  [RHIZO WARNING] Broadcast reached only the sender ('" & normFrom & "'). Target scope was '" & target & "'. Use '--scope all' or pass '--tags' to target other agents.")
       else:
         var client = connectRedis(cfg.redisUrl)
         defer: (try: client.close() except CatchableError: discard)
-        let isAlive = client.exists(cfg.prefix & "heartbeat:" & toAgent)
-        let hasListener = client.exists(cfg.prefix & "listener:" & toAgent)
-        let depth = try: client.lLen(cfg.prefix & "inbox:" & toAgent) except CatchableError: 0
+        let isAlive = client.exists(cfg.prefix & "heartbeat:" & normTo)
+        let hasListener = client.exists(cfg.prefix & "listener:" & normTo)
+        let depth = try: client.lLen(cfg.prefix & "inbox:" & normTo) except CatchableError: 0
         let statusStr = if isAlive: "ACTIVE" else: "OFFLINE"
         let listenerStr = if hasListener: "LISTENING" else: "NO_LISTENER"
-        echo "ENQUEUED " & id & " -> " & toAgent & " (status: " & statusStr & ", listener: " & listenerStr & ", inbox_depth: " & $depth & ")"
+        echo "ENQUEUED " & id & " -> " & normTo & " (status: " & statusStr & ", listener: " & listenerStr & ", inbox_depth: " & $depth & ")"
         if not hasListener:
-          stderr.writeLine("⚠️  [RHIZO WARNING] Recipient '" & toAgent & "' has no active listener attached! Message queued in inbox (depth: " & $depth & "), but will not be processed until a listener is armed.")
+          stderr.writeLine("⚠️  [RHIZO WARNING] Recipient '" & normTo & "' has no active listener attached! Message queued in inbox (depth: " & $depth & "), but will not be processed until a listener is armed.")
 
   if rearmListen:
-    let listenerAgent = if fromAgent.len > 0: fromAgent else: getActiveAgentName(cfg, "", fallbackDefault = true)
+    let listenerAgent = if normFrom.len > 0: normFrom else: getActiveAgentName(cfg, "", fallbackDefault = true)
     if listenerAgent.len == 0:
       stderr.writeLine("Error: Cannot listen after send: no agent name identified.")
       quit(1)
@@ -1517,6 +1524,7 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
     discard
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false) =
+  let name = name.toLowerAscii
   checkSupervisionAttached(name, force)
   let secret = getSecret(cfg)
   let inboxKey = cfg.prefix & "inbox:" & name
@@ -1737,6 +1745,9 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("  1. When finished, reply and re-arm atomically in one command:")
           stderr.writeLine("     rhizo reply --to " & fromAgent & " --reply-to \"" & id & "\" --subject \"" & replySubj & "\" --body \"<results>\" --listen")
           stderr.writeLine("  2. If no reply is needed, wait for next task (zero-timeout infinite wait):")
+          stderr.writeLine("     rhizo listen " & name)
+          stderr.writeLine("  3. If disconnecting or finishing session work completely:")
+          stderr.writeLine("     rhizo close " & name)
         let rawParams = commandLineParams()
         var exactCmd = "rhizo"
         for a in rawParams:
@@ -1780,47 +1791,51 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string =
   let effectiveTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
-  return runLuaScript(cfg.redisUrl, statusLua, statusSha, [cfg.prefix, name, state.toLowerAscii, activity, $effectiveTtl])
+  return runLuaScript(cfg.redisUrl, statusLua, statusSha, [cfg.prefix, name.toLowerAscii, state.toLowerAscii, activity, $effectiveTtl])
 
 proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: bool = false, rawOutput: bool = false): (string, int) =
-  let owner = getActiveAgentName(cfg, "")
+  let normLock = lockName.toLowerAscii
+  let owner = getActiveAgentName(cfg, "").toLowerAscii
   let fencingArg = if withFencing: "1" else: "0"
-  let res = runLuaScript(cfg.redisUrl, lockLua, lockSha, [cfg.prefix, lockName, owner, $ttlSec, fencingArg])
+  let res = runLuaScript(cfg.redisUrl, lockLua, lockSha, [cfg.prefix, normLock, owner, $ttlSec, fencingArg])
   if res != "0" and not res.startsWith("ERR:"):
     if withFencing:
       let token = res
       if rawOutput:
         return (token, 0)
       else:
-        return ("LOCKED " & lockName & " by " & owner & " (fencing: " & token & ")", 0)
+        return ("LOCKED " & normLock & " by " & owner & " (fencing: " & token & ")", 0)
     else:
-      return ("LOCKED " & lockName & " by " & owner, 0)
+      return ("LOCKED " & normLock & " by " & owner, 0)
   else:
-    return ("Error: Lock '" & lockName & "' is already held.", 1)
+    return ("Error: Lock '" & normLock & "' is already held.", 1)
 
 proc doUnlock*(cfg: RhizoConfig, lockName: string): (string, int) =
-  let owner = getActiveAgentName(cfg, "")
-  let res = runLuaScript(cfg.redisUrl, unlockLua, unlockSha, [cfg.prefix, lockName, owner])
+  let normLock = lockName.toLowerAscii
+  let owner = getActiveAgentName(cfg, "").toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, unlockLua, unlockSha, [cfg.prefix, normLock, owner])
   if res == "1":
-    return ("UNLOCKED " & lockName, 0)
+    return ("UNLOCKED " & normLock, 0)
   else:
-    return ("Error: Cannot unlock '" & lockName & "': not owner or lock not found.", 1)
+    return ("Error: Cannot unlock '" & normLock & "': not owner or lock not found.", 1)
 
 proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: string,
                 tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = ""): string =
   randomize()
   let secret = getSecret(cfg)
-  let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & fromAgent & "_" & $rand(1000..9999)
+  let normQueue = queueName.toLowerAscii
+  let normFrom = fromAgent.toLowerAscii
+  let id = if msgId.len > 0: msgId else: "msg_" & $getTime().toUnix() & "_" & normFrom & "_" & $rand(1000..9999)
   let ts = if customTs.len > 0: customTs else: now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
   let finalBody = if cfg.encrypt: encryptAes(body, secret, cfg) else: body
 
-  let canonical = id & "|" & fromAgent & "|queue:" & queueName & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
+  let canonical = id & "|" & normFrom & "|queue:" & normQueue & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
 
   var node = newJObject()
   node["id"] = %id
-  node["from"] = %fromAgent
-  node["to"] = %("queue:" & queueName)
+  node["from"] = %normFrom
+  node["to"] = %("queue:" & normQueue)
   node["type"] = %msgType
   let originHost = getOriginHostname()
   if originHost.len > 0:
@@ -1832,9 +1847,9 @@ proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: 
 
   var tagArray = newJArray()
   for t in tags:
-    tagArray.add(%t)
+    tagArray.add(%t.toLowerAscii)
   if tagArray.len == 0 and cfg.project.len > 0:
-    tagArray.add(%cfg.project)
+    tagArray.add(%cfg.project.toLowerAscii)
   node["tags"] = tagArray
 
   node["subject"] = %subject
@@ -1845,21 +1860,22 @@ proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: 
 
   let msgJson = $node
   let effectiveTtl = if cfg.messageTtl > 0: cfg.messageTtl else: 604800
-  discard runLuaScript(cfg.redisUrl, enqueueLua, enqueueSha, [cfg.prefix, queueName, msgJson, $effectiveTtl])
+  discard runLuaScript(cfg.redisUrl, enqueueLua, enqueueSha, [cfg.prefix, normQueue, msgJson, $effectiveTtl])
   return id
 
 proc isRunCancelled*(client: Redis, cfg: RhizoConfig, runId: string): bool =
   if runId.len == 0 or client == nil: return false
+  let normRunId = runId.toLowerAscii
   try:
-    let res = client.get(cfg.prefix & "cancel:" & runId)
+    let res = client.get(cfg.prefix & "cancel:" & normRunId)
     if res != redisNil and res.len > 0:
       let parsed = parseJson(res)
       let secret = getSecret(cfg)
       let reason = parsed.getOrDefault("reason").getStr("")
-      let byAgent = parsed.getOrDefault("by").getStr("")
+      let byAgent = parsed.getOrDefault("by").getStr("").toLowerAscii
       let ts = parsed.getOrDefault("timestamp").getStr("")
       let sig = parsed.getOrDefault("sig").getStr("")
-      let canonical = runId & "|" & reason & "|" & byAgent & "|" & ts
+      let canonical = normRunId & "|" & reason & "|" & byAgent & "|" & ts
       if sig.len > 0 and verifyHmac(secret, canonical, sig):
         return true
   except CatchableError:
@@ -1878,11 +1894,12 @@ proc isRunCancelled*(cfg: RhizoConfig, runId: string): bool =
   return isRunCancelled(client, cfg, runId)
 
 proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: string = "") =
+  let normQueue = queueName.toLowerAscii
   let secret = getSecret(cfg)
-  let queueKey = if queueName.startsWith("dlq:"):
-                   cfg.prefix & "queue:dlq:{" & queueName[4..^1] & "}"
+  let queueKey = if normQueue.startsWith("dlq:"):
+                   cfg.prefix & "queue:dlq:{" & normQueue[4..^1] & "}"
                  else:
-                   cfg.prefix & "queue:{" & queueName & "}"
+                   cfg.prefix & "queue:{" & normQueue & "}"
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
   let effectiveTimeout = if isForever: 0 elif timeoutSec > 0: timeoutSec else: (if cfg.listenTimeout > 0: cfg.listenTimeout else: 60)
   let startTime = getTime().toUnix()
@@ -1989,6 +2006,7 @@ proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: s
 proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int
 
 proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSec: int = 120, rawOutput: bool = false, runId: string = "") =
+  let normQueue = queueName.toLowerAscii
   let secret = getSecret(cfg)
   let workerName = getActiveAgentName(cfg, "")
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
@@ -2020,12 +2038,12 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
     var res = ""
     var exitCode = 0
     try:
-      let val = client.evalSha(claimSha, @[], @[cfg.prefix, queueName, workerName, $leaseSec, "3"])
+      let val = client.evalSha(claimSha, @[], @[cfg.prefix, normQueue, workerName, $leaseSec, "3"])
       res = formatRedisValue(val)
     except RedisError as e:
       if "NOSCRIPT" in e.msg:
         try:
-          let val = client.eval(claimLua, @[], @[cfg.prefix, queueName, workerName, $leaseSec, "3"])
+          let val = client.eval(claimLua, @[], @[cfg.prefix, normQueue, workerName, $leaseSec, "3"])
           res = formatRedisValue(val)
         except CatchableError as e2:
           if not reconnectRedisClientMs(cfg.redisUrl, client, remainingMs, isForever):
@@ -2069,7 +2087,7 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
 
       if runId.len > 0 and isRunCancelled(client, cfg, runId):
         stderr.writeLine("Run " & runId & " was cancelled. Discarding task and exiting.")
-        discard doAck(cfg, queueName, id)
+        discard doAck(cfg, normQueue, id)
         return
 
       let fromAgent = parsed.getOrDefault("from").getStr("")
@@ -2121,7 +2139,8 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
     backoffMs = min(2000, backoffMs * 2)
 
 proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int =
-  let resStr = runLuaScript(cfg.redisUrl, ackLua, ackSha, [cfg.prefix, queueName, taskId])
+  let normQueue = queueName.toLowerAscii
+  let resStr = runLuaScript(cfg.redisUrl, ackLua, ackSha, [cfg.prefix, normQueue, taskId])
   var res = 0
   try:
     res = parseInt(resStr.strip())
@@ -2135,7 +2154,8 @@ proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int =
   return res
 
 proc doClaimRenew*(cfg: RhizoConfig, queueName, taskId: string, leaseSec: int = 120) =
-  let res = runLuaScript(cfg.redisUrl, claimRenewLua, claimRenewSha, [cfg.prefix, queueName, taskId, $leaseSec])
+  let normQueue = queueName.toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, claimRenewLua, claimRenewSha, [cfg.prefix, normQueue, taskId, $leaseSec])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
@@ -2337,26 +2357,29 @@ proc doFloorStatus*(cfg: RhizoConfig, room: string) =
   echo res
 
 proc doCancelSet*(cfg: RhizoConfig, runId, reason, byAgent: string, ttlSec: int = 3600) =
+  let normRunId = runId.toLowerAscii
+  let normBy = byAgent.toLowerAscii
   let secret = getSecret(cfg)
   let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-  let canonical = runId & "|" & reason & "|" & byAgent & "|" & ts
+  let canonical = normRunId & "|" & reason & "|" & normBy & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
-  let res = runLuaScript(cfg.redisUrl, cancelLua, cancelSha, [cfg.prefix, "cancel", runId, reason, byAgent, $ttlSec, ts, sig])
+  let res = runLuaScript(cfg.redisUrl, cancelLua, cancelSha, [cfg.prefix, "cancel", normRunId, reason, normBy, $ttlSec, ts, sig])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   var n = newJObject()
   n["status"] = %"cancelled"
-  n["run_id"] = %runId
+  n["run_id"] = %normRunId
   n["reason"] = %reason
-  n["by"] = %byAgent
+  n["by"] = %normBy
   n["timestamp"] = %ts
   n["sig"] = %sig
   n["cancelled"] = %true
   echo $n
 
 proc doCancelCheck*(cfg: RhizoConfig, runId: string, rawOutput: bool = false, exitCodeOnUncancelled: bool = false) =
-  let res = runLuaScript(cfg.redisUrl, cancelLua, cancelSha, [cfg.prefix, "check", runId])
+  let normRunId = runId.toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, cancelLua, cancelSha, [cfg.prefix, "check", normRunId])
   if res.len == 0 or res == "(nil)":
     if exitCodeOnUncancelled:
       quit(1)
@@ -2366,13 +2389,13 @@ proc doCancelCheck*(cfg: RhizoConfig, runId: string, rawOutput: bool = false, ex
     let parsed = parseJson(res)
     let secret = getSecret(cfg)
     let reason = parsed.getOrDefault("reason").getStr("")
-    let byAgent = parsed.getOrDefault("by").getStr("")
+    let byAgent = parsed.getOrDefault("by").getStr("").toLowerAscii
     let ts = parsed.getOrDefault("timestamp").getStr("")
     let sig = parsed.getOrDefault("sig").getStr("")
-    let canonical = runId & "|" & reason & "|" & byAgent & "|" & ts
+    let canonical = normRunId & "|" & reason & "|" & byAgent & "|" & ts
 
     if sig.len == 0 or not verifyHmac(secret, canonical, sig):
-      stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered cancellation token (run_id: " & runId & ")")
+      stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered cancellation token (run_id: " & normRunId & ")")
       if exitCodeOnUncancelled:
         quit(1)
       return
@@ -2387,34 +2410,39 @@ proc doCancelCheck*(cfg: RhizoConfig, runId: string, rawOutput: bool = false, ex
     return
 
 proc doCancelClear*(cfg: RhizoConfig, runId: string) =
-  let res = runLuaScript(cfg.redisUrl, cancelLua, cancelSha, [cfg.prefix, "clear", runId])
+  let normRunId = runId.toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, cancelLua, cancelSha, [cfg.prefix, "clear", normRunId])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   echo res
 
 proc doBallotOpen*(cfg: RhizoConfig, ballotId, options, voters: string, ttlSec: int = 3600) =
+  let normBallotId = ballotId.toLowerAscii
   let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "open", ballotId, options, voters, $ttlSec, ts])
+  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "open", normBallotId, options, voters, $ttlSec, ts])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   echo res
 
 proc doBallotCast*(cfg: RhizoConfig, ballotId, voter, choice: string) =
+  let normBallotId = ballotId.toLowerAscii
+  let normVoter = voter.toLowerAscii
   let secret = getSecret(cfg)
   let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-  let canonical = voter & "|" & ballotId & "|" & choice & "|" & ts
+  let canonical = normVoter & "|" & normBallotId & "|" & choice & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
-  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "cast", ballotId, voter, choice, sig, ts])
+  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "cast", normBallotId, normVoter, choice, sig, ts])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   echo res
 
 proc doBallotTally*(cfg: RhizoConfig, ballotId: string, closeBallot: bool = false, rawOutput: bool = false) =
+  let normBallotId = ballotId.toLowerAscii
   let closeArg = if closeBallot: "close" else: ""
-  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "tally", ballotId, closeArg])
+  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "tally", normBallotId, closeArg])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
@@ -2444,7 +2472,7 @@ proc doBallotTally*(cfg: RhizoConfig, ballotId: string, closeBallot: bool = fals
         if p.len >= 2:
           let sig = p[0]
           let ts = p[1..^1].join("|")
-          let canonical = voter & "|" & ballotId & "|" & choice & "|" & ts
+          let canonical = voter.toLowerAscii & "|" & normBallotId & "|" & choice & "|" & ts
           if verifyHmac(secret, canonical, sig):
             valid = true
 
@@ -2474,24 +2502,27 @@ proc doBallotTally*(cfg: RhizoConfig, ballotId: string, closeBallot: bool = fals
     echo $parsed
 
 proc doBallotStatus*(cfg: RhizoConfig, ballotId: string) =
-  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "status", ballotId])
+  let normBallotId = ballotId.toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, ballotLua, ballotSha, [cfg.prefix, "status", normBallotId])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   echo res
 
 proc doLeaderAcquire*(cfg: RhizoConfig, role, agentName: string, leaseSec: int = 30) =
+  let normRole = role.toLowerAscii
+  let normAgent = agentName.toLowerAscii
   let secret = getSecret(cfg)
   let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-  let canonical = role & "|" & agentName & "|" & ts & "|" & $leaseSec
+  let canonical = normRole & "|" & normAgent & "|" & ts & "|" & $leaseSec
   let sig = computeHmacSha256(secret, canonical)
-  var res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "acquire", role, agentName, $leaseSec, ts, sig])
+  var res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "acquire", normRole, normAgent, $leaseSec, ts, sig])
   if res.startsWith("HELD:"):
     var existing = ""
     try:
       var client = openRedisClient(cfg.redisUrl)
       defer: (try: client.close() except CatchableError: discard)
-      let val = client.get(cfg.prefix & "leader:{" & role & "}")
+      let val = client.get(cfg.prefix & "leader:{" & normRole & "}")
       if val != redisNil:
         existing = val
     except CatchableError:
@@ -2499,17 +2530,17 @@ proc doLeaderAcquire*(cfg: RhizoConfig, role, agentName: string, leaseSec: int =
     if existing.len > 0:
       try:
         let parsed = parseJson(existing)
-        let exLeader = parsed.getOrDefault("leader").getStr("")
+        let exLeader = parsed.getOrDefault("leader").getStr("").toLowerAscii
         let exTs = parsed.getOrDefault("acquired_at").getStr("")
         let exLease = parsed.getOrDefault("lease_sec").getInt(0)
         let exSig = parsed.getOrDefault("sig").getStr("")
-        let exCanonical = role & "|" & exLeader & "|" & exTs & "|" & $exLease
+        let exCanonical = normRole & "|" & exLeader & "|" & exTs & "|" & $exLease
         if exSig.len == 0 or not verifyHmac(secret, exCanonical, exSig):
-          stderr.writeLine("[RHIZO SECURITY] WARNING: Preempting unauthenticated/forged leader key for role: " & role)
-          res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "acquire", role, agentName, $leaseSec, ts, sig, "force"])
+          stderr.writeLine("[RHIZO SECURITY] WARNING: Preempting unauthenticated/forged leader key for role: " & normRole)
+          res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "acquire", normRole, normAgent, $leaseSec, ts, sig, "force"])
       except JsonParsingError:
-        stderr.writeLine("[RHIZO SECURITY] WARNING: Preempting corrupt leader key for role: " & role)
-        res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "acquire", role, agentName, $leaseSec, ts, sig, "force"])
+        stderr.writeLine("[RHIZO SECURITY] WARNING: Preempting corrupt leader key for role: " & normRole)
+        res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "acquire", normRole, normAgent, $leaseSec, ts, sig, "force"])
 
   if res.startsWith("HELD:") or res.startsWith("ERR:"):
     stderr.writeLine(res)
@@ -2517,25 +2548,30 @@ proc doLeaderAcquire*(cfg: RhizoConfig, role, agentName: string, leaseSec: int =
   echo res
 
 proc doLeaderRenew*(cfg: RhizoConfig, role, agentName: string, leaseSec: int = 30) =
+  let normRole = role.toLowerAscii
+  let normAgent = agentName.toLowerAscii
   let secret = getSecret(cfg)
   let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-  let canonical = role & "|" & agentName & "|" & ts & "|" & $leaseSec
+  let canonical = normRole & "|" & normAgent & "|" & ts & "|" & $leaseSec
   let sig = computeHmacSha256(secret, canonical)
-  let res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "renew", role, agentName, $leaseSec, ts, sig])
+  let res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "renew", normRole, normAgent, $leaseSec, ts, sig])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   echo res
 
 proc doLeaderResign*(cfg: RhizoConfig, role, agentName: string) =
-  let res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "resign", role, agentName])
+  let normRole = role.toLowerAscii
+  let normAgent = agentName.toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "resign", normRole, normAgent])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
   echo res
 
 proc doLeaderStatus*(cfg: RhizoConfig, role: string) =
-  let res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "status", role])
+  let normRole = role.toLowerAscii
+  let res = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "status", normRole])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
@@ -2543,17 +2579,17 @@ proc doLeaderStatus*(cfg: RhizoConfig, role: string) =
   try:
     let parsed = parseJson(res)
     let secret = getSecret(cfg)
-    let leader = parsed.getOrDefault("leader").getStr("")
+    let leader = parsed.getOrDefault("leader").getStr("").toLowerAscii
     let status = parsed.getOrDefault("status").getStr("")
     if status == "active" and leader.len > 0:
       let exTs = parsed.getOrDefault("acquired_at").getStr("")
       let exLease = parsed.getOrDefault("lease_sec").getInt(0)
       let exSig = parsed.getOrDefault("sig").getStr("")
-      let canonical = role & "|" & leader & "|" & exTs & "|" & $exLease
+      let canonical = normRole & "|" & leader & "|" & exTs & "|" & $exLease
       if exSig.len == 0 or not verifyHmac(secret, canonical, exSig):
-        stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered leader key for role: " & role)
+        stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered leader key for role: " & normRole)
         var vacant = newJObject()
-        vacant["role"] = %role
+        vacant["role"] = %normRole
         vacant["leader"] = %""
         vacant["status"] = %"vacant"
         vacant["ttl"] = %0
@@ -2798,11 +2834,13 @@ proc doSweep*(cfg: RhizoConfig, dryRun: bool = false, rawOutput: bool = false) =
 proc doRequest*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string, timeoutSec: int = 30, rawOutput: bool = false, urgency: string = "soon") =
   randomize()
   let secret = getSecret(cfg)
-  let reqId = "req_" & $getTime().toUnix() & "_" & fromAgent & "_" & $rand(1000..9999)
+  let normTo = toAgent.toLowerAscii
+  let normFrom = fromAgent.toLowerAscii
+  let reqId = "req_" & $getTime().toUnix() & "_" & normFrom & "_" & $rand(1000..9999)
   let replyQueue = "reply:" & reqId
   let replyInboxKey = cfg.prefix & "inbox:" & replyQueue
 
-  discard doSend(cfg, toAgent, "task", fromAgent, subject, body, tags = @[], replyTo = replyQueue, msgId = reqId, isBroadcast = false, echoResult = false, urgency = urgency)
+  discard doSend(cfg, normTo, "task", normFrom, subject, body, tags = @[], replyTo = replyQueue, msgId = reqId, isBroadcast = false, echoResult = false, urgency = urgency)
 
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -2877,20 +2915,22 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
                quorum: int = -1, timeoutSec: int = 30, rawOutput: bool = false, urgency: string = "soon") =
   randomize()
   let secret = getSecret(cfg)
-  let scatterId = "sc_" & $getTime().toUnix() & "_" & fromAgent & "_" & $rand(1000..9999)
+  let normTargets = targets.toLowerAscii
+  let normFrom = fromAgent.toLowerAscii
+  let scatterId = "sc_" & $getTime().toUnix() & "_" & normFrom & "_" & $rand(1000..9999)
   let replyQueue = "scatter:" & scatterId
   let replyInboxKey = cfg.prefix & "inbox:" & replyQueue
   let normUrgency = if urgency.toLowerAscii in ["immediate", "now", "urgent"]: "immediate" else: "soon"
 
   let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
   let finalBody = if cfg.encrypt: encryptAes(body, secret, cfg) else: body
-  let canonical = scatterId & "|" & fromAgent & "|" & targets & "|task|" & subject & "|" & finalBody & "|" & ts
+  let canonical = scatterId & "|" & normFrom & "|" & normTargets & "|task|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
 
   var node = newJObject()
   node["id"] = %scatterId
-  node["from"] = %fromAgent
-  node["to"] = %targets
+  node["from"] = %normFrom
+  node["to"] = %normTargets
   node["type"] = %"task"
   node["urgency"] = %normUrgency
   node["reply_to"] = %replyQueue
@@ -2907,7 +2947,7 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
   let msgJson = $node
   let effectiveTtl = if cfg.messageTtl > 0: cfg.messageTtl else: 300
 
-  let deliveredStr = runLuaScript(cfg.redisUrl, scatterLua, scatterSha, [cfg.prefix, targets, msgJson, $effectiveTtl])
+  let deliveredStr = runLuaScript(cfg.redisUrl, scatterLua, scatterSha, [cfg.prefix, normTargets, msgJson, $effectiveTtl])
   var delivered = 0
   try:
     delivered = parseInt(deliveredStr.strip())
@@ -2987,8 +3027,9 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
           remaining = max(0, timeoutSec - elapsed)
           continue
 
-      if not seenSenders.contains(sender):
-        seenSenders.incl(sender)
+      let normSender = sender.toLowerAscii
+      if not seenSenders.contains(normSender):
+        seenSenders.incl(normSender)
         collectedReplies.add(parsed)
         stderr.writeLine("[RHIZO SCATTER] Reply received from '" & sender & "' [" & $collectedReplies.len & "/" & $effectiveQuorum & "]")
 
@@ -3013,7 +3054,8 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
     echo $resArr
 
 proc doPub*(cfg: RhizoConfig, channel, message: string): string =
-  let fullChan = cfg.prefix & "channel:" & channel
+  let normChan = channel.toLowerAscii
+  let fullChan = cfg.prefix & "channel:" & normChan
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
@@ -3025,7 +3067,8 @@ proc doPub*(cfg: RhizoConfig, channel, message: string): string =
     quit(1)
 
 proc doSub*(cfg: RhizoConfig, channel: string, timeoutSec: int = -1) =
-  let fullChan = cfg.prefix & "channel:" & channel
+  let normChan = channel.toLowerAscii
+  let fullChan = cfg.prefix & "channel:" & normChan
   proc asyncSub(): Future[string] {.async.} =
     let parsed = parseRedisUrl(cfg.redisUrl)
     let r = await openAsync(parsed.host, parsed.port.Port)
@@ -3568,6 +3611,8 @@ proc main() =
           let w = vj.getOrDefault("worker").getStr(vj.getOrDefault("agent").getStr(""))
           if w.len > 0: fromAgent = w
         except CatchableError: discard
+    if fromAgent.len == 0:
+      fromAgent = getActiveAgentName(cfg, fromAgent, fallbackDefault = false, sessionId = cfg.sessionId, allowGlobalFallback = true)
     if fromAgent.len == 0 and cfg.project.len > 0:
       fromAgent = cfg.project & "-worker"
     if fromAgent.len == 0:
@@ -3689,19 +3734,19 @@ proc main() =
             try:
               var client = connectRedis(cfg.redisUrl)
               defer: (try: client.close() except CatchableError: discard)
-              if client.sIsMember(cfg.prefix & "active_agents", a) == 1 or client.exists(cfg.prefix & "agent:" & a):
+              if client.sIsMember(cfg.prefix & "active_agents", a.toLowerAscii) == 1 or client.exists(cfg.prefix & "agent:" & a.toLowerAscii):
                 isKnownAgent = true
             except CatchableError:
               discard
             if isKnownAgent:
-              explicitName = a
+              explicitName = a.toLowerAscii
             else:
               stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
               stderr.writeLine("Usage: rhizo drain [count] [name]")
               quit(1)
         elif positionalIdx == 2:
           if explicitName.len == 0:
-            explicitName = a
+            explicitName = a.toLowerAscii
           else:
             try:
               count = parseInt(a)

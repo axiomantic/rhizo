@@ -6,7 +6,7 @@
 -- ARGV[4]: lease duration in seconds (default 120)
 
 local prefix = ARGV[1]
-local qname = ARGV[2]
+local qname = ARGV[2] and string.lower(ARGV[2]) or ""
 local task_id = ARGV[3]
 local lease_sec = tonumber(ARGV[4]) or 120
 

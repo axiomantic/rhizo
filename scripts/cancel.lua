@@ -18,12 +18,13 @@ local run_id = ARGV[3]
 if not run_id or run_id == "" then
     return redis.error_reply("ERR: Missing run_id")
 end
+run_id = string.lower(run_id)
 
 local cancel_key = prefix .. "cancel:" .. run_id
 
 if action == "cancel" or action == "set" then
     local reason = (ARGV[4] and ARGV[4] ~= "") and ARGV[4] or "Cancelled by orchestrator"
-    local by_agent = (ARGV[5] and ARGV[5] ~= "") and ARGV[5] or "orchestrator"
+    local by_agent = (ARGV[5] and ARGV[5] ~= "") and string.lower(ARGV[5]) or "orchestrator"
     local ttl = tonumber(ARGV[6]) or 3600
     local ts = (ARGV[7] and ARGV[7] ~= "") and ARGV[7] or tostring(redis.call("TIME")[1])
     local sig = (ARGV[8] and ARGV[8] ~= "") and ARGV[8] or ""

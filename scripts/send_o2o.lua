@@ -26,6 +26,7 @@ local recipient = ARGV[2]
 if not recipient or recipient == "" then
     return redis.error_reply("ERR: Missing recipient")
 end
+recipient = string.lower(recipient)
 
 local arg3 = ARGV[3]
 if not arg3 or arg3 == "" then
@@ -42,7 +43,7 @@ if string.sub(arg3, 1, 1) == "{" then
 else
     -- Mode B: Structured parameters
     local msg_type = arg3
-    local from_agent = ARGV[4] or "unknown"
+    local from_agent = string.lower(ARGV[4] or "unknown")
     local subject = ARGV[5] or ""
     local body = ARGV[6] or ""
     local tags_csv = ARGV[7] or ""
@@ -67,7 +68,7 @@ else
 
     local tags = {}
     for tag in string.gmatch(tags_csv, "([^,]+)") do
-        local tr = string.match(tag, "^%s*(.-)%s*$")
+        local tr = string.lower(string.match(tag, "^%s*(.-)%s*$"))
         if tr ~= "" then table.insert(tags, tr) end
     end
 

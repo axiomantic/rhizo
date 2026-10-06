@@ -13,7 +13,8 @@ local filter = ARGV[2]
 local agents = {}
 
 if filter and filter ~= "" and filter ~= "*" and filter ~= "@all" then
-    agents = redis.call('SMEMBERS', prefix .. 'tag:' .. filter)
+    local filter_tag = string.lower(filter)
+    agents = redis.call('SMEMBERS', prefix .. 'tag:' .. filter_tag)
 else
     agents = redis.call('SMEMBERS', prefix .. 'active_agents')
 end

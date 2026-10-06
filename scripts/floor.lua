@@ -19,7 +19,13 @@ if not action or action == "" then
 end
 
 local room = ARGV[3] or "default"
+if room and room ~= "" then
+    room = string.lower(room)
+end
 local agent = ARGV[4] or ""
+if agent and agent ~= "" then
+    agent = string.lower(agent)
+end
 
 local holder_key = prefix .. "floor:{" .. room .. "}:holder"
 local waiters_key = prefix .. "floor:{" .. room .. "}:waiters"
@@ -69,6 +75,9 @@ elseif action == "yield" then
 elseif action == "pass" then
     local holder = redis.call('GET', holder_key)
     local target = ARGV[5] or ""
+    if target and target ~= "" then
+        target = string.lower(target)
+    end
     local lease_sec = tonumber(ARGV[6]) or 60
     if holder and holder ~= agent and ARGV[7] ~= "force" then
         return "ERR: Floor is held by " .. holder

@@ -34,7 +34,7 @@ for _, agent in ipairs(active_agents) do
             redis.call("SREM", prefix .. "active_agents", agent)
             local agent_tags = redis.call("HGET", prefix .. "agent:" .. agent, "tags") or ""
             for t in string.gmatch(agent_tags, "([^,]+)") do
-                local tr = string.match(t, "^%s*(.-)%s*$")
+                local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
                 if tr ~= "" then redis.call("SREM", prefix .. "tag:" .. tr, agent) end
             end
             redis.call("UNLINK", prefix .. "agent:" .. agent)

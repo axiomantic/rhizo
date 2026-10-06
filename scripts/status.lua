@@ -16,6 +16,7 @@ local name = ARGV[2]
 if not name or name == "" then
     return redis.error_reply("ERR: Missing agent name")
 end
+name = string.lower(name)
 
 local state = ARGV[3] or ""
 local activity = ARGV[4] or ""

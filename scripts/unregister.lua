@@ -12,6 +12,7 @@ local name = ARGV[2]
 if not name or name == "" then
     return redis.error_reply("ERR: Missing agent name")
 end
+name = string.lower(name)
 
 local tags_csv = redis.call('HGET', prefix .. 'agent:' .. name, 'tags') or ""
 
@@ -24,6 +25,8 @@ for tag in string.gmatch(tags_csv, "([^,]+)") do
     local trimmed = string.match(tag, "^%s*(.-)%s*$")
     if trimmed ~= "" then
         redis.call('SREM', prefix .. 'tag:' .. trimmed, name)
+        local low_trim = string.lower(trimmed)
+        if low_trim ~= trimmed then redis.call('SREM', prefix .. 'tag:' .. low_trim, name) end
     end
 end
 return "OK"

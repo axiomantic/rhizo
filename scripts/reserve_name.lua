@@ -13,6 +13,7 @@ local candidate = ARGV[2]
 if not candidate or candidate == "" then
     return redis.error_reply("ERR: Missing candidate name")
 end
+candidate = string.lower(candidate)
 
 local ttl = tonumber(ARGV[3]) or 600
 

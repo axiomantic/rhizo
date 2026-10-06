@@ -14,8 +14,9 @@ local name = ARGV[2]
 if not name or name == "" then
     return redis.error_reply("ERR: Missing agent name")
 end
+name = string.lower(name)
 
-local action = ARGV[3] or "add"
+local action = string.lower(ARGV[3] or "add")
 if action ~= "add" and action ~= "remove" and action ~= "set" then
     return redis.error_reply("ERR: Unknown action '" .. tostring(action) .. "'")
 end
@@ -30,7 +31,7 @@ local current_csv = redis.call('HGET', prefix .. 'agent:' .. name, 'tags') or ""
 local tag_set = {}
 
 for t in string.gmatch(current_csv, "([^,]+)") do
-    local tr = string.match(t, "^%s*(.-)%s*$")
+    local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
     if tr ~= "" then tag_set[tr] = true end
 end
 
@@ -40,6 +41,8 @@ if action == "add" then
         if tr ~= "" then
             tag_set[tr] = true
             redis.call('SADD', prefix .. 'tag:' .. tr, name)
+            local tr_low = string.lower(tr)
+            if tr_low ~= tr then redis.call('SADD', prefix .. 'tag:' .. tr_low, name) end
         end
     end
 elseif action == "remove" then
@@ -48,11 +51,15 @@ elseif action == "remove" then
         if tr ~= "" then
             tag_set[tr] = nil
             redis.call('SREM', prefix .. 'tag:' .. tr, name)
+            local tr_low = string.lower(tr)
+            if tr_low ~= tr then redis.call('SREM', prefix .. 'tag:' .. tr_low, name) end
         end
     end
 elseif action == "set" then
     for old_t, _ in pairs(tag_set) do
         redis.call('SREM', prefix .. 'tag:' .. old_t, name)
+        local old_low = string.lower(old_t)
+        if old_low ~= old_t then redis.call('SREM', prefix .. 'tag:' .. old_low, name) end
     end
     tag_set = {}
     for t in string.gmatch(tags_arg, "([^,]+)") do
@@ -60,6 +67,8 @@ elseif action == "set" then
         if tr ~= "" then
             tag_set[tr] = true
             redis.call('SADD', prefix .. 'tag:' .. tr, name)
+            local tr_low = string.lower(tr)
+            if tr_low ~= tr then redis.call('SADD', prefix .. 'tag:' .. tr_low, name) end
         end
     end
 end

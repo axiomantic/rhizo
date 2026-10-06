@@ -45,6 +45,10 @@ Always run 'rhizo listen <agent>' with zero timeout (infinite wait). Bounded tim
 No Double-Daemons: Inside background subagents, 'rhizo listen' must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents.
 </INVARIANT>
 
+<FORBIDDEN>
+Never Wrap 'rhizo listen' in a Bash Loop: Never execute 'while true; do rhizo listen; done' or 'until rhizo listen'. Coding harnesses and parent agents only receive output and wake up when the tool execution TERMINATES. An infinite loop inside a single command prevents the process from returning, trapping the message payload inside an unmonitored subshell log and hanging the parent task forever. Each 'rhizo listen' must be a single-shot execution that exits on delivery; re-arming is the orchestrator's job in a separate task or subsequent turn.
+</FORBIDDEN>
+
 ### 3. Task Claiming & Fencing
 <INVARIANT>
 Always negotiate leases when claiming tasks: 'rhizo claim <queue> --lease <sec>'. Acquire fencing tokens before modifying shared resources: 'rhizo lock <resource> --fencing'. Acknowledge completion with 'rhizo ack' only after verification.
@@ -53,6 +57,11 @@ Always negotiate leases when claiming tasks: 'rhizo claim <queue> --lease <sec>'
 ### 4. Task Routing & Optional System 1
 <INVARIANT>
 System 1 Routing is strictly optional. All core primitives (messaging, locking, explicit queues 'rhizo enqueue <queue>') require zero ML models and zero configuration files. Semantic routing ('rhizo enqueue --route <text>') is an optional triage accelerator; it resolves cascading rules starting from a machine-wide global configuration (~/.config/rhizo/rhizo-routes.yaml or routes.yaml, created via 'rhizo route init --global') down through repo-root and subdirectory rhizo-routes.yaml files (scaffold via 'rhizo route init'). All projects inherit global rules unless overridden.
+</INVARIANT>
+
+### 5. Case-Insensitive Coordination
+<INVARIANT>
+Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicast tags ('@tag'), work queues ('queue:<name>'), distributed locks ('lock:<name>'), pub/sub channels ('channel:<name>'), tasks, and run cancellations are normalized case-insensitively. Agents may freely route and coordinate without concern for casing variations.
 </INVARIANT>
 <!-- END RHIZO GUIDE -->"""
 

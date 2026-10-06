@@ -26,7 +26,7 @@ elseif string.sub(target_str, 1, 1) == "@" then
     local raw = string.sub(target_str, 2)
     local tag_keys = {}
     for tag in string.gmatch(raw, "([^,]+)") do
-        local tr = string.match(tag, "^%s*(.-)%s*$")
+        local tr = string.lower(string.match(tag, "^%s*(.-)%s*$"))
         if tr ~= "" then
             table.insert(tag_keys, prefix .. 'tag:' .. tr)
         end
@@ -42,7 +42,7 @@ elseif string.sub(target_str, 1, 1) == "@" then
 else
     -- Comma-separated agent names
     for name in string.gmatch(target_str, "([^,]+)") do
-        local tr = string.match(name, "^%s*(.-)%s*$")
+        local tr = string.lower(string.match(name, "^%s*(.-)%s*$"))
         if tr ~= "" then
             table.insert(targets, tr)
         end
@@ -51,24 +51,25 @@ end
 
 local delivered = 0
 for _, agent in ipairs(targets) do
+    local norm_agent = string.lower(agent)
     local should_send = true
     if target_str == "*" or target_str == "@all" or string.sub(target_str, 1, 1) == "@" then
-        if redis.call('EXISTS', prefix .. 'heartbeat:' .. agent) ~= 1 then
+        if redis.call('EXISTS', prefix .. 'heartbeat:' .. norm_agent) ~= 1 then
             should_send = false
             -- Prune dead agent
-            redis.call('SREM', prefix .. 'active_agents', agent)
-            local agent_tags = redis.call('HGET', prefix .. 'agent:' .. agent, 'tags') or ""
+            redis.call('SREM', prefix .. 'active_agents', norm_agent)
+            local agent_tags = redis.call('HGET', prefix .. 'agent:' .. norm_agent, 'tags') or ""
             for t in string.gmatch(agent_tags, "([^,]+)") do
-                local tr = string.match(t, "^%s*(.-)%s*$")
-                if tr ~= "" then redis.call('SREM', prefix .. 'tag:' .. tr, agent) end
+                local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
+                if tr ~= "" then redis.call('SREM', prefix .. 'tag:' .. tr, norm_agent) end
             end
-            redis.call('DEL', prefix .. 'agent:' .. agent)
+            redis.call('DEL', prefix .. 'agent:' .. norm_agent)
         end
     end
 
     if should_send then
-        redis.call('LPUSH', prefix .. 'inbox:' .. agent, msg_json)
-        redis.call('EXPIRE', prefix .. 'inbox:' .. agent, inbox_ttl)
+        redis.call('LPUSH', prefix .. 'inbox:' .. norm_agent, msg_json)
+        redis.call('EXPIRE', prefix .. 'inbox:' .. norm_agent, inbox_ttl)
         delivered = delivered + 1
     end
 end

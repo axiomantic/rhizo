@@ -12,7 +12,7 @@ local mock_offset = tonumber(redis.call('GET', prefix .. 'mock_time_offset') or 
 local now = tonumber(redis.call('TIME')[1]) + mock_offset
 
 if action == "create" then
-    local task_id = ARGV[3]
+    local task_id = string.lower(ARGV[3] or "")
     if not task_id or task_id == "" then
         return redis.error_reply("ERR: Missing task_id")
     end
@@ -41,8 +41,8 @@ if action == "create" then
     return "OK"
 
 elseif action == "claim" then
-    local task_id = ARGV[3]
-    local worker = ARGV[4]
+    local task_id = string.lower(ARGV[3] or "")
+    local worker = string.lower(ARGV[4] or "")
     local lease_sec = tonumber(ARGV[5]) or 300
     local strand_path = ARGV[6] or ""
 
@@ -82,8 +82,8 @@ elseif action == "claim" then
     return "OK"
 
 elseif action == "progress" then
-    local task_id = ARGV[3]
-    local worker = ARGV[4]
+    local task_id = string.lower(ARGV[3] or "")
+    local worker = string.lower(ARGV[4] or "")
     local progress_text = ARGV[5] or ""
     local renew_lease = tonumber(ARGV[6]) or 300
 
@@ -98,8 +98,8 @@ elseif action == "progress" then
     return "OK"
 
 elseif action == "complete" then
-    local task_id = ARGV[3]
-    local worker = ARGV[4]
+    local task_id = string.lower(ARGV[3] or "")
+    local worker = string.lower(ARGV[4] or "")
     local gate_token = ARGV[5] or ""
 
     local task_key = prefix .. "task:" .. task_id
@@ -118,8 +118,8 @@ elseif action == "complete" then
     return "OK"
 
 elseif action == "yield" or action == "abandon" then
-    local task_id = ARGV[3]
-    local worker = ARGV[4]
+    local task_id = string.lower(ARGV[3] or "")
+    local worker = string.lower(ARGV[4] or "")
     local reason = ARGV[5] or ""
 
     local task_key = prefix .. "task:" .. task_id
@@ -134,7 +134,7 @@ elseif action == "yield" or action == "abandon" then
     return "OK"
 
 elseif action == "get" then
-    local task_id = ARGV[3]
+    local task_id = string.lower(ARGV[3] or "")
     local task_key = prefix .. "task:" .. task_id
     if redis.call('EXISTS', task_key) == 0 then
         return "{}"

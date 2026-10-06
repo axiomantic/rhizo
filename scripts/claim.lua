@@ -16,8 +16,9 @@ local qname = ARGV[2]
 if not qname or qname == "" then
     return redis.error_reply("ERR: Missing queue name")
 end
+qname = string.lower(qname)
 
-local agent = ARGV[3] or "unknown"
+local agent = string.lower(ARGV[3] or "unknown")
 local lease_sec = tonumber(ARGV[4]) or 120
 local max_retries = tonumber(ARGV[5]) or 3
 

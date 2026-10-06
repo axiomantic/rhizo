@@ -13,6 +13,8 @@ if not prefix or prefix == "" or not name or name == "" then
     return redis.error_reply("ERR: Missing prefix or agent name")
 end
 
+name = string.lower(name)
+
 local tags_csv = ARGV[3] or ""
 local ttl = tonumber(ARGV[4]) or 150
 
@@ -30,7 +32,11 @@ local old_tags = redis.call('HGET', prefix .. 'agent:' .. name, 'tags')
 if old_tags and old_tags ~= "" then
     for old_tag in string.gmatch(old_tags, "([^,]+)") do
         local tr = string.match(old_tag, "^%s*(.-)%s*$")
-        if tr ~= "" then redis.call('SREM', prefix .. 'tag:' .. tr, name) end
+        if tr ~= "" then
+            redis.call('SREM', prefix .. 'tag:' .. tr, name)
+            local tr_low = string.lower(tr)
+            if tr_low ~= tr then redis.call('SREM', prefix .. 'tag:' .. tr_low, name) end
+        end
     end
 end
 
@@ -43,6 +49,8 @@ for tag in string.gmatch(tags_csv, "([^,]+)") do
     local trimmed = string.match(tag, "^%s*(.-)%s*$")
     if trimmed ~= "" then
         redis.call('SADD', prefix .. 'tag:' .. trimmed, name)
+        local low_trim = string.lower(trimmed)
+        if low_trim ~= trimmed then redis.call('SADD', prefix .. 'tag:' .. low_trim, name) end
     end
 end
 return "OK"

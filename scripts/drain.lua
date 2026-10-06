@@ -13,6 +13,7 @@ local name = ARGV[2]
 if not name or name == "" then
     return redis.error_reply("ERR: Missing agent name")
 end
+name = string.lower(name)
 
 local count = tonumber(ARGV[3]) or 50
 local messages = {}

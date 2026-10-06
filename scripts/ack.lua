@@ -13,6 +13,7 @@ local qname = ARGV[2]
 if not qname or qname == "" then
     return redis.error_reply("ERR: Missing queue name")
 end
+qname = string.lower(qname)
 
 local task_id = ARGV[3]
 if not task_id or task_id == "" then

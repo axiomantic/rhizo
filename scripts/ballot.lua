@@ -18,6 +18,7 @@ local ballot_id = ARGV[3]
 if not ballot_id or ballot_id == "" then
     return redis.error_reply("ERR: Missing ballot_id")
 end
+ballot_id = string.lower(ballot_id)
 
 local meta_key = prefix .. "ballot:{" .. ballot_id .. "}"
 local votes_key = prefix .. "ballot:votes:{" .. ballot_id .. "}"
@@ -61,6 +62,7 @@ elseif action == "cast" then
     if not voter or voter == "" then
         return redis.error_reply("ERR: Missing voter")
     end
+    voter = string.lower(voter)
     if not choice or choice == "" then
         return redis.error_reply("ERR: Missing vote choice")
     end
@@ -88,7 +90,7 @@ elseif action == "cast" then
         local eligible = split(voters_raw, ",")
         local is_eligible = false
         for _, v in ipairs(eligible) do
-            if v == voter then
+            if string.lower(v) == voter then
                 is_eligible = true
                 break
             end

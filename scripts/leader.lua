@@ -18,12 +18,13 @@ local role = ARGV[3]
 if not role or role == "" then
     return redis.error_reply("ERR: Missing role")
 end
+role = string.lower(role)
 
 local leader_key = prefix .. "leader:{" .. role .. "}"
 local leader_chan = prefix .. "channel:leader:{" .. role .. "}"
 
 if action == "acquire" then
-    local agent = ARGV[4]
+    local agent = string.lower(ARGV[4] or "")
     local lease_sec = tonumber(ARGV[5]) or 30
     local ts = (ARGV[6] and ARGV[6] ~= "") and ARGV[6] or tostring(redis.call("TIME")[1])
     local sig = (ARGV[7] and ARGV[7] ~= "") and ARGV[7] or ""
@@ -72,7 +73,7 @@ if action == "acquire" then
     return "ELECTED"
 
 elseif action == "renew" then
-    local agent = ARGV[4]
+    local agent = string.lower(ARGV[4] or "")
     local lease_sec = tonumber(ARGV[5]) or 30
     local ts = (ARGV[6] and ARGV[6] ~= "") and ARGV[6] or tostring(redis.call("TIME")[1])
     local sig = (ARGV[7] and ARGV[7] ~= "") and ARGV[7] or ""
@@ -110,7 +111,7 @@ elseif action == "renew" then
     return "RENEWED"
 
 elseif action == "resign" then
-    local agent = ARGV[4]
+    local agent = string.lower(ARGV[4] or "")
 
     local existing = redis.call("GET", leader_key)
     if not existing then

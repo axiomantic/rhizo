@@ -54,9 +54,9 @@ if action == "add" then
   local text = ARGV[3] or ""
   local priority = (ARGV[4] or "NORMAL"):upper()
   if not priority_map[priority] then priority = "NORMAL" end
-  local author = ARGV[5] or "operator"
-  local scope = ARGV[6] or "*"
-  local target = ARGV[7] or ""
+  local author = string.lower(ARGV[5] or "operator")
+  local scope = string.lower(ARGV[6] or "*")
+  local target = string.lower(ARGV[7] or "")
   local cadence_sec = tonumber(ARGV[8]) or 900
   local ttl_sec = tonumber(ARGV[9]) or 0
   local once_per_agent = ARGV[10] or "false"
@@ -139,7 +139,7 @@ elseif action == "dismiss" then
 --------------------------------------------------------------------------------
 elseif action == "ack" then
   local rem_id = ARGV[3]
-  local agent_name = ARGV[4]
+  local agent_name = string.lower(ARGV[4] or "")
   local rem_key = prefix .. "reminder:" .. rem_id
   local exists = redis.call("EXISTS", rem_key)
   if exists == 0 then
@@ -182,8 +182,8 @@ elseif action == "get" then
 -- ARGV[4]: scope_filter (optional scope filter)
 --------------------------------------------------------------------------------
 elseif action == "list" then
-  local for_agent = ARGV[3] or ""
-  local scope_filter = ARGV[4] or ""
+  local for_agent = string.lower(ARGV[3] or "")
+  local scope_filter = string.lower(ARGV[4] or "")
 
   -- Get active reminders highest priority first (REV)
   local active_ids = redis.call("ZREVRANGE", prefix .. "reminders:active", 0, -1)
@@ -262,7 +262,7 @@ elseif action == "list" then
 -- ARGV[4]: max_cap (default 2)
 --------------------------------------------------------------------------------
 elseif action == "evaluate_piggyback" then
-  local agent_name = ARGV[3] or ""
+  local agent_name = string.lower(ARGV[3] or "")
   local max_cap = tonumber(ARGV[4]) or 2
   if agent_name == "" then
     return cjson.encode({ reminders = {}, count = 0 })

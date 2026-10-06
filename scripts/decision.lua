@@ -11,14 +11,18 @@ local action = ARGV[2] or ""
 local mock_offset = tonumber(redis.call('GET', prefix .. 'mock_time_offset') or 0)
 local now = tonumber(redis.call('TIME')[1]) + mock_offset
 
+local dec_id = ARGV[3]
+if dec_id and dec_id ~= "" then
+    dec_id = string.lower(dec_id)
+end
+
 if action == "propose" then
-    local dec_id = ARGV[3]
     if not dec_id or dec_id == "" then
         return redis.error_reply("ERR: Missing decision_id")
     end
     local title = ARGV[4] or ""
     local summary = ARGV[5] or ""
-    local proposed_by = ARGV[6] or "unknown"
+    local proposed_by = (ARGV[6] and ARGV[6] ~= "") and string.lower(ARGV[6]) or "unknown"
 
     local dec_key = prefix .. "decision:" .. dec_id
     if redis.call('EXISTS', dec_key) == 1 then
@@ -40,7 +44,6 @@ if action == "propose" then
     return "OK"
 
 elseif action == "approve" then
-    local dec_id = ARGV[3]
     local note = ARGV[4] or ""
     local dec_key = prefix .. "decision:" .. dec_id
     if redis.call('EXISTS', dec_key) == 0 then
@@ -56,7 +59,6 @@ elseif action == "approve" then
     return "OK"
 
 elseif action == "reject" then
-    local dec_id = ARGV[3]
     local reason = ARGV[4] or ""
     local dec_key = prefix .. "decision:" .. dec_id
     if redis.call('EXISTS', dec_key) == 0 then
@@ -72,7 +74,6 @@ elseif action == "reject" then
     return "OK"
 
 elseif action == "verify" then
-    local dec_id = ARGV[3]
     local dec_key = prefix .. "decision:" .. dec_id
     if redis.call('EXISTS', dec_key) == 0 then
         return "UNKNOWN"
@@ -80,7 +81,6 @@ elseif action == "verify" then
     return redis.call('HGET', dec_key, "status") or "UNKNOWN"
 
 elseif action == "get" then
-    local dec_id = ARGV[3]
     local dec_key = prefix .. "decision:" .. dec_id
     if redis.call('EXISTS', dec_key) == 0 then
         return "{}"

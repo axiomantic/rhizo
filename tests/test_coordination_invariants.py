@@ -435,6 +435,167 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertIn("Exact command: rhizo listen test_listener_id", res.stderr)
         self.assertIn("Never wrap in 'while true' bash loop", res.stderr)
 
+    # -------------------------------------------------------------------------
+    # Case-Insensitive Channel & Agent Names
+    # -------------------------------------------------------------------------
+    def test_17_case_insensitive_channels(self):
+        """Verify that agent inboxes, tags, queues, locks, decisions, and pub/sub channels are case-insensitive."""
+        # 1. Register agent with mixed-case name and tags
+        self.run_cmd(["open", "Worker-Alpha", "Backend,QA"])
+
+        # 2. Send messages using various casing
+        self.run_cmd(["send", "--to", "worker-alpha", "--subject", "Msg 1", "--body", "Body 1"],
+                     env_overrides={"RHIZO_AGENT_NAME": "Manager-Bot"})
+        self.run_cmd(["send", "--to", "WORKER-ALPHA", "--subject", "Msg 2", "--body", "Body 2"],
+                     env_overrides={"RHIZO_AGENT_NAME": "Manager-Bot"})
+
+        # 3. Drain using original mixed-case name
+        res_drain = self.run_cmd(["drain", "Worker-Alpha", "--json"])
+        msgs = json.loads(res_drain.stdout.strip())
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual({m["body"] for m in msgs}, {"Body 1", "Body 2"})
+
+        # 4. Multicast to tags with varying cases
+        self.run_cmd(["broadcast", "--tags", "backend", "--subject", "Tag 1", "--body", "Broadcast 1"],
+                     env_overrides={"RHIZO_AGENT_NAME": "Manager-Bot"})
+        self.run_cmd(["broadcast", "--tags", "BACKEND", "--subject", "Tag 2", "--body", "Broadcast 2"],
+                     env_overrides={"RHIZO_AGENT_NAME": "Manager-Bot"})
+        self.run_cmd(["broadcast", "--tags", "qa", "--subject", "Tag 3", "--body", "Broadcast 3"],
+                     env_overrides={"RHIZO_AGENT_NAME": "Manager-Bot"})
+
+        # Drain via lowercase name
+        res_drain2 = self.run_cmd(["drain", "worker-alpha", "--json"])
+        msgs2 = json.loads(res_drain2.stdout.strip())
+        self.assertEqual(len(msgs2), 3)
+        self.assertEqual({m["body"] for m in msgs2}, {"Broadcast 1", "Broadcast 2", "Broadcast 3"})
+
+        # 5. Queue case-insensitivity (enqueue with PascalCase, claim with lowercase, ack with UPPERCASE)
+        res_enq = self.run_cmd(["enqueue", "RenderTasks", "--subject", "Task 1", "--body", "render_job_101"],
+                               env_overrides={"RHIZO_AGENT_NAME": "Manager-Bot"})
+        task_id = res_enq.stdout.strip()
+
+        res_claim = self.run_cmd(["claim", "rendertasks", "--lease", "60", "--timeout", "1"],
+                                 env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_claim.returncode, 0)
+        claimed_task = json.loads(res_claim.stdout.strip())
+        self.assertEqual(claimed_task["id"], task_id)
+
+        res_ack = self.run_cmd(["ack", "RENDERTASKS", task_id])
+        self.assertEqual(res_ack.returncode, 0)
+        self.assertIn(f"ACK: {task_id}", res_ack.stdout)
+
+        # 6. Lock case-insensitivity
+        res_lock1 = self.run_cmd(["lock", "SharedDb", "30"],
+                                 env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_lock1.returncode, 0)
+        self.assertIn("LOCKED shareddb by worker-alpha", res_lock1.stdout)
+
+        # Attempt to acquire same lock with different casing from another worker
+        res_lock2 = self.run_cmd(["lock", "shareddb", "30"],
+                                 env_overrides={"RHIZO_AGENT_NAME": "Worker-Beta"})
+        self.assertNotEqual(res_lock2.returncode, 0)
+        self.assertIn("already held", res_lock2.stderr)
+
+        # Unlock with UPPERCASE
+        res_unlock = self.run_cmd(["unlock", "SHAREDDB"],
+                                  env_overrides={"RHIZO_AGENT_NAME": "worker-alpha"})
+        self.assertEqual(res_unlock.returncode, 0)
+        self.assertIn("UNLOCKED shareddb", res_unlock.stdout)
+
+        # 7. Decision case-insensitivity
+        res_prop = self.run_cmd(["decision", "propose", "DECISION-ALPHA", "--title", "Test Dec"],
+                                env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_prop.returncode, 0)
+
+        res_app = self.run_cmd(["decision", "approve", "decision-alpha"])
+        self.assertEqual(res_app.returncode, 0)
+
+        res_ver = self.run_cmd(["decision", "verify", "Decision-Alpha"])
+        self.assertEqual(res_ver.returncode, 0)
+        self.assertEqual(res_ver.stdout.strip(), "APPROVED")
+
+        # 8. Task lifecycle case-insensitivity
+        res_tc = self.run_cmd(["task", "create", "TASK-42", "--title", "Deploy pipeline"],
+                              env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_tc.returncode, 0)
+
+        res_tclaim = self.run_cmd(["task", "claim", "task-42", "--no-vine"],
+                                  env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_tclaim.returncode, 0)
+
+        res_tprog = self.run_cmd(["task", "progress", "Task-42", "--progress", "50%"],
+                                 env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_tprog.returncode, 0)
+
+        res_tcomp = self.run_cmd(["task", "complete", "TASK-42", "--skip-gate"],
+                                 env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_tcomp.returncode, 0)
+
+        res_tget = self.run_cmd(["task", "get", "task-42", "--json"])
+        self.assertEqual(res_tget.returncode, 0)
+        task_data = json.loads(res_tget.stdout.strip())
+        self.assertEqual(task_data["state"], "COMPLETED")
+
+        # 9. Leader election case-insensitivity
+        res_lacq = self.run_cmd(["leader", "acquire", "ORCHESTRATOR-ROLE", "--agent", "Worker-Alpha"])
+        self.assertEqual(res_lacq.returncode, 0)
+
+        res_lst = self.run_cmd(["leader", "status", "orchestrator-role"])
+        self.assertEqual(res_lst.returncode, 0)
+        lead_data = json.loads(res_lst.stdout.strip())
+        self.assertEqual(lead_data["leader"], "worker-alpha")
+
+        res_lres = self.run_cmd(["leader", "resign", "Orchestrator-Role", "--agent", "worker-alpha"])
+        self.assertEqual(res_lres.returncode, 0)
+
+        # 10. Floor control case-insensitivity
+        res_freq = self.run_cmd(["floor", "request", "ROUNDTABLE-ROOM"],
+                                env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_freq.returncode, 0)
+
+        res_fst = self.run_cmd(["floor", "status", "roundtable-room"])
+        self.assertEqual(res_fst.returncode, 0)
+        floor_data = json.loads(res_fst.stdout.strip())
+        self.assertEqual(floor_data["holder"], "worker-alpha")
+
+        res_fyield = self.run_cmd(["floor", "yield", "Roundtable-Room"],
+                                  env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_fyield.returncode, 0)
+
+        # 11. Blackboard case-insensitivity
+        res_bb_set = self.run_cmd(["blackboard", "set", "DESIGN-ROOM", "StatusKey", "Ready"])
+        self.assertEqual(res_bb_set.returncode, 0)
+
+        res_bb_get = self.run_cmd(["blackboard", "get", "design-room", "StatusKey"])
+        self.assertEqual(res_bb_get.returncode, 0)
+        self.assertEqual(res_bb_get.stdout.strip(), "Ready")
+
+        res_bb_clear = self.run_cmd(["blackboard", "clear", "Design-Room"])
+        self.assertEqual(res_bb_clear.returncode, 0)
+
+        # 12. Run cancellation case-insensitivity
+        res_cancel_set = self.run_cmd(["cancel", "RUN-999", "--reason", "Test cancel"],
+                                      env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
+        self.assertEqual(res_cancel_set.returncode, 0)
+
+        res_cancel_chk = self.run_cmd(["cancel", "check", "run-999"])
+        self.assertEqual(res_cancel_chk.returncode, 0)
+        self.assertIn("cancelled", res_cancel_chk.stdout)
+
+        res_cancel_clr = self.run_cmd(["cancel", "clear", "Run-999"])
+        self.assertEqual(res_cancel_clr.returncode, 0)
+
+        # 13. Ballot case-insensitivity
+        res_ballot_open = self.run_cmd(["ballot", "open", "BALLOT-VOTE-1", "--options", "yes,no", "--voters", "Worker-Alpha,Worker-Beta"])
+        self.assertEqual(res_ballot_open.returncode, 0)
+
+        res_ballot_cast = self.run_cmd(["ballot", "cast", "ballot-vote-1", "--vote", "yes", "--voter", "worker-alpha"])
+        self.assertEqual(res_ballot_cast.returncode, 0)
+
+        res_ballot_tally = self.run_cmd(["ballot", "tally", "Ballot-Vote-1", "--raw"])
+        self.assertEqual(res_ballot_tally.returncode, 0)
+        self.assertEqual(res_ballot_tally.stdout.strip(), "yes")
+
 
 if __name__ == "__main__":
     unittest.main()

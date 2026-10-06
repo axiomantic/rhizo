@@ -15,11 +15,13 @@ local lock_name = ARGV[2]
 if not lock_name or lock_name == "" then
     return redis.error_reply("ERR: Missing lock name")
 end
+lock_name = string.lower(lock_name)
 
 local owner = ARGV[3]
 if not owner or owner == "" then
     return redis.error_reply("ERR: Missing lock owner")
 end
+owner = string.lower(owner)
 
 local ttl = tonumber(ARGV[4]) or 30
 local with_fencing = ARGV[5] == "1"

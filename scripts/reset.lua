@@ -9,7 +9,7 @@ if not prefix or prefix == "" then
 end
 
 local phase = ARGV[2] or "all"
-local target_project = ARGV[3] or ""
+local target_project = string.lower(ARGV[3] or "")
 local shutdown_payload = ARGV[4] or ""
 
 local function safe_del(keys_to_del)
@@ -93,7 +93,7 @@ elseif phase == "purge" or phase == "all" then
             redis.call('SREM', prefix .. "active_agents", agent)
             local old_tags = redis.call('HGET', prefix .. "agent:" .. agent, 'tags') or ""
             for tag in string.gmatch(old_tags, "([^,]+)") do
-                local tr = string.match(tag, "^%s*(.-)%s*$")
+                local tr = string.lower(string.match(tag, "^%s*(.-)%s*$"))
                 if tr ~= "" then redis.call('SREM', prefix .. "tag:" .. tr, agent) end
             end
         end

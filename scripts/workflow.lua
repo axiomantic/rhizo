@@ -18,6 +18,7 @@ local flow_id = ARGV[3]
 if not flow_id or flow_id == "" then
     return redis.error_reply("ERR: Missing flow_id")
 end
+flow_id = string.lower(flow_id)
 
 local flow_key = prefix .. "workflow:{" .. flow_id .. "}"
 local flow_chan = prefix .. "channel:workflow:{" .. flow_id .. "}"
