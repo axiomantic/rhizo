@@ -1749,15 +1749,20 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         stderr.writeLine("[RE-ARM INSTRUCTION FOR CODING AGENT]")
         stderr.writeLine("Listener Identity: @" & name & " (this is YOU)")
         stderr.writeLine("Delivered Message: '" & id & "' from @" & fromAgent)
-        stderr.writeLine("To continue listening, relaunch this EXACT command as a separate background task (NOT a shell loop!):")
+        stderr.writeLine("To continue listening, relaunch this EXACT command using your capability tier (NOT a shell loop!):")
         stderr.writeLine("  Exact command: " & exactCmd)
+        stderr.writeLine("Capability-Tier Invocations (SKILL.md Section 3):")
         case harness
+        of "opencode", "pi":
+          stderr.writeLine("  - Tier 1 (In-Process Extension): In-process fiber handles listening automatically; DO NOT call listen.")
         of "antigravity":
-          stderr.writeLine("  Antigravity tool: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
+          stderr.writeLine("  - Tier 2 (Shell Daemon): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
         of "claude", "cursor", "copilot":
-          stderr.writeLine("  Claude tool: Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
+          stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
         else:
-          stderr.writeLine("  Harness tool: Launch '" & exactCmd & "' as single-shot background task")
+          stderr.writeLine("  - Tier 2 (Daemon Shell): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
+          stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
+          stderr.writeLine("  - Tier 4 (Synchronous Shell): Run '" & exactCmd & "' directly in foreground (or 'rhizo check-inbox')")
         stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
         stderr.writeLine("")
         stderr.writeLine("(To silence this notice, pass --quiet / -q, or set RHIZO_QUIET=1)")

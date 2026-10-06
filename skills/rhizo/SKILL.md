@@ -319,19 +319,25 @@ Every 'rhizo listen' execution MUST be a single-shot foreground command that ter
 **Why Bash Loops Are Strictly Forbidden**:
 When an agent or task tool executes `while true; do rhizo listen; done`, the subshell never terminates. The harness pauses indefinitely waiting for tool completion, trapping the message payload inside an unmonitored background log. The parent orchestrator never wakes up!
 
-**How to Re-Arm Correctly**:
+**How to Re-Arm by Capability Tier**:
 When `rhizo listen` delivers a message, it exits with code 0 and prints:
 ```text
 [RE-ARM INSTRUCTION FOR CODING AGENT]
 Listener Identity: @claude-worker-1 (this is YOU)
 Delivered Message: 'msg_104' from @orchestrator
-To continue listening, relaunch this EXACT command as a separate background task (NOT a shell loop!):
+To continue listening, relaunch this EXACT command using your capability tier (NOT a shell loop!):
   Exact command: rhizo listen claude-worker-1
+Capability-Tier Invocations (SKILL.md Section 3):
+  - Tier 1 (In-Process Extension): In-process fiber handles listening automatically; DO NOT call listen.
+  - Tier 2 (Shell Daemon): run_command(CommandLine="rhizo listen claude-worker-1", IsDaemon=true)
+  - Tier 3 (Subagent Task): Task(prompt="Execute 'rhizo listen claude-worker-1'. Block until 1 message arrives and exit immediately.", background=true)
+  - Tier 4 (Synchronous Shell): Run 'rhizo listen claude-worker-1' directly in foreground (or 'rhizo check-inbox')
 ```
-Use the literal command printed by the notice to re-arm in an independent task or subsequent turn:
-- **Claude Code**: `Task(prompt="Execute 'rhizo listen claude-worker-1'. Block until 1 message arrives and exit immediately.", background=true)`
-- **Antigravity**: `run_command(CommandLine="rhizo listen claude-worker-1", IsDaemon=true)`
-- **Interactive Shell**: Run `rhizo listen claude-worker-1` directly in foreground.
+Select the invocation matching your runtime environment's capability tier (defined in [Section 3: Capability-Based Listener Execution](#3-capability-based-listener-execution)):
+- **Tier 1 (In-Process Extension e.g. OpenCode, Pi)**: Native extension fiber is active in-process; never call any listen tool.
+- **Tier 2 (Shell Daemon e.g. Antigravity)**: Launch via `run_command(CommandLine="...", IsDaemon=true)` to maintain direct unblocked conversation flow.
+- **Tier 3 (Subagent Task e.g. Claude Code)**: Launch via `Task(prompt="Execute '...'. Block until 1 message arrives and exit immediately.", background=true)` as a single-shot execution.
+- **Tier 4 (Synchronous Foreground Shell)**: Run single-shot in foreground or poll non-blocking via `rhizo check-inbox`.
 
 ---
 
