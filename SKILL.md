@@ -93,6 +93,10 @@ Identity Allocation: Agent identity must be unique and collision-free across pro
 Never stage coordination metadata (*.lock, .rhizo.*) into Git. Keep all agent state in ~/.gitignore_global.
 </INVARIANT>
 
+<FORBIDDEN>
+Never Wrap 'rhizo listen' in a Bash Loop: Never execute 'while true; do rhizo listen; done' or 'until rhizo listen'. Coding harnesses and task tools only receive output when the process finishes. Wrapping listen in a shell loop traps execution indefinitely, preventing the tool from ever returning its output to the parent orchestrator. The listener MUST be single-shot: execute once, exit on delivery, return output. Re-arming must be initiated as a separate turn or subsequent task.
+</FORBIDDEN>
+
 ---
 
 ## 3. Capability-Based Listener Execution
@@ -132,6 +136,19 @@ Inspect your available runtime tools and execute the highest matching tier:
 | **Check Inbox** | `rhizo check-inbox [name]` | Non-blocking. Use only under Tier 4 synchronous shells. |
 | **Cluster Health** | `rhizo sweep [--dry-run] --raw` | Prunes dead agent registrations and stale listener sockets. |
 | **Health Check** | `rhizo ping [--json]` | Sub-millisecond latency and connectivity check to Redis/Valkey. |
+| **Sticky Advisory** | `rhizo remind add <text> [--priority <prio>] [--cadence <sec>] [--ttl <sec>]` | Enqueues sticky invariant with smart piggyback cadence and standalone fallback. |
+| **Inspect Advisories** | `rhizo remind list [--for <agent>] [--scope <scope>] [--json]` | Non-destructively inspects active advisories and per-worker delivery/ack status. |
+| **Acknowledge Advisory**| `rhizo remind ack <id> [--agent <name>]` | Confirms worker internalized directive. With `--once`, suppresses future banners. |
+| **Dismiss Advisory** | `rhizo remind dismiss <id>` | Immediately revokes advisory across entire cluster. |
+| **Trigger Fallback** | `rhizo remind tick [--json]` | Evaluates idle workers and dispatches standalone reminders if cadence elapsed. |
+| **Create Task** | `rhizo task create <id> --title <t> [--deliverables <files>]` | Creates first-class contract with explicit typed deliverables schema. |
+| **Claim Task** | `rhizo task claim <id> [--lease <sec>]` | Atomically claims task and provisions isolated Vine strand (`vine new <id>`). |
+| **Complete Task** | `rhizo task complete <id> [--gate-token <tok>]` | Verifies deliverables and Two-Key Gate before allowing merge to trunk. |
+| **Propose Decision** | `rhizo decision propose <id> --title <t> [--summary <s>]` | Submits architectural proposal to verifiable governance ledger. |
+| **Rule on Decision** | `rhizo decision approve\|reject <id> [--note/reason <text>]` | Operator-signed ruling. Replaces conversational prose spoofing. |
+| **Verify Decision** | `rhizo decision verify <id>` | Returns exit code 0 if APPROVED, 1 if not. Machine-readable gate. |
+| **Audit Trail** | `rhizo audit log --action <a> --details <d> / rhizo audit list` | Append-only stream recording coordination events and side-effects. |
+| **Virtual Mock Time** | `rhizo time advance <seconds> / rhizo time reset` | Manipulates Redis virtual time offset for deterministic, instantaneous TTL testing. |
 | **Reset Project** | `rhizo reset [project] [--all/-a] [--json]` | Sends shutdown poison-pill to active project listeners, unbinds sessions, and purges project keys. Pass `--all` to nuke entire namespace. |
 | **Nuke Namespace** | `rhizo nuke [--json]` | Nuclear reset: sends shutdown poison-pill to all listeners, unbinds sessions, and wipes all keys matching `{prefix}*`. |
 
@@ -212,6 +229,109 @@ rhizo cancel run-90210 --reason "User requested stop"
 # Worker loop awareness (exits 0 immediately if run is cancelled):
 rhizo claim queue:build:tasks --lease 60 --run-id run-90210
 ```
+
+### G. Sticky Reminders & Operational Advisories (`rhizo remind`)
+Prevent context drift, token amnesia, and late-joining agent ignorance without causing token thrash or banner fatigue:
+
+1. **Add Sticky Advisory**:
+```bash
+rhizo remind add "MUST run vine gate before completing any task" \
+  --priority CRITICAL \
+  --cadence 15m \
+  --ttl 4h
+```
+- **Opportunistic Piggyback**: When an agent drains or listens (`rhizo drain`, `rhizo listen`), Rhizo automatically attaches the top active advisories to the incoming message payload if the agent's cadence window has elapsed.
+- **Cadence Anti-Fatigue**: Reminders are not repeated on every message. Once shown, the agent enters a cooldown window (`--cadence 15m`), keeping messages clean.
+- **Standalone Fallback**: If an agent is idle or receives no peer messages across its cadence window, `rhizo remind tick` dispatches a standalone HMAC-signed broadcast into its inbox.
+
+2. **Non-Destructive Inspection (Side-Effect Free)**:
+```bash
+# Peek at active reminders and delivery/ack status for a worker without consuming:
+rhizo remind list --for claude-worker-1 --json
+```
+
+3. **Worker Acknowledgment & Dismissal**:
+```bash
+# Worker confirms it has internalized the directive:
+rhizo remind ack rem-1 --agent claude-worker-1
+
+# Operator or orchestrator revokes an advisory:
+rhizo remind dismiss rem-1
+```
+
+### H. First-Class Task Lifecycle & Leases (`rhizo task`)
+Replace prose-based task assignments with state-machine-governed contracts:
+
+1. **Create Task with Typed Deliverables Contract**:
+```bash
+rhizo task create task-auth-01 \
+  --title "Implement JWT refresh token rotation" \
+  --deliverables "src/auth/jwt.nim,tests/test_jwt.nim" \
+  --description "Rotate tokens every 15 minutes; store revoked tokens in Redis"
+```
+
+2. **Claim Task & Automatic Vine Strand Virtualization**:
+```bash
+# Atomically claims task with a 30-minute lease and provisions an isolated Vine strand:
+rhizo task claim task-auth-01 --lease 1800
+# Automatic stdout: [VINE INTEGRATION] Provisioned APFS CoW strand 'task-auth-01' via 'vine new task-auth-01'
+```
+
+3. **Progress Updates**:
+```bash
+rhizo task progress task-auth-01 --message "Implemented token refresh logic; running tests"
+```
+
+4. **Complete Task with Two-Key Gate Verification**:
+```bash
+# Requires passing 'vine gate' verification token before allowing completion:
+rhizo task complete task-auth-01 --gate-token "GATE_PASSED_v0.1"
+```
+
+### I. Cryptographic Operator Decisions & Rulings (`rhizo decision`)
+Replace conversational prose spoofing with an immutable, verifiable decision ledger:
+
+1. **Propose Architecture Decision**:
+```bash
+rhizo decision propose dec-db-01 \
+  --title "Migrate session store from Postgres to Redis" \
+  --summary "Reduces p99 latency from 45ms to 1.2ms under 10k concurrent agents"
+```
+
+2. **Operator Ruling (Approve / Reject)**:
+```bash
+rhizo decision approve dec-db-01 --note "Approved with 30-day data retention requirement"
+# Or:
+rhizo decision reject dec-db-01 --reason "Postgres transaction guarantees required for billing"
+```
+
+3. **Automated Verification in CI / Pre-Flight**:
+```bash
+# Exits code 0 if APPROVED, exits code 1 if not approved:
+rhizo decision verify dec-db-01 || { echo "Gate blocked: decision not approved"; exit 1; }
+```
+
+### J. Single-Shot Listener Discipline & Re-Arming Protocol
+<CRITICAL>
+Every 'rhizo listen' execution MUST be a single-shot foreground command that terminates immediately upon delivering ONE message.
+</CRITICAL>
+
+**Why Bash Loops Are Strictly Forbidden**:
+When an agent or task tool executes `while true; do rhizo listen; done`, the subshell never terminates. The harness pauses indefinitely waiting for tool completion, trapping the message payload inside an unmonitored background log. The parent orchestrator never wakes up!
+
+**How to Re-Arm Correctly**:
+When `rhizo listen` delivers a message, it exits with code 0 and prints:
+```text
+[RE-ARM INSTRUCTION FOR CODING AGENT]
+Listener Identity: @claude-worker-1 (this is YOU)
+Delivered Message: 'msg_104' from @orchestrator
+To continue listening, relaunch this EXACT command as a separate background task (NOT a shell loop!):
+  Exact command: rhizo listen claude-worker-1
+```
+Use the literal command printed by the notice to re-arm in an independent task or subsequent turn:
+- **Claude Code**: `Task(prompt="Execute 'rhizo listen claude-worker-1'. Block until 1 message arrives and exit immediately.", background=true)`
+- **Antigravity**: `run_command(CommandLine="rhizo listen claude-worker-1", IsDaemon=true)`
+- **Interactive Shell**: Run `rhizo listen claude-worker-1` directly in foreground.
 
 ---
 
