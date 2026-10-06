@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-06
+
+### Added
+- **First-Class Task Lifecycle & Governance (`rhizo task`)**:
+  - Added state-machine-governed task objects (`rhizo task create|claim|progress|complete|yield|get|list`) with monotonic status progression (`UNASSIGNED`, `CLAIMED`, `IN_PROGRESS`, `COMPLETED`, `YIELDED`).
+  - Enforced single-active-lease invariant per agent and typed deliverables contracts.
+  - Added automatic Vine APFS CoW strand provisioning on `rhizo task claim` (`vine new <task_id>`) and Two-Key Gate verification (`vine gate`) before task completion.
+- **Cryptographic Operator Decision Ledger (`rhizo decision`)**:
+  - Added immutable, verifiable governance rulings (`rhizo decision propose|approve|reject|verify|get|list`) with operator-signed HMAC status.
+  - Added gate verification via `rhizo decision verify <id>` (exiting 0 on approved, 1 on non-approved).
+- **Side-Effect Audit Stream (`rhizo audit`)**:
+  - Added append-only audit stream ledger (`rhizo:audit_trail`) via `rhizo audit log` and `rhizo audit list` for recording task, decision, and coordination events.
+- **Sticky Advisory & Reminder System (`rhizo remind`)**:
+  - Added sticky invariant management (`rhizo remind add|dismiss|ack|get|list|tick`) to prevent agent token amnesia and late-joining worker drift.
+  - Added smart opportunistic piggybacking to attach active advisories onto inbound `rhizo listen` and `rhizo drain` payloads when cadence windows elapse.
+  - Added per-agent anti-fatigue cooldowns (`--cadence`) and standalone fallback broadcasts (`rhizo remind tick`) for idle agents.
+  - Added non-destructive inspection (`rhizo remind list --for <agent> --json`) to peek at advisory delivery and acknowledgement status without consuming banners.
+- **Virtual Mock Time & Deterministic Invariant Testing (`rhizo time`)**:
+  - Added Redis virtual time offset manipulation (`rhizo time advance|reset|get`) across Lua scripts (`mock_time_offset`) for instantaneous, deterministic TTL and lease expiry testing.
+  - Added comprehensive 17-invariant test suite (`tests/test_coordination_invariants.py`).
+- **Universal Case-Insensitive Channel & Coordination Primitives**:
+  - Normalized agent identities, inbox addresses, multicast tags (`@tag`), work queues (`queue:<name>`), distributed locks (`lock:<name>`), pub/sub channels (`channel:<name>`), task IDs, decisions, ballots, and run cancellation tokens across 27 Redis Lua scripts and CLI.
+  - Senders, workers, and orchestrators can communicate regardless of casing variations without dropped messages or lease collisions.
+
+### Changed
+- **Decoupled Telemetry & Work State (`rhizo who`)**:
+  - Split overloaded `STATE` column in `rhizo who` into decoupled `LISTENER` (`LISTENING` / `DETACHED`) and `TASK_STATE` (`UNASSIGNED` / `HOLDING_LEASE <task_id>`) columns.
+  - Ceased defaulting unassigned workers to deceptive `"IDLE"`.
+- **Single-Shot Listener Discipline & Re-Arming Protocol**:
+  - Listener strictly exits 0 upon delivering one message to prevent unmonitored background subshell hangs.
+  - Added explicit listener identity notices (`Listener Identity: @<name> (this is YOU)`) and ready-to-run harness tool calls (`run_command` / `Task`) aligned with capability tiers (Tiers 1–4).
+- **Explicit Broadcast Scoping**:
+  - Required explicit `--scope all` or `--scope project`/`--tags` on broadcast commands, reporting exact recipient rosters and total counts.
+- **Delivery Feedback & Ergonomics**:
+  - `rhizo send` returns structured delivery feedback (`recipient_status`, `listener_attached`, `inbox_depth`) and warns when recipients have no active listener attached.
+  - `rhizo drain [count] [name]` supports polymorphic argument ordering and inspects agent registry entries case-insensitively.
+  - Injected `elapsed_seconds`, `age_human`, and `is_stale` (1hr+) flags into message envelopes.
+- **Causal Message Threading & Auto-Correlated Quorum**:
+  - Added `thread_id` and `in_reply_to` tracking to message envelopes.
+  - `rhizo reply` automatically fulfills `rhizo scatter` quorums without requiring manual request ID threading.
+
+### Fixed
+- **Identity Leakage & Silent Agent Pruning**:
+  - Deprecated shared global `current_agent` cross-agent leakage; sender identities are strictly process-bound via `RHIZO_AGENT_NAME`, session mappings, or `--from`.
+  - Expired agent heartbeats transition agents to `STALE` instead of executing destructive `SREM` and `DEL`, preserving metadata and group tag memberships.
+- **Anti-While-Loop & Detachment Supervision Guardrails**:
+  - Listener inspects parent process supervision in `checkSupervisionAttached`, aborting immediately if wrapped in `while true; do rhizo listen; done` or `until rhizo listen` shell loops, or if stdout is redirected to regular files / `nohup.out`.
+- **Decoupled Project Namespace**:
+  - Removed silent `pwd` basename defaulting; commands require explicit `--project` or `.rhizo.toml`.
+
 ## [0.1.12] - 2026-09-30
 
 ### Fixed

@@ -82,7 +82,7 @@ const
   taskLua*       = staticRead("../scripts/task.lua")
   decisionLua*   = staticRead("../scripts/decision.lua")
   reminderLua*   = staticRead("../scripts/reminder.lua")
-  RhizoVersion*  = "0.1.12"
+  RhizoVersion*  = "0.2.0"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -1580,7 +1580,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       var popRes: RedisList
       try:
         popRes = client.bRPop(@[inboxKey], waitSec)
-      except CatchableError as e:
+      except CatchableError:
         if not reconnectRedisClient(cfg.redisUrl, client, remaining, isForever):
           return # Timeout expired while disconnected
         # Re-register heartbeat & listener lock on new connection
@@ -1929,7 +1929,7 @@ proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: s
     var popRes: RedisList
     try:
       popRes = client.bRPop(@[queueKey], waitSec)
-    except CatchableError as e:
+    except CatchableError:
       if not reconnectRedisClient(cfg.redisUrl, client, remaining, isForever):
         return # Timeout expired while disconnected
       if workerName.len > 0:
@@ -2045,7 +2045,7 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
         try:
           let val = client.eval(claimLua, @[], @[cfg.prefix, normQueue, workerName, $leaseSec, "3"])
           res = formatRedisValue(val)
-        except CatchableError as e2:
+        except CatchableError:
           if not reconnectRedisClientMs(cfg.redisUrl, client, remainingMs, isForever):
             return
           continue
@@ -2062,7 +2062,7 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
           except CatchableError:
             discard
         continue
-    except CatchableError as e:
+    except CatchableError:
       if not reconnectRedisClientMs(cfg.redisUrl, client, remainingMs, isForever):
         return
       backoffMs = 250
