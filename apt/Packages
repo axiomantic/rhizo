@@ -1,5 +1,5 @@
 Package: rhizo
-Version: 0.2.5
+Version: 0.2.6
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -8,13 +8,13 @@ Description: Message exchange and routing for software agents over Redis
  Standalone CLI client for inter-agent communication using Redis data
  structures without an intermediate background daemon. Includes HMAC-SHA256
  authentication, dead-agent pruning, and optional AES-256-CBC encryption.
-Filename: rhizo_0.2.5_amd64.deb
-Size: 728650
-MD5sum: 838baec7d42f723813882f1a1e79b704
-SHA256: d300b6448f350f25a52f09e03387ed41b48b54277633546bb4367ca83c604051
+Filename: rhizo_0.2.6_amd64.deb
+Size: 743458
+MD5sum: 9fb3dda46781fbca0f2ee13b391790b2
+SHA256: 8f9e7880cec592331211346aae07ea3be950007c6cc5554a045051f952386f37
 
 Package: rhizo
-Version: 0.2.5
+Version: 0.2.6
 Section: utils
 Priority: optional
 Architecture: arm64
@@ -23,8 +23,8 @@ Description: Message exchange and routing for software agents over Redis
  Standalone CLI client for inter-agent communication using Redis data
  structures without an intermediate background daemon. Includes HMAC-SHA256
  authentication, dead-agent pruning, and optional AES-256-CBC encryption.
-Filename: rhizo_0.2.5_arm64.deb
-Size: 722856
-MD5sum: 206e7212494979a6272fefe8777b6a27
-SHA256: 97c684570b866da4a2595dcf7ddb3bd62e5d6d7604a3f9b4f48688d2d410b730
+Filename: rhizo_0.2.6_arm64.deb
+Size: 737064
+MD5sum: 7fbe0cffbd98cdd8d83f7a3245425468
+SHA256: 17e291b376a98aaa51675b53af689e703a97b613af05647f4a9bb80cd1454d08
 
