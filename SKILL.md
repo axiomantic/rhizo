@@ -180,9 +180,9 @@ Whenever an Orchestrator or sender dispatches work or awaits peer replies, THE F
 
 FORBIDDEN: Never conclude a turn after dispatching tasks without leaving an active background listener running. Yielding without a listener severs the swarm's physical lifeline, trapping worker replies in Redis and causing silent swarm stalls.
 
-Safety Net (Scheduled Timer Watchdog & Debouncer Protocol — Stepped Backoff & 4-Strike Cap):
-In harnesses supporting `schedule` (e.g. Google Antigravity), arm a debounced watchdog timer to ensure an orchestrator session is never abandoned if a listener fails to arm or terminates prematurely.
-- **Base Cadence & Stepped Backoff**:
+Safety Net (Scheduled Watchdog Protocol — ONLY for OpenAI Codex / ChatGPT):
+- **Antigravity & OpenCode Exemption**: In Google Antigravity (using background `run_command(..., WaitMsBeforeAsync=500)`) and OpenCode (using background ear), DO NOT schedule timers or cron tasks (`schedule(...)`). Antigravity's task manager natively and reactively resumes execution on process exit when `rhizo listen` delivers a message, with zero timer overhead.
+- **Codex / ChatGPT Watchdog Only**: In OpenAI Codex Desktop / CLI where background processes cannot reactively wake the harness, arm a scheduled watchdog timer or cron job using stepped backoff:
   - Initial / After Activity: Base 15 minutes (`DurationSeconds=900`).
   - Quiescent Check 1 (Streak 1): 30 minutes (`DurationSeconds=1800`).
   - Quiescent Check 2 (Streak 2): 60 minutes (`DurationSeconds=3600`).
@@ -195,18 +195,14 @@ In harnesses supporting `schedule` (e.g. Google Antigravity), arm a debounced wa
   3. Any outbound task dispatch (`rhizo send`, `rhizo enqueue`, `rhizo reply`).
   4. Any worker gate report or message receipt.
   5. Any operator interaction or new prompt in chat.
-- **Replace, Never Stack Invariant**:
-  Harnesses prohibit concurrent timers with `TimerCondition="any"`. Before setting a timer, inspect running tasks with `manage_task(Action='list')`. If an existing watchdog task is active (`toolName == "schedule"` or prompt includes `[RHIZO WATCHDOG]`), cancel it via `manage_task(Action='kill', TaskId=...)`.
 - **Stand Down Invariants**:
-  1. When all tasks in `implementation_plan.md` are complete (`- [x]` 100%), kill any running watchdog timer and do not reschedule.
+  1. When all tasks in `implementation_plan.md` are complete (`- [x]` 100%), cancel any running watchdog timer and do not reschedule.
   2. When the watchdog reaches `substatus: "MAX_STREAK_REACHED"` (streak 4/4), stand down and do not reschedule. The background listener process (`rhizo listen`) remains continuously active on Redis `BRPOP` and will wake the session on any new message.
-- **Zero-Token Happy Path**:
-  Because `TimerCondition="any"` is set, any arriving worker message or background task completion automatically cancels the timer early before it expires. The timer only fires if the orchestrator was silent and deaf for the full cadence duration.
-- **The Short Check (When Timer Fires)**:
+- **The Short Check (When Timer Fires in Codex)**:
   Run `rhizo watchdog check --agent <name> --json`.
   * If `ACTION_REQUIRED: REARM_LISTENER`: start `rhizo listen <name>` in background and schedule base timer (`DurationSeconds=900`).
   * If `ACTION_REQUIRED: UNREAD_MESSAGES`: drain messages with `rhizo drain 10 <name>`, start listener, and schedule base timer (`DurationSeconds=900`).
-  * If `OK: LISTENING`: listener is healthy; check `recommended_cadence`. If `next_action == "SCHEDULE_TIMER"`, schedule timer with `DurationSeconds=recommended_cadence` and return to sleep with minimal or no user-facing chat output.
+  * If `OK: LISTENING`: listener is healthy; check `recommended_cadence`. If `next_action == "SCHEDULE_TIMER"`, schedule timer with `DurationSeconds=recommended_cadence`.
   * If `STAND_DOWN: MAX_STREAK_REACHED` or `STAND_DOWN: IDLE`: stand down and do NOT reschedule.
 </CRITICAL>
 
