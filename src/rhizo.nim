@@ -83,7 +83,8 @@ const
   decisionLua*   = staticRead("../scripts/decision.lua")
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
-  RhizoVersion*  = "0.2.1"
+  watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
+  RhizoVersion*  = "0.2.2"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -119,6 +120,7 @@ let
   decisionSha*   = computeSha1(decisionLua)
   reminderSha*   = computeSha1(reminderLua)
   rerouteSha*    = computeSha1(rerouteLua)
+  watchdogInflightSha* = computeSha1(watchdogInflightLua)
 
 
 proc secureFilePermissions*(path: string) =
@@ -3517,6 +3519,176 @@ proc doReroute*(cfg: RhizoConfig, fromAgent, toAgent: string, mode: string = "al
   except CatchableError:
     return res
 
+proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput: bool = false, expectListening: bool = false): tuple[output: string, exitCode: int] =
+  var normName = sanitizeIdentifier(agentNameParam)
+  if normName.len == 0:
+    normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
+  if normName.len == 0:
+    let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
+    if fileExists(sessPath):
+      try:
+        let sNode = parseFile(sessPath)
+        if sNode.kind == JObject:
+          for k, v in sNode:
+            if v.kind == JObject and v.getOrDefault("status").getStr("") == "active":
+              normName = sanitizeIdentifier(v.getOrDefault("agent").getStr(""))
+              if normName.len > 0: break
+            elif v.kind == JString and v.getStr("").len > 0:
+              normName = sanitizeIdentifier(v.getStr(""))
+              break
+      except CatchableError: discard
+
+  if normName.len == 0:
+    let errStr = "Error: Missing required agent name for watchdog check. Usage: rhizo watchdog [check] [--agent <name>] [--json]"
+    if jsonOutput:
+      var j = newJObject()
+      j["error"] = %errStr
+      return ($j, 1)
+    return (errStr, 1)
+
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+
+  var probeTarget = normName
+  let aliasVal = try: client.hGet(cfg.prefix & "aliases", normName) except CatchableError: redisNil
+  var isAlias = false
+  if aliasVal != redisNil and aliasVal.len > 0:
+    probeTarget = sanitizeIdentifier(aliasVal)
+    isAlias = true
+
+  let isAlive = client.exists(cfg.prefix & "heartbeat:" & probeTarget)
+  let listenerVal = client.get(cfg.prefix & "listener:" & probeTarget)
+  let inboxDepth = try: client.lLen(cfg.prefix & "inbox:" & probeTarget) except CatchableError: 0
+
+  var hasListener = false
+  var listenerPid = 0
+  var listenerHost = ""
+  var pidAlive = false
+
+  if listenerVal != redisNil and listenerVal.len > 0:
+    try:
+      let lNode = parseJson(listenerVal)
+      hasListener = true
+      listenerPid = lNode.getOrDefault("pid").getInt(0)
+      listenerHost = lNode.getOrDefault("host").getStr("")
+      if listenerHost == getHostNameStr() and listenerPid > 0:
+        pidAlive = isPidAlive(listenerPid)
+      else:
+        pidAlive = true
+    except CatchableError:
+      discard
+
+  let listenerActive = hasListener and pidAlive
+
+  var tasksInFlight = 0
+  # 1. Count active/queued tasks in Redis
+  try:
+    let inflightRes = runLuaScript(cfg.redisUrl, watchdogInflightLua, watchdogInflightSha, [cfg.prefix])
+    tasksInFlight += parseInt(inflightRes.strip())
+  except CatchableError:
+    discard
+
+  # 2. Check local .vine.json for active strands in workspace
+  if fileExists(".vine.json"):
+    try:
+      let vj = parseFile(".vine.json")
+      if vj.hasKey("strands") and vj["strands"].kind == JObject:
+        for sname, sobj in vj["strands"]:
+          let st = sobj.getOrDefault("status").getStr("")
+          if st in ["PROVISIONED", "ACTIVE", "READY_FOR_WEAVE", "GATE_EVALUATING", "GATE_FAILED"]:
+            inc tasksInFlight
+    except CatchableError:
+      discard
+
+  # 3. Check sessions.json for active tasks
+  let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
+  if fileExists(sessPath):
+    try:
+      let sNode = parseFile(sessPath)
+      if sNode.kind == JObject:
+        for k, v in sNode:
+          if v.kind == JObject:
+            let st = v.getOrDefault("status").getStr("")
+            let tid = v.getOrDefault("task_id").getStr("")
+            if st != "closed" and tid.len > 0:
+              inc tasksInFlight
+    except CatchableError:
+      discard
+
+  var status = "OK"
+  var substatus = "LISTENING"
+  var actionRequired = false
+  var exitCode = 0
+  var recommendedCommand = "none"
+  var message = ""
+
+  if inboxDepth > 0:
+    status = "ACTION_REQUIRED"
+    substatus = "UNREAD_MESSAGES"
+    actionRequired = true
+    exitCode = 2
+    recommendedCommand = if not listenerActive: "rhizo listen " & normName else: "rhizo drain 10 " & normName
+    message = "Agent @" & normName & " has " & $inboxDepth & " unread message(s) waiting in inbox."
+  elif not listenerActive:
+    if expectListening or tasksInFlight > 0:
+      status = "ACTION_REQUIRED"
+      substatus = "REARM_LISTENER"
+      actionRequired = true
+      exitCode = 2
+      recommendedCommand = "rhizo listen " & normName
+      message = "Agent @" & normName & " has " & $tasksInFlight & " in-flight task(s), but listener is dead or not running."
+    else:
+      status = "STAND_DOWN"
+      substatus = "IDLE"
+      actionRequired = false
+      exitCode = 0
+      recommendedCommand = "none"
+      message = "Agent @" & normName & " is idle with zero unread messages and zero in-flight tasks. Listener not required."
+  else:
+    status = "OK"
+    substatus = "LISTENING"
+    actionRequired = false
+    exitCode = 0
+    recommendedCommand = "none"
+    message = "Agent @" & normName & " listener is active and healthy (PID " & $listenerPid & " on " & listenerHost & ")."
+
+  if jsonOutput:
+    var j = newJObject()
+    j["agent"] = %normName
+    if isAlias:
+      j["alias_of"] = %probeTarget
+    j["status"] = %status
+    j["substatus"] = %substatus
+    j["listener_active"] = %listenerActive
+    j["listener_registered"] = %hasListener
+    j["listener_pid"] = %listenerPid
+    j["listener_host"] = %listenerHost
+    j["listener_pid_alive"] = %pidAlive
+    j["heartbeat_active"] = %isAlive
+    j["inbox_depth"] = %inboxDepth
+    j["tasks_in_flight"] = %tasksInFlight
+    j["action_required"] = %actionRequired
+    j["recommended_command"] = %recommendedCommand
+    j["message"] = %message
+    return ($j, exitCode)
+
+  var outStr = "====================================================\n"
+  if isAlias:
+    outStr.add("RHIZO WATCHDOG CHECK: @" & normName & " (alias for @" & probeTarget & ")\n")
+  else:
+    outStr.add("RHIZO WATCHDOG CHECK: @" & normName & "\n")
+  outStr.add("====================================================\n")
+  outStr.add("Status             : " & status & " (" & substatus & ")\n")
+  outStr.add("Listener Active    : " & (if listenerActive: "YES (PID " & $listenerPid & " on " & listenerHost & ")" else: "NO") & "\n")
+  outStr.add("Inbox Depth        : " & $inboxDepth & " messages\n")
+  outStr.add("Tasks In Flight    : " & $tasksInFlight & "\n")
+  outStr.add("Action Required    : " & (if actionRequired: "YES" else: "NO") & "\n")
+  if recommendedCommand != "none":
+    outStr.add("Recommended Command: " & recommendedCommand & "\n")
+  outStr.add("Details            : " & message & "\n")
+  outStr.add("====================================================")
+  return (outStr, exitCode)
+
 # Main Entrypoint / CLI Router
 proc main() =
   installSignalHandlers()
@@ -3628,6 +3800,8 @@ proc main() =
     echo "  rhizo pub <channel> <message>"
     echo "  rhizo sub <channel> [timeout_sec]"
     echo "  rhizo who [-a|--all] [--json] [filter_tag]"
+    echo "  rhizo probe <agent> [--json]"
+    echo "  rhizo watchdog [check] [agent] [--agent <name>] [--expect-listening] [--json]"
     echo "  rhizo sweep [--dry-run] [--raw]"
     echo "  rhizo tag <add|remove|set> <tags> [name]"
     echo "  rhizo check-inbox [name]"
@@ -6040,6 +6214,34 @@ proc main() =
       stderr.writeLine("Usage: rhizo probe <agent> [--json]")
       quit(1)
     echo doProbe(cfg, targetAgent, jsonOut)
+
+  of "watchdog":
+    var subaction = "check"
+    var targetAgent = ""
+    var jsonOut = false
+    var expectListening = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["check", "status"]:
+        subaction = a
+      elif a in ["--json", "-j"]:
+        jsonOut = true
+      elif a in ["--expect-listening", "-e"]:
+        expectListening = true
+      elif a.startsWith("--agent="):
+        targetAgent = a[8..^1]
+      elif a in ["--agent", "-a"] and i + 1 < args.len:
+        targetAgent = args[i+1]
+        inc i
+      elif not a.startsWith("-"):
+        if targetAgent.len == 0:
+          targetAgent = a
+      inc i
+    let (resOutput, resExitCode) = doWatchdogCheck(cfg, targetAgent, jsonOut, expectListening)
+    echo resOutput
+    if resExitCode != 0:
+      quit(resExitCode)
 
   of "alias":
     if args.len < 2:

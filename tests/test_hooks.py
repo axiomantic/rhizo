@@ -83,8 +83,22 @@ class TestRhizoHooks(unittest.TestCase):
             # 4. Subsequent check is now empty
             code, out = self.run_hook("claude_stop_hook.py", {"session_id": "ses_123"}, env_overrides=env_overrides)
             self.assertEqual(out, {})
+
+            # 5. Tasks in flight but no listener: returns block decision to re-arm listener
+            subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "enqueue", "test_hook_q", "--subject", "Task in flight", "--body", '{"id":"t-hook-1"}'
+            ], check=True, env=self.env)
+
+            code, out = self.run_hook("claude_stop_hook.py", {"session_id": "ses_123"}, env_overrides=env_overrides)
+            self.assertEqual(out.get("decision"), "block")
+            self.assertIn("Rhizo listener missing", out.get("reason", ""))
+            self.assertIn("[RHIZO WATCHDOG WARNING]", out.get("hookSpecificOutput", {}).get("additionalContext", ""))
+
+            # Clean up queue
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}queue:test_hook_q", f"{TEST_PREFIX}queue:{{test_hook_q}}"], capture_output=True)
         finally:
-            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, f"{TEST_PREFIX}queue:test_hook_q", f"{TEST_PREFIX}queue:{{test_hook_q}}"], capture_output=True)
 
     def test_codex_stop_hook(self):
         agent = "test_codex_agent"

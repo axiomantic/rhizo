@@ -18,7 +18,7 @@ from pathlib import Path
 
 # Add hooks directory to path for hook_utils
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from hook_utils import resolve_agent_name, check_inbox, drain_inbox
+from hook_utils import resolve_agent_name, check_inbox, drain_inbox, check_watchdog
 
 
 def main():
@@ -38,22 +38,29 @@ def main():
 
     # Check unread count
     count = check_inbox(agent_name)
-    if count <= 0:
-        print("{}")
+    if count > 0:
+        messages_text = drain_inbox(agent_name, format_type="hook")
+        if messages_text:
+            output = {
+                "decision": "block",
+                "reason": messages_text
+            }
+            print(json.dumps(output))
+            return
+
+    # Check watchdog status: tasks in-flight with no active listener
+    watchdog = check_watchdog(agent_name)
+    if watchdog.get("status") == "ACTION_REQUIRED" and watchdog.get("substatus") == "REARM_LISTENER":
+        cmd = watchdog.get("recommended_command") or f"rhizo listen {agent_name}"
+        tasks_count = watchdog.get("tasks_in_flight", 0)
+        output = {
+            "decision": "block",
+            "reason": f"[RHIZO WATCHDOG WARNING] {tasks_count} task(s) are currently in-flight on the Rhizo bus, but no active listener was detected for @{agent_name}. Run '{cmd}' before ending your turn."
+        }
+        print(json.dumps(output))
         return
 
-    # Drain messages formatted for continuation prompt
-    messages_text = drain_inbox(agent_name, format_type="hook")
-    if not messages_text:
-        print("{}")
-        return
-
-    # In Codex, Stop with decision: "block" uses reason as the next prompt
-    output = {
-        "decision": "block",
-        "reason": messages_text
-    }
-    print(json.dumps(output))
+    print("{}")
 
 
 if __name__ == "__main__":

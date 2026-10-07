@@ -748,6 +748,74 @@ class TestCoordinationInvariants(unittest.TestCase):
         res_pub = self.run_cmd(["pub", "CHANNEL:METRICS", "heartbeat payload"])
         self.assertEqual(res_pub.returncode, 0)
 
+    def test_20_watchdog_liveness_check(self):
+        """Verify rhizo watchdog check across all 4 operational states."""
+        agent = "watchdog-agent-1"
+
+        # 1. Idle state (no tasks in flight, no unread messages, no listener)
+        # Should return STAND_DOWN (exit 0)
+        res_idle = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_idle.returncode, 0)
+        data_idle = json.loads(res_idle.stdout.strip())
+        self.assertEqual(data_idle["status"], "STAND_DOWN")
+        self.assertEqual(data_idle["substatus"], "IDLE")
+        self.assertFalse(data_idle["action_required"])
+        self.assertEqual(data_idle["recommended_command"], "none")
+
+        # 2. Unread messages state (inbox depth > 0)
+        # Send message to agent
+        res_send = self.run_cmd(["send", "--to", agent, "--subject", "Wake Up", "--body", "Work available", "--from", "sender-1"])
+        self.assertEqual(res_send.returncode, 0)
+
+        # Watchdog check must detect unread messages and require action (exit 2)
+        res_unread = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_unread.returncode, 2)
+        data_unread = json.loads(res_unread.stdout.strip())
+        self.assertEqual(data_unread["status"], "ACTION_REQUIRED")
+        self.assertEqual(data_unread["substatus"], "UNREAD_MESSAGES")
+        self.assertTrue(data_unread["action_required"])
+        self.assertEqual(data_unread["inbox_depth"], 1)
+        self.assertIn("rhizo listen", data_unread["recommended_command"])
+
+        # Drain message
+        res_drain = self.run_cmd(["drain", "1", agent, "--json"])
+        self.assertEqual(res_drain.returncode, 0)
+
+        # 3. Tasks in flight but no listener (enqueue task to queue)
+        res_enq = self.run_cmd(["enqueue", "render_queue", "--subject", "Render Frame", "--body", '{"id":"t-100"}'])
+        self.assertEqual(res_enq.returncode, 0)
+
+        # Watchdog check must detect in-flight tasks and require REARM_LISTENER (exit 2)
+        res_rearm = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_rearm.returncode, 2)
+        data_rearm = json.loads(res_rearm.stdout.strip())
+        self.assertEqual(data_rearm["status"], "ACTION_REQUIRED")
+        self.assertEqual(data_rearm["substatus"], "REARM_LISTENER")
+        self.assertTrue(data_rearm["action_required"])
+        self.assertGreater(data_rearm["tasks_in_flight"], 0)
+        self.assertEqual(data_rearm["recommended_command"], f"rhizo listen {agent}")
+
+        # 4. Explicit --expect-listening flag overrides idle
+        # Clean up queue
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}queue:render_queue", f"{TEST_PREFIX}queue:{{render_queue}}"], capture_output=True)
+        res_expect = self.run_cmd(["watchdog", "check", "--agent", agent, "--expect-listening", "--json"])
+        self.assertEqual(res_expect.returncode, 2)
+        data_expect = json.loads(res_expect.stdout.strip())
+        self.assertEqual(data_expect["status"], "ACTION_REQUIRED")
+        self.assertEqual(data_expect["substatus"], "REARM_LISTENER")
+
+        # 5. Active listener state (OK, exit 0)
+        # Register a mock listener in Redis
+        listener_payload = json.dumps({"pid": os.getpid(), "host": "127.0.0.1", "started": int(time.time())})
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SETEX", f"{TEST_PREFIX}listener:{agent}", "60", listener_payload], check=True)
+        res_ok = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_ok.returncode, 0)
+        data_ok = json.loads(res_ok.stdout.strip())
+        self.assertEqual(data_ok["status"], "OK")
+        self.assertEqual(data_ok["substatus"], "LISTENING")
+        self.assertTrue(data_ok["listener_active"])
+        self.assertFalse(data_ok["action_required"])
+
 
 if __name__ == "__main__":
     unittest.main()

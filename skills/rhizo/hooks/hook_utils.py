@@ -149,3 +149,21 @@ def drain_inbox(agent_name: str, format_type: str = "hook", count: int = 50) -> 
         pass
     return ""
 
+
+def check_watchdog(agent_name: str, expect_listening: bool = False) -> dict:
+    """Calls rhizo watchdog check and returns parsed status dict."""
+    if not agent_name:
+        return {}
+    bin_path = find_rhizo_bin()
+    try:
+        args = [bin_path, "watchdog", "check", "--agent", agent_name, "--json"]
+        if expect_listening:
+            args.append("--expect-listening")
+        res = subprocess.run(args, capture_output=True, text=True, timeout=5)
+        if res.stdout.strip():
+            return json.loads(res.stdout.strip())
+    except Exception:
+        pass
+    return {}
+
+

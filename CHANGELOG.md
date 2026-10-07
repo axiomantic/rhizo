@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-10-06
+
+### Added
+- **Orchestrator Self-Audit Watchdog (`rhizo watchdog check`)**:
+  - Implemented `rhizo watchdog [check] [agent] [--agent <name>] [--json] [--expect-listening]` to inspect listener registration, host/PID liveness, unread inbox backlog, and in-flight tasks/leases across Redis queues and workspaces (`scripts/watchdog_inflight.lua`).
+  - Added structured exit codes (`0` for `OK` / `STAND_DOWN`, `2` for `ACTION_REQUIRED: REARM_LISTENER` or `ACTION_REQUIRED: UNREAD_MESSAGES`).
+- **Scheduled Timer Watchdog & Debouncer Protocol (GVR-014)**:
+  - Codified the 15-minute debounced scheduled timer protocol in `orchestrate-swarm` and `rhizo` skills for harnesses supporting `schedule` (e.g. Google Antigravity).
+  - Enforced "Replace, Never Stack" debouncer discipline (`manage_task(Action='kill')` before scheduling new timer) on task dispatch, worker reports, and plan updates.
+  - Zero-token happy path: incoming messages satisfy `TimerCondition="any"` and cancel the timer before it ever fires.
+- **Hook Context Rider Hardening**:
+  - Enhanced `claude_stop_hook.py`, `codex_stop_hook.py`, and `agy_stop_hook.py` with `check_watchdog` to block turn completion and direct the agent to start `rhizo listen` if in-flight tasks exist without an active listener.
+
 ## [0.2.1] - 2026-10-06
 
 ### Added

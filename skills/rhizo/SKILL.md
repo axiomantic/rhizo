@@ -126,10 +126,27 @@ Whenever an Orchestrator or sender dispatches work or awaits peer replies, THE F
 
 FORBIDDEN: Never conclude a turn after dispatching tasks without leaving an active background listener running. Yielding without a listener severs the swarm's physical lifeline, trapping worker replies in Redis and causing silent swarm stalls.
 
-Safety Net (Belt-and-Suspenders):
-Whenever dispatching batches or entering long wait states, set a fallback schedule timer:
-`schedule(DurationSeconds=120, Prompt="Check swarm liveness: run rhizo who and rhizo probe", TimerCondition="any")`
-If worker messages arrive early, the message satisfies the condition and cancels the timer. If no message arrives or the listener stalls, the timer wakes the orchestrator within 2 minutes instead of stalling indefinitely.
+Safety Net (Scheduled Timer Watchdog & Debouncer Protocol):
+In harnesses supporting `schedule` (e.g. Google Antigravity), arm a debounced watchdog timer to ensure an orchestrator session is never abandoned if a listener fails to arm or terminates prematurely.
+- **Cadence**: 15 minutes (`DurationSeconds=900`, range 10m–30m / 600s–1800s). Defaulting to 15m avoids slurping token budgets while guaranteeing a 15m upper bound on any stall.
+- **Replace, Never Stack Invariant**:
+  Harnesses prohibit concurrent timers with `TimerCondition="any"`. Before setting a timer, inspect running tasks with `manage_task(Action='list')`. If an existing watchdog task is active (`toolName == "schedule"` or prompt includes `[RHIZO WATCHDOG]`), cancel it via `manage_task(Action='kill', TaskId=...)`.
+- **Debounce Triggers (Early and Often)**:
+  Run the debouncer subroutine on:
+  1. Task Dispatch (`rhizo send`, `rhizo enqueue`).
+  2. Worker Message / Gate Report receipt.
+  3. Implementation Plan updates (`implementation_plan.md` checkboxes).
+  4. Watchdog Wakeup turn (if tasks are still in flight).
+- **Stand Down Invariant**:
+  When all tasks in `implementation_plan.md` are complete (`- [x]` 100%), kill any running watchdog timer and do not reschedule.
+- **Zero-Token Happy Path**:
+  Because `TimerCondition="any"` is set, any arriving worker message or background task completion automatically cancels the timer early before it expires. The timer only fires if the orchestrator was silent and deaf for a full 15 minutes.
+- **The Short Check (When Timer Fires)**:
+  Run `rhizo watchdog check --agent <name> --json`.
+  * If `ACTION_REQUIRED: REARM_LISTENER`: start `rhizo listen <name>` in background and debounce timer.
+  * If `ACTION_REQUIRED: UNREAD_MESSAGES`: drain messages with `rhizo drain 10 <name>`, start listener, and debounce.
+  * If `OK: LISTENING`: listener is healthy; debounce timer and return to sleep.
+  * If `STAND_DOWN: IDLE`: no tasks in flight; stand down.
 </CRITICAL>
 
 ---
@@ -373,6 +390,25 @@ Select the invocation matching your runtime environment's capability tier (defin
 - **Tier 2 (Shell Daemon e.g. Antigravity)**: Launch via `run_command(CommandLine="...", IsDaemon=true)` to maintain direct unblocked conversation flow.
 - **Tier 3 (Subagent Task e.g. Claude Code)**: Launch via `Task(prompt="Execute '...'. Block until 1 message arrives and exit immediately.", background=true)` as a single-shot execution.
 - **Tier 4 (Synchronous Foreground Shell)**: Run single-shot in foreground or poll non-blocking via `rhizo check-inbox`.
+
+### K. Health Probing & Watchdog Checks (`rhizo probe`, `rhizo watchdog`)
+
+1. **Agent Health Probe (`rhizo probe`)**:
+Assess peer liveness, heartbeat age, registered listener PID/host, and unread inbox depth:
+```bash
+rhizo probe <agent> [--json]
+```
+
+2. **Self-Audit Watchdog Check (`rhizo watchdog check`)**:
+Inspect whether the calling session or target agent should be listening, whether work is currently in flight, and detect silent stall conditions:
+```bash
+rhizo watchdog check [--agent <name>] [--json] [--expect-listening]
+```
+Exit Codes & Verdicts:
+- `0` (`OK` / `LISTENING`): Active listener process healthy and verified.
+- `0` (`STAND_DOWN` / `IDLE`): Zero in-flight tasks and zero unread messages. Stand down; listener not required.
+- `2` (`ACTION_REQUIRED` / `REARM_LISTENER`): In-flight tasks exist but listener is dead or missing. Run recommended command `rhizo listen <name>`.
+- `2` (`ACTION_REQUIRED` / `UNREAD_MESSAGES`): Unconsumed inbox messages waiting. Drain and re-arm listener.
 
 ---
 
