@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-10-07
+
+### Fixed
+- **Work Item State Machine Monotonicity Guards (`scripts/task.lua`)**:
+  - Added strict state validation in `rhizo task claim`: prevents claiming tasks in `BLOCKED` (waiting on incomplete DAG dependencies), `COMPLETED`, `READY_TO_WEAVE`, and `DEAD_LETTER` states.
+  - Added existence check in `rhizo task progress` to prevent creating phantom unindexed task keys in Redis when referencing non-existent task IDs.
+  - Expanded orchestrator permission checks in `rhizo task complete` to accept project-scoped orchestrators (e.g. `<project>-orchestrator`) in addition to bare `orchestrator`.
+- **Per-Agent Local Task Isolation (`src/rhizo.nim`)**:
+  - Scoped local task mirroring to `~/.config/rhizo/current_task_<agent>.json` with backwards-compatible fallback to `current_task.json`.
+  - Prevents race conditions, state clobbering, and spurious hook blocks when multiple worker agents operate concurrently on the same local host.
+  - Wired per-agent path resolution across `doSend`, `doListen`, `doHookCodexStop`, `task claim`, `task complete`, and `task yield`.
+- **Doorbell Wakeup IDE Buffer Safety (`rhizo poke`)**:
+  - Restricted raw keystroke injection (`cmd & return`) in System Events fallback exclusively to recognized terminal emulators (`alacritty`, `kitty`, `wezterm`, `hyper`, `warp`).
+  - Replaced raw keystroke injection for general GUI/IDE applications (Antigravity, Cursor, VS Code) with non-destructive macOS native notifications (`display notification ... with title "Rhizo Doorbell Wakeup"`), eliminating code buffer contamination while preserving operator notification.
+- **Terminal Title Sanitization (`rhizo title`)**:
+  - Added control character sanitization (filtering chars `< ' '` and `\x7f`) and disabled ANSI escape sequence output when `TERM=dumb`.
+
 ## [0.2.9] - 2026-10-07
 
 ### Added

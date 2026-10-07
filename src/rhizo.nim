@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.9"
+  RhizoVersion*  = "0.2.10"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -132,11 +132,15 @@ proc secureFilePermissions*(path: string) =
 
 proc setTerminalTitle*(title: string, force: bool = false) =
   try:
+    if not force and getEnv("TERM", "") == "dumb": return
+    var cleanTitle = ""
+    for c in title:
+      if c >= ' ' and c != '\x7f': cleanTitle.add(c)
     # Standard ANSI OSC 0 escape sequence: sets both window title and icon/tab name.
     # Write to stderr so stdout remains clean for piping and JSON consumers.
     # Only emit when attached to a TTY (or forced) so captured non-interactive pipes remain 0 bytes.
     if force or isatty(stderr):
-      stderr.write("\e]0;" & title & "\a")
+      stderr.write("\e]0;" & cleanTitle & "\a")
       stderr.flushFile()
   except CatchableError:
     discard
@@ -190,6 +194,14 @@ proc sanitizeIdentifier*(raw: string): string =
       continue
 
   return s.toLowerAscii
+
+proc currentTaskFilePath*(agentName: string = ""): string =
+  let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+  let cleanName = sanitizeIdentifier(agentName)
+  if cleanName.len > 0:
+    return rhizoCfgDir / ("current_task_" & cleanName & ".json")
+  else:
+    return rhizoCfgDir / "current_task.json"
 
 proc getOpenSslExe*(): string =
   let envExe = getEnv("RHIZO_OPENSSL_BIN", getEnv("OPENSSL_BIN", ""))
@@ -1477,10 +1489,12 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
 
   # Causal clearing of current_task on reply or outbound progress message
   if msgType in ["reply", "progress", "complete"]:
-    let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
-    let curTaskFile = rhizoCfgDir / "current_task.json"
+    let curTaskFile = currentTaskFilePath(normFrom)
     if fileExists(curTaskFile):
       try: removeFile(curTaskFile) except CatchableError: discard
+    let legacyTaskFile = currentTaskFilePath("")
+    if fileExists(legacyTaskFile):
+      try: removeFile(legacyTaskFile) except CatchableError: discard
     try:
       var client = connectRedis(cfg.redisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -1877,10 +1891,9 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         discard
 
       # Mirror active delivery to local disk stamp for sub-millisecond hook inspection
-      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
       try:
-        createDir(rhizoCfgDir)
-        writeFile(rhizoCfgDir / "current_task.json", $parsed)
+        createDir(getHomeDir() / ".config" / "rhizo")
+        writeFile(currentTaskFilePath(name), $parsed)
       except CatchableError:
         discard
 
@@ -3742,9 +3755,16 @@ on run argv
     end try
   end if
 
-  -- 4. General GUI / IDE windows via System Events (Antigravity, Cursor, VS Code, Claude, etc.)
+  -- 4. Dedicated Terminal Emulators and GUI Windows via System Events
+  set termEmulators to {"alacritty", "kitty", "wezterm", "hyper", "warp"}
   repeat with pName in runningProcs
     try
+      set pLower to pName as text
+      set isTerm to false
+      repeat with termApp in termEmulators
+        if pLower contains termApp then set isTerm to true
+      end repeat
+
       tell application "System Events"
         tell process pName
           repeat with w in (every window)
@@ -3752,7 +3772,11 @@ on run argv
               if not isDry then
                 set frontmost to true
                 perform action "AXRaise" of w
-                keystroke cmd & return
+                if isTerm then
+                  keystroke cmd & return
+                else
+                  display notification "Worker @" & target & " directive: " & cmd with title "Rhizo Doorbell Wakeup"
+                end if
               end if
               return (pName as text) & "::" & (name of w)
             end if
@@ -4163,12 +4187,20 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
     return "{}"
 
   # 0. Active unacknowledged work item check (Local stamp + Redis state)
-  let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
-  let currentTaskFile = rhizoCfgDir / "current_task.json"
+  let agentTaskFile = currentTaskFilePath(probeTarget)
+  let legacyTaskFile = currentTaskFilePath("")
   var pendingTaskPayload = ""
-  if fileExists(currentTaskFile):
+  if fileExists(agentTaskFile):
     try:
-      let rawStamp = readFile(currentTaskFile).strip()
+      let rawStamp = readFile(agentTaskFile).strip()
+      let sNode = parseJson(rawStamp)
+      let owner = sNode.getOrDefault("owner").getStr(sNode.getOrDefault("target").getStr(sNode.getOrDefault("to").getStr("")))
+      if owner.len == 0 or sanitizeIdentifier(owner) == probeTarget:
+        pendingTaskPayload = rawStamp
+    except CatchableError: discard
+  elif fileExists(legacyTaskFile):
+    try:
+      let rawStamp = readFile(legacyTaskFile).strip()
       let sNode = parseJson(rawStamp)
       let owner = sNode.getOrDefault("owner").getStr(sNode.getOrDefault("target").getStr(sNode.getOrDefault("to").getStr("")))
       if owner.len == 0 or sanitizeIdentifier(owner) == probeTarget:
@@ -6394,16 +6426,15 @@ proc main() =
         quit(1)
 
       # Mirror claimed task locally
-      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
       try:
-        createDir(rhizoCfgDir)
+        createDir(getHomeDir() / ".config" / "rhizo")
         var tObj = newJObject()
         tObj["id"] = %taskId
         tObj["owner"] = %worker
         tObj["state"] = %"IN_PROGRESS"
         tObj["lease_sec"] = %leaseSec
         tObj["strand_path"] = %strandPath
-        writeFile(rhizoCfgDir / "current_task.json", $tObj)
+        writeFile(currentTaskFilePath(worker), $tObj)
       except CatchableError: discard
 
       doAuditLog(cfg, worker, "task.claim", taskId & " (lease " & $leaseSec & "s)")
@@ -6532,10 +6563,12 @@ proc main() =
         quit(1)
 
       # Clear local mirror
-      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
-      let curTaskFile = rhizoCfgDir / "current_task.json"
+      let curTaskFile = currentTaskFilePath(worker)
       if fileExists(curTaskFile):
         try: removeFile(curTaskFile) except CatchableError: discard
+      let legacyTaskFile = currentTaskFilePath("")
+      if fileExists(legacyTaskFile):
+        try: removeFile(legacyTaskFile) except CatchableError: discard
 
       doAuditLog(cfg, worker, "task.complete", taskId & (if gateToken.len > 0: " (" & gateToken & ")" else: ""))
       try:
@@ -6573,10 +6606,12 @@ proc main() =
         stderr.writeLine(res)
         quit(1)
 
-      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
-      let curTaskFile = rhizoCfgDir / "current_task.json"
-      if fileExists(curTaskFile):
-        try: removeFile(curTaskFile) except CatchableError: discard
+      let yieldTaskFile = currentTaskFilePath(worker)
+      if fileExists(yieldTaskFile):
+        try: removeFile(yieldTaskFile) except CatchableError: discard
+      let legacyYieldFile = currentTaskFilePath("")
+      if fileExists(legacyYieldFile):
+        try: removeFile(legacyYieldFile) except CatchableError: discard
 
       doAuditLog(cfg, worker, "task.yield", taskId & (if reason.len > 0: ": " & reason else: ""))
       echo "YIELDED task '" & taskId & "'"

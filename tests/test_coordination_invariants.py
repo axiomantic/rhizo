@@ -913,12 +913,22 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(data_c["state"], "BLOCKED")
         self.assertIn(task_parent, data_c["depends_on"])
 
+        # Invariant HIGH-1: Attempting to claim a BLOCKED task MUST fail
+        res_blocked_claim = self.run_cmd(["task", "claim", task_child, "--worker", agent_child, "--no-vine"])
+        self.assertNotEqual(res_blocked_claim.returncode, 0)
+        self.assertIn("BLOCKED by incomplete dependencies", res_blocked_claim.stderr)
+
         # Claim and complete parent task
         res_p_claim = self.run_cmd(["task", "claim", task_parent, "--worker", agent_parent, "--lease", "60", "--no-vine"])
         self.assertEqual(res_p_claim.returncode, 0)
 
         res_p_comp = self.run_cmd(["task", "complete", task_parent, "--worker", agent_parent])
         self.assertEqual(res_p_comp.returncode, 0)
+
+        # Invariant HIGH-1: Attempting to re-claim a COMPLETED task MUST fail
+        res_comp_claim = self.run_cmd(["task", "claim", task_parent, "--worker", agent_parent, "--no-vine"])
+        self.assertNotEqual(res_comp_claim.returncode, 0)
+        self.assertIn("already COMPLETED", res_comp_claim.stderr)
 
         # Invariant check: Parent is COMPLETED, Child is AUTOMATICALLY promoted to QUEUED!
         res_c_get2 = self.run_cmd(["task", "get", task_child, "--json"])
@@ -940,6 +950,11 @@ class TestCoordinationInvariants(unittest.TestCase):
         res_prog = self.run_cmd(["task", "progress", task_child, "Implemented unit tests", "--worker", agent_child])
         self.assertEqual(res_prog.returncode, 0)
 
+        # Invariant MEDIUM-1: Progress update on non-existent task MUST fail
+        res_prog_nonexist = self.run_cmd(["task", "progress", "phantom-task-nonexistent", "Should fail", "--worker", agent_child])
+        self.assertNotEqual(res_prog_nonexist.returncode, 0)
+        self.assertIn("does not exist", res_prog_nonexist.stderr)
+
         # Gate Report
         res_gate = self.run_cmd(["task", "gate-report", task_child, "--gate-token", "GATE-OK-SHA-999", "--worker", agent_child])
         self.assertEqual(res_gate.returncode, 0)
@@ -948,16 +963,29 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(data_c3["state"], "READY_TO_WEAVE")
         self.assertEqual(data_c3["gate_token"], "GATE-OK-SHA-999")
 
+        # Invariant HIGH-1: Attempting to claim a READY_TO_WEAVE task MUST fail
+        res_weave_claim = self.run_cmd(["task", "claim", task_child, "--worker", "another-worker", "--no-vine"])
+        self.assertNotEqual(res_weave_claim.returncode, 0)
+        self.assertIn("READY_TO_WEAVE", res_weave_claim.stderr)
+
         # Complete
         res_c_comp = self.run_cmd(["task", "complete", task_child, "--worker", agent_child])
         self.assertEqual(res_c_comp.returncode, 0)
         res_c_curr2 = self.run_cmd(["task", "current", agent_child, "--json"])
         self.assertEqual(res_c_curr2.stdout.strip(), "{}")
 
-        # 4. Turn-End Codex Stop Hook Verification with local current_task.json
+        # Invariant HIGH-3: Project-scoped orchestrator can complete any worker's task
+        task_orch_test = f"task-orch-{int(time.time()*1000)}"
+        self.run_cmd(["task", "create", task_orch_test, "--title", "Orchestrator Complete Test"])
+        self.run_cmd(["task", "claim", task_orch_test, "--worker", "sub-worker-1", "--no-vine"])
+        res_orch_comp = self.run_cmd(["task", "complete", task_orch_test, "--worker", "myproj-orchestrator"])
+        self.assertEqual(res_orch_comp.returncode, 0)
+
+        # 4. Turn-End Codex Stop Hook Verification with local current_task.json and per-agent isolation
         rhizo_dir = os.path.join(self.test_home, ".config", "rhizo")
         os.makedirs(rhizo_dir, exist_ok=True)
         task_stamp_file = os.path.join(rhizo_dir, "current_task.json")
+        worker_a_file = os.path.join(rhizo_dir, "current_task_worker_a.json")
 
         # Negative control: when current_task.json exists, hook MUST BLOCK
         mock_task = {"id": "pending-task-1", "subject": "Fix issue", "body": "Do work", "state": "DELIVERED"}
@@ -978,6 +1006,24 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(res_hook_pass.returncode, 0)
         data_pass = json.loads(res_hook_pass.stdout.strip())
         self.assertNotEqual(data_pass.get("decision"), "block")
+
+        # Invariant HIGH-2: Per-agent local isolation between concurrent agents
+        mock_task_a = {"id": "task-a", "subject": "Work A", "body": "...", "state": "DELIVERED", "owner": "worker_a"}
+        with open(worker_a_file, "w") as f:
+            json.dump(mock_task_a, f)
+
+        # Worker A MUST be blocked by its own current_task_worker_a.json
+        res_hook_a = self.run_cmd(["hook", "codex-stop", "--agent", "worker_a"])
+        self.assertEqual(res_hook_a.returncode, 0)
+        self.assertEqual(json.loads(res_hook_a.stdout.strip()).get("decision"), "block")
+
+        # Worker B (independent agent) MUST NOT be blocked by Worker A's file
+        res_hook_b = self.run_cmd(["hook", "codex-stop", "--agent", "worker_b"])
+        self.assertEqual(res_hook_b.returncode, 0)
+        self.assertNotEqual(json.loads(res_hook_b.stdout.strip()).get("decision"), "block")
+
+        if os.path.exists(worker_a_file):
+            os.remove(worker_a_file)
 
     def test_22_bare_role_project_scoping(self):
         """Verify that bare generic roles (architect, orchestrator, etc.) are never used bare and always project-scoped."""

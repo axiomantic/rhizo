@@ -173,6 +173,23 @@ elseif action == "claim" then
     local current_owner = redis.call('HGET', task_key, "owner") or ""
     local lease_until = tonumber(redis.call('HGET', task_key, "lease_until") or 0)
 
+    -- Invariant: Tasks blocked by DAG dependencies cannot be claimed
+    if current_state == "BLOCKED" then
+        local deps = redis.call('HGET', task_key, "depends_on") or ""
+        return redis.error_reply("ERR: Cannot claim task '" .. task_id .. "': task is BLOCKED by incomplete dependencies (" .. deps .. ")")
+    end
+
+    -- Invariant: Monotonic terminal states cannot be re-claimed
+    if current_state == "COMPLETED" then
+        return redis.error_reply("ERR: Cannot claim task '" .. task_id .. "': task is already COMPLETED")
+    end
+    if current_state == "READY_TO_WEAVE" then
+        return redis.error_reply("ERR: Cannot claim task '" .. task_id .. "': task is in READY_TO_WEAVE awaiting trunk merge")
+    end
+    if current_state == "DEAD_LETTER" then
+        return redis.error_reply("ERR: Cannot claim task '" .. task_id .. "': task is in DEAD_LETTER queue (max retries exceeded)")
+    end
+
     -- Active lease lock check
     if current_state == "IN_PROGRESS" and current_owner ~= "" and current_owner ~= worker and now < lease_until then
         return redis.error_reply("ERR: Task '" .. task_id .. "' is currently claimed by '" .. current_owner .. "' (lease active for " .. (lease_until - now) .. "s)")
@@ -204,6 +221,10 @@ elseif action == "progress" then
     local renew_lease = tonumber(ARGV[6]) or 300
 
     local task_key = prefix .. "task:" .. task_id
+    if redis.call('EXISTS', task_key) == 0 then
+        return redis.error_reply("ERR: Task '" .. task_id .. "' does not exist")
+    end
+
     local current_owner = redis.call('HGET', task_key, "owner") or ""
     if current_owner ~= "" and current_owner ~= worker then
         return redis.error_reply("ERR: Worker '" .. worker .. "' does not own task '" .. task_id .. "'")
@@ -242,7 +263,8 @@ elseif action == "complete" then
     end
 
     local current_owner = redis.call('HGET', task_key, "owner") or ""
-    if current_owner ~= "" and current_owner ~= worker and worker ~= "orchestrator" and worker ~= "" then
+    local is_orchestrator = (worker == "orchestrator" or string.find(worker, "orchestrator") ~= nil)
+    if current_owner ~= "" and current_owner ~= worker and not is_orchestrator and worker ~= "" then
         -- Allow orchestrator or owner to complete
         return redis.error_reply("ERR: Worker '" .. worker .. "' does not own task '" .. task_id .. "'")
     end
