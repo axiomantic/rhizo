@@ -28,7 +28,7 @@ proc getHostNameStr*(): string =
     if h.len > 0: return h
   except Exception:
     discard
-  return getEnv("HOSTNAME", getEnv("COMPUTERNAME", "localhost"))
+  return getEnv("RHIZO_HOSTNAME", getEnv("HOSTNAME", getEnv("COMPUTERNAME", "localhost")))
 
 # OpenSSL C-bindings for native cryptographic operations
 type
@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.2"
+  RhizoVersion*  = "0.2.3"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -181,7 +181,7 @@ proc sanitizeIdentifier*(raw: string): string =
   return s.toLowerAscii
 
 proc getOpenSslExe*(): string =
-  let envExe = getEnv("OPENSSL_BIN", "")
+  let envExe = getEnv("RHIZO_OPENSSL_BIN", getEnv("OPENSSL_BIN", ""))
   if envExe.len > 0 and fileExists(envExe):
     return envExe
   let found = findExe("openssl")
@@ -200,13 +200,13 @@ proc getOpenSslExe*(): string =
 proc getSecret*(cfg: RhizoConfig = RhizoConfig()): string =
   if cfg.secret.len > 0:
     return cfg.secret
-  let envSecret = getEnv("RHIZO_SECRET", getEnv("RHIZO_SECRET", ""))
+  let envSecret = getEnv("RHIZO_SECRET", "")
   if envSecret.len > 0:
     return envSecret
   let secretFile = if cfg.secretFile.len > 0:
     cfg.secretFile
   else:
-    let secretFileEnv = getEnv("RHIZO_SECRET_FILE", getEnv("RHIZO_SECRET_FILE", ""))
+    let secretFileEnv = getEnv("RHIZO_SECRET_FILE", "")
     let home = getHomeDir()
     let rhizoSecret = home / ".config" / "rhizo" / "secret"
     let locSecret = home / ".config" / "rhizo" / "secret"
@@ -245,6 +245,8 @@ proc verifyHmac*(secret, data, expectedSig: string): bool =
   return CRYPTO_memcmp(computed.cstring, expectedSig.cstring, computed.len.csize_t) == 0
 
 proc getOriginHostname*(): string =
+  let envH = getEnv("RHIZO_HOSTNAME", "")
+  if envH.len > 0: return envH
   var h = ""
   try:
     h = getHostname()

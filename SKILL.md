@@ -35,11 +35,13 @@ Rhizo uses layered configuration so local developer settings and API keys are ne
 - **Base Tracked Config**: `.rhizo.toml` (or `~/.config/rhizo/config.toml`)
 - **Local Overrides**: `.rhizo.local.toml` (git-ignored host/prefix settings)
 - **Environment Secrets**: `.env.local` / `.env` (git-ignored API keys and service URLs)
+- **Detailed Reference**: See [`docs/configuration.md`](../../docs/configuration.md) for the complete table of `RHIZO_*` environment variables and security profiles.
 
 ### C. Task Routing & Optional System 1 Decision Engine
 > [!NOTE]
 > **System 1 Routing is strictly OPTIONAL.**
 > All core Rhizo coordination (messaging `rhizo open/send/listen`, distributed locking `rhizo lock --fencing`, explicit task queues `rhizo enqueue <queue>`, roundtable floor control, consensus ballots, and leader election) operates directly over Redis and requires **zero ML models, zero Python runtimes, and zero configuration files**.
+> For full YAML schema rules and match operators, see [`docs/routes_schema.md`](../../docs/routes_schema.md).
 
 When you have a high-throughput firehose of raw, untyped natural language tasks (e.g. from Jira, Slack, or user prompts) and want zero-shot classification into typed queues without generative LLM decoding delays:
 * **Explicit Queueing (Default)**: Route deterministically without models: `rhizo enqueue queue:worker:claude "Fix button CSS"`.

@@ -14,7 +14,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOKS_DIR = REPO_ROOT / "skills" / "rhizo" / "hooks"
 BIN_RHIZO = REPO_ROOT / "bin" / ("rhizo.exe" if sys.platform == "win32" or (REPO_ROOT / "bin" / "rhizo.exe").exists() else "rhizo")
-REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+REDIS_URL = os.environ.get("RHIZO_REDIS_URL", os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"))
 TEST_PREFIX = "test_rhizo_hooks:"
 
 
@@ -23,6 +23,7 @@ class TestRhizoHooks(unittest.TestCase):
     def setUpClass(cls):
         cls.env = os.environ.copy()
         cls.env["RHIZO_BIN"] = str(BIN_RHIZO)
+        cls.env["RHIZO_REDIS_URL"] = REDIS_URL
         cls.env["REDIS_URL"] = REDIS_URL
         cls.env["RHIZO_REDIS_PREFIX"] = TEST_PREFIX
         cls.env["RHIZO_SECRET"] = "test-secret-key-32-chars-long!!"

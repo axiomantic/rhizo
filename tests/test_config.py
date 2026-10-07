@@ -152,3 +152,24 @@ prefix = "my-dev:"
         assert data["redis_url"]["value"] == "redis://my-dev-box:6379"
         assert data["prefix"]["value"] == "my-dev:"
         assert data["redis_url"]["source"] == "local workspace config"
+
+def test_config_prefixed_environment_variables():
+    """Verify RHIZO_* prefixed environment variables take effect cleanly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Test RHIZO_CONFIG pointing to custom path
+        custom_cfg = Path(tmpdir) / "custom.toml"
+        custom_cfg.write_text("""project = "custom-env-project"
+prefix = "custom-env:"
+""")
+        code, out, err = run_rhizo("config", "show", "--format", "json", env={
+            "RHIZO_CONFIG": str(custom_cfg),
+            "RHIZO_REDIS_URL": "redis://rhizo-env-redis:6379",
+            "RHIZO_HOSTNAME": "rhizo-test-host",
+            "RHIZO_AGENT_NAME": "test-prefixed-agent",
+        })
+        assert code == 0, f"Error: {err}"
+        data = json.loads(out)
+        assert data["project"]["value"] == "custom-env-project"
+        assert data["redis_url"]["value"] == "redis://rhizo-env-redis:6379"
+        assert data["agent_name"]["value"] == "test-prefixed-agent"
+

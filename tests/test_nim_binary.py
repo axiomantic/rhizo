@@ -36,6 +36,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.env["RHIZO_REDIS_URL"] = REDIS_URL
         self.env["RHIZO_REDIS_PREFIX"] = TEST_PREFIX
         self.env["RHIZO_PROJECT"] = "test_project"
+        self.env["RHIZO_AGENT_NAME"] = "nim_sender"
         self.assertTrue(os.path.isfile(BIN_PATH), f"Binary not found at {BIN_PATH}")
         res = self.run_locutus(["nuke"])
         self.assertEqual(res.returncode, 0, f"Nuke failed in setUp: {res.stderr}")

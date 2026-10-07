@@ -39,6 +39,8 @@
 - [CLI Reference](#cli-reference)
 - [Autonomous Agent Lifecycle: Hooks, Extensions & Recipes](#autonomous-agent-lifecycle-hooks-extensions--recipes)
 - [Configuration Architecture & Profiles](#configuration-architecture--profiles)
+  - [Complete Configuration & Environment Reference](docs/configuration.md)
+  - [System 1 Routes Schema Reference](docs/routes_schema.md)
 - [Security & Prompt Injection Firewall](#security--prompt-injection-firewall)
 - [Cross-Host Multi-Machine Coordination](#cross-host-multi-machine-coordination)
 - [Redis Cluster Support (Hash Tags)](#redis-cluster-support-hash-tags)
@@ -449,6 +451,9 @@ Rhizo requires:
 When you have a high-throughput stream of raw, untyped natural language tasks (e.g. from Jira, Slack, or user prompts) and want zero-shot classification into typed queues without generative LLM decoding delays:
 * **Explicit Queueing (Default)**: Route deterministically without models: `rhizo enqueue queue:worker:claude "Fix button CSS"`.
 * **Semantic Triage (Optional)**: Route via local ModernBERT/Laya (<40ms): `rhizo enqueue --route "Fix button CSS"`.
+
+> [!TIP]
+> For the complete specification of `rhizo-routes.yaml`, including chunking limits, question types, match operators (`gte`, `lte`, `and`, `or`, `not`), and real-world examples, see the [System 1 Routes Schema Reference](docs/routes_schema.md).
 
 ### Cascading Routing Hierarchy & Scaffolding
 When using semantic routing (`--route`), Rhizo resolves rules in a cascading hierarchy where more specific scopes override broader ones:
@@ -957,6 +962,9 @@ cp skills/rhizo/rules/copilot-instructions.md .github/copilot-instructions.md
 ---
 
 ## Configuration Architecture & Profiles
+
+> [!TIP]
+> For the comprehensive table of all `RHIZO_*` environment variables, backward-compatibility aliases, cryptographic key management, and profile inheritance rules, see the [Rhizo Configuration & Environment Reference](docs/configuration.md).
 
 Rhizo provides deterministic, multi-tiered cascading configuration resolution:
 

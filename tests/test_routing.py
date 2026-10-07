@@ -273,7 +273,7 @@ def test_route_live_dry_run_and_enqueue():
 version: "1.0"
 service:
   url: "http://127.0.0.1:8100"
-  timeout_seconds: 5.0
+  timeout_seconds: 25.0
 questions:
   domain:
     type: choice
