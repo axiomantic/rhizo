@@ -7,13 +7,13 @@
 import std/[os, strutils]
 
 const
-  GuideVersion* = "v1.1"
+  GuideVersion* = "v1.2"
   BeginMarker* = "<!-- BEGIN RHIZO GUIDE [" & GuideVersion & "] -->"
   EndMarker* = "<!-- END RHIZO GUIDE -->"
   MarkerPrefix* = "<!-- BEGIN RHIZO GUIDE"
 
 const CanonicalGuideContent* = """
-<!-- BEGIN RHIZO GUIDE [v1.1] -->
+<!-- BEGIN RHIZO GUIDE [v1.2] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -67,6 +67,11 @@ Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicas
 ### 6. Delegation Precedence
 <INVARIANT>
 Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must ONLY be used if the operator explicitly requests a "subagent" by name, or if no cluster workers exist.
+</INVARIANT>
+
+### 7. Post-Compaction Ceremony Restoration
+<INVARIANT>
+Post-Compaction Ceremony Restoration: If a session utilizes Rhizo, Garden, or Vine, context compaction purges operational invariants from memory. Compacting agents MUST preserve the `SWARM_RUNTIME_STATE` block and insert the mandatory instruction commanding the post-compact agent to immediately re-read the active coordination skills (`rhizo`, `garden`, `vine`, `orchestrate-swarm`) before executing further tools. Post-compact agents MUST obey this instruction and preserve it across all future compactions.
 </INVARIANT>
 <!-- END RHIZO GUIDE -->"""
 

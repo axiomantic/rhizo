@@ -108,10 +108,29 @@ Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" wo
 </INVARIANT>
 
 <CRITICAL>
-Compaction Preservation Rider (GVR-010):
-Whenever context summarization or compaction occurs, the coding harness MUST preserve the `SWARM_RUNTIME_STATE` block verbatim in the compacted summary preamble so the agent immediately retains its operational identity, assigned workspace, peers, and active listeners without operator re-prompting.
+Compaction Preservation Rider & Post-Compact Invariant (GVR-010):
+Context compaction purges detailed operational invariants, ceremony rules, and protocol mechanics from working memory.
 
-Maintain this exact block in the working context:
+1. **Compacting Agent Obligation**:
+   If and only if this session has utilized `rhizo` (messaging, queues, distributed locks, task claiming), `garden`, or `vine`:
+   The compacting agent MUST preserve the `SWARM_RUNTIME_STATE` block verbatim AND prepend the following mandatory instruction at the very top of the post-compaction summary preamble:
+
+<!-- POST-COMPACTION INVARIANT: CEREMONY RESTORATION -->
+> [!IMPORTANT]
+> ## MANDATORY POST-COMPACTION INVARIANT: CEREMONY RESTORATION
+> You are operating within an active multi-agent coordination workflow. Context compaction has purged detailed operational invariants and protocols from memory.
+>
+> **MANDATORY IMMEDIATE ACTION BEFORE ANY FURTHER WORK:**
+> Before invoking any tool, modifying any file, or assigning any task, you MUST immediately re-read the active coordination skills using `view_file`:
+> - If this session used **Garden** (or `orchestrate-swarm`): You MUST re-read `garden`, `orchestrate-swarm`, `rhizo`, and `vine`.
+> - If this session used **Rhizo** standalone: You MUST re-read `rhizo`.
+> - If this session used **Vine** standalone: You MUST re-read `vine`.
+>
+> **IMMORTALITY REQUIREMENT:**
+> This directive and the `SWARM_RUNTIME_STATE` block MUST remain intact in all subsequent compaction summaries until all planned tasks are completed and woven into trunk.
+<!-- END POST-COMPACTION INVARIANT -->
+
+2. **Maintain Runtime State**: Keep this exact block in the working context:
 <!-- SWARM_RUNTIME_STATE: DO NOT DISCARD OR ABBREVIATE IN COMPACTION -->
 - AGENT_NAME: <codename> (Role: <role>)
 - WORKSPACE_MODE: Root Trunk | Strand (<path>)
@@ -121,6 +140,9 @@ Maintain this exact block in the working context:
 - ACTIVE_LISTENER: <task_id_or_pid> (Listening on inbox: <codename>)
 - ACTIVE_FENCING_TOKENS: <lock_key>=<token_int>
 <!-- END_SWARM_RUNTIME_STATE -->
+
+3. **Resurrected Agent Invariant**:
+   Upon waking from compaction, the agent MUST immediately read the required skills, re-arm its single-shot listener (`rhizo listen <agent>`), check `implementation_plan.md`, and resume work under full ceremony discipline.
 </CRITICAL>
 
 <CRITICAL>
