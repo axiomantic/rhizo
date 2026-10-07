@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-10-07
+
+### Added
+- **Native Lifecycle Hook Interlock (`rhizo hook codex-stop` & `rhizo hook install`) (GVR-017)**:
+  - Added native CLI subcommands `rhizo hook codex-stop [--agent <name>]` and `rhizo hook install [--codex|--claude] [--agent <name>]`.
+  - Sub-millisecond turn-end interlock for OpenAI Codex Desktop / CLI and Claude Code: intercepts the `Stop` event and returns `{"decision": "block", "reason": "..."}` if unread inbox messages wait or if a registered cluster worker yields without an active listener.
+  - Implemented rolling thrash protection valve (`{prefix}hook_blocks:<agent>` in Redis, 60s TTL) allowing turn completion after 3 consecutive blocks to prevent deadlocking sessions.
+  - Added automatic scaffolding of `.codex/hooks.json` via `rhizo hook install --codex`.
+- **Imperative Autonomous Execution Delivery Banner (GVR-017)**:
+  - Replaced passive lifecycle notices in `doListen` with a prominent imperative banner: `🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨`.
+  - Commands receiving LLM workers to execute delivered directives immediately without waiting for human operator prompts.
+  - Displays exact command line and harness capability tier instructions for re-arming listeners.
+- **Worker Autonomous Execution Invariant (Section 9 in Rhizo Guide v1.4)**:
+  - Codified the autonomous execution invariant in `src/guide.nim` and `AGENTS.md`: upon task delivery, workers must immediately transition to active execution in their isolated Vine strand rather than remaining passive chatbots.
+  - Synchronized Guide to `v1.4` across all repositories.
+
 ## [0.2.5] - 2026-10-07
 
 ### Added

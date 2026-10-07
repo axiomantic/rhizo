@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.5"
+  RhizoVersion*  = "0.2.6"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -1795,38 +1795,6 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       if not quiet and getEnv("RHIZO_QUIET", "0") notin ["1", "true", "yes"]:
         let harness = detectHarness(cfg)
         let replySubj = if subject.toLowerAscii.startsWith("re:"): subject else: "Re: " & subject
-        stderr.writeLine("\n[LOCU LIFECYCLE NOTICE] Listener for '" & name & "' delivered message '" & id & "' and EXITED (0).")
-        stderr.writeLine("- CRITICAL: Do NOT wrap in 'while true' bash loop. Harness requires process exit to trigger reactive turn!")
-        stderr.writeLine("- Detected harness: " & harness & " (consult SKILL.md for capability decision tree)")
-        stderr.writeLine("- Expected follow-up action:")
-        case harness
-        of "opencode", "pi":
-          stderr.writeLine("  1. In-process extension fiber is active. DO NOT run a blocking 'rhizo listen'.")
-          stderr.writeLine("  2. Reply when task completes:")
-          stderr.writeLine("     rhizo reply --to " & fromAgent & " --reply-to \"" & id & "\" --subject \"" & replySubj & "\" --body \"<results>\"")
-          stderr.writeLine("  3. If disconnecting or finishing session work completely:")
-          stderr.writeLine("     rhizo close " & name)
-        of "codex":
-          stderr.writeLine("  1. Reply to sender when finished:")
-          stderr.writeLine("     rhizo reply --to " & fromAgent & " --reply-to \"" & id & "\" --subject \"" & replySubj & "\" --body \"<results>\"")
-          stderr.writeLine("  2. Subagent ear discipline: dispatch a fresh one-shot listener subagent before concluding your turn:")
-          stderr.writeLine("     rhizo listen " & name)
-          stderr.writeLine("  3. If disconnecting or finishing session work completely:")
-          stderr.writeLine("     rhizo close " & name)
-        of "antigravity":
-          stderr.writeLine("  1. Reply to sender when finished:")
-          stderr.writeLine("     rhizo reply --to " & fromAgent & " --reply-to \"" & id & "\" --subject \"" & replySubj & "\" --body \"<results>\"")
-          stderr.writeLine("  2. Native daemon reactive pattern: launch background listener task via run_command(..., IsDaemon=true):")
-          stderr.writeLine("     rhizo listen " & name)
-          stderr.writeLine("  3. If disconnecting or finishing session work completely:")
-          stderr.writeLine("     rhizo close " & name)
-        else: # claude, cursor, copilot, unknown
-          stderr.writeLine("  1. When finished, reply and re-arm atomically in one command:")
-          stderr.writeLine("     rhizo reply --to " & fromAgent & " --reply-to \"" & id & "\" --subject \"" & replySubj & "\" --body \"<results>\" --listen")
-          stderr.writeLine("  2. If no reply is needed, wait for next task (zero-timeout infinite wait):")
-          stderr.writeLine("     rhizo listen " & name)
-          stderr.writeLine("  3. If disconnecting or finishing session work completely:")
-          stderr.writeLine("     rhizo close " & name)
         let rawParams = commandLineParams()
         var exactCmd = "rhizo"
         for a in rawParams:
@@ -1836,17 +1804,30 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
             exactCmd.add(" " & a)
 
         stderr.writeLine("")
-        stderr.writeLine("[RE-ARM INSTRUCTION FOR CODING AGENT]")
+        stderr.writeLine("================================================================================")
+        stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
         stderr.writeLine("Listener Identity: @" & name & " (this is YOU)")
         stderr.writeLine("Delivered Message: '" & id & "' from @" & fromAgent)
-        stderr.writeLine("To continue listening, relaunch this EXACT command using your capability tier (NOT a shell loop!):")
-        stderr.writeLine("  Exact command: " & exactCmd)
+        stderr.writeLine("Subject: " & (if subject.len > 0: subject else: "<no subject>"))
+        stderr.writeLine("Harness Detected: " & harness)
+        stderr.writeLine("Listener Process Status: EXITED (0) after delivering payload")
+        stderr.writeLine("")
+        stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
+        stderr.writeLine("1. EXECUTE NOW: You are an autonomous cluster worker. A directive has been delivered.")
+        stderr.writeLine("   DO NOT wait for operator prompt. DO NOT yield your turn with a passive acknowledgment.")
+        stderr.writeLine("   Immediately read the message payload above, claim the task, and begin implementation.")
+        stderr.writeLine("2. RE-ARM BEFORE TURN-END: The listener has EXITED (0) after delivering this message.")
+        stderr.writeLine("   You MUST re-arm your single-shot listener before concluding your turn (or use")
+        stderr.writeLine("   'rhizo reply ... --listen' when sending your completion report):")
+        stderr.writeLine("   Exact command: " & exactCmd)
         stderr.writeLine("Capability-Tier Invocations (SKILL.md Section 3):")
         case harness
         of "opencode", "pi":
           stderr.writeLine("  - Tier 1 (In-Process Extension): In-process fiber handles listening automatically; DO NOT call listen.")
         of "antigravity":
           stderr.writeLine("  - Tier 2 (Shell Daemon): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
+        of "codex":
+          stderr.writeLine("  - Tier 3 (Subagent Task): Spawn a background listener subagent to run '" & exactCmd & "'.")
         of "claude", "cursor", "copilot":
           stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
         else:
@@ -1854,7 +1835,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
           stderr.writeLine("  - Tier 4 (Synchronous Shell): Run '" & exactCmd & "' directly in foreground (or 'rhizo check-inbox')")
         stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
-        stderr.writeLine("")
+        stderr.writeLine("================================================================================\n")
         stderr.writeLine("(To silence this notice, pass --quiet / -q, or set RHIZO_QUIET=1)")
       return
   finally:
@@ -3826,6 +3807,236 @@ proc doWatchdogReset*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
     return ($j, 0)
 
   return ("Watchdog streak reset to 0 for @" & normName & " (base cadence: 15m / 900s).", 0)
+
+proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorker: bool = false): string =
+  var normName = sanitizeIdentifier(agentNameParam)
+  if normName.len == 0:
+    normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
+  if normName.len == 0:
+    let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
+    if fileExists(sessPath):
+      try:
+        let sNode = parseFile(sessPath)
+        if sNode.kind == JObject:
+          for k, v in sNode:
+            if v.kind == JObject and v.getOrDefault("status").getStr("") == "active":
+              normName = sanitizeIdentifier(v.getOrDefault("agent").getStr(""))
+              if normName.len > 0: break
+            elif v.kind == JString and v.getStr("").len > 0:
+              normName = sanitizeIdentifier(v.getStr(""))
+              break
+      except CatchableError: discard
+
+  # Fail-open if no agent can be resolved
+  if normName.len == 0:
+    return "{}"
+
+  var client: Redis
+  try:
+    client = connectRedis(cfg.redisUrl)
+  except CatchableError:
+    return "{}"
+  defer:
+    try: client.close() except CatchableError: discard
+
+  var probeTarget = normName
+  let aliasVal = try: client.hGet(cfg.prefix & "aliases", normName) except CatchableError: redisNil
+  if aliasVal != redisNil and aliasVal.len > 0:
+    probeTarget = sanitizeIdentifier(aliasVal)
+
+  let inboxKey = cfg.prefix & "inbox:" & probeTarget
+  let inboxDepth = try:
+    client.lLen(inboxKey)
+  except CatchableError:
+    0
+
+  # Thrash valve to prevent trapping turns forever:
+  let thrashKey = cfg.prefix & "hook_blocks:" & probeTarget
+  var blockCount = 0
+  try:
+    let bVal = client.get(thrashKey)
+    if bVal != redisNil and bVal.len > 0:
+      blockCount = parseInt(bVal)
+  except CatchableError:
+    blockCount = 0
+
+  if blockCount >= 3:
+    return "{}"
+
+  # 1. Unread inbox backlog
+  if inboxDepth > 0:
+    try:
+      let newCount = client.incr(thrashKey)
+      if newCount == 1:
+        discard client.expire(thrashKey, 60)
+    except CatchableError: discard
+
+    let messagesText = doDrain(cfg, probeTarget, 10, "hook")
+    var reason = "🚨 [CRITICAL RHIZO INTERLOCK] You have " & $inboxDepth & " unread message(s) waiting in your Rhizo inbox (@" & normName & ")!\n\n"
+    if messagesText.len > 0:
+      reason.add(messagesText & "\n\n")
+    reason.add("MANDATORY DIRECTIVE: You are an autonomous cluster worker. DO NOT yield your turn with unhandled messages! Read the tasks above, execute them immediately in your Vine strand, and rearm your listener ('rhizo listen " & normName & "') before completing your turn.")
+    
+    var jOut = newJObject()
+    jOut["decision"] = %"block"
+    jOut["reason"] = %reason
+    return $jOut
+
+  # 2. Dead listener check for registered agents
+  let agentKey = cfg.prefix & "agent:" & probeTarget
+  let heartbeatKey = cfg.prefix & "heartbeat:" & probeTarget
+  let isRegistered = try:
+    client.exists(heartbeatKey) or client.exists(agentKey)
+  except CatchableError:
+    false
+
+  if isRegistered:
+    let listenerKey = cfg.prefix & "listener:" & probeTarget
+    let listenerVal = try: client.get(listenerKey) except CatchableError: redisNil
+    var listenerActive = false
+    if listenerVal != redisNil and listenerVal.len > 0:
+      try:
+        let lNode = parseJson(listenerVal)
+        let pid = lNode.getOrDefault("pid").getInt(0)
+        let host = lNode.getOrDefault("host").getStr("")
+        let myHost = getHostName()
+        if host == myHost and pid > 0:
+          listenerActive = isPidAlive(pid)
+        else:
+          listenerActive = true
+      except CatchableError:
+        listenerActive = false
+
+    if not listenerActive:
+      try:
+        let newCount = client.incr(thrashKey)
+        if newCount == 1:
+          discard client.expire(thrashKey, 60)
+      except CatchableError: discard
+
+      var reason = "🚨 [CRITICAL RHIZO INTERLOCK] Your listener is DEAD! You are registered in the cluster as @" & normName & ".\n"
+      reason.add("Under the Turn-End Listener Invariant, you MUST NEVER yield your turn without leaving an active background listener running.\n")
+      reason.add("If you yield without a listener, you will become deaf to peer updates and incoming task dispatches.\n\n")
+      reason.add("ACTION REQUIRED RIGHT NOW: Launch a background listener before concluding your turn:\n")
+      reason.add("  Command: rhizo listen " & normName & "\n")
+      reason.add("  Capability Tier: In Codex/Claude, spawn a background subagent to run 'rhizo listen " & normName & "'. In Antigravity, use run_command(..., IsDaemon=true).")
+
+      var jOut = newJObject()
+      jOut["decision"] = %"block"
+      jOut["reason"] = %reason
+      return $jOut
+
+  try:
+    discard client.del(@[thrashKey])
+  except CatchableError: discard
+
+  return "{}"
+
+proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentNameParam: string = "", isGlobal: bool = false): string =
+  var normName = sanitizeIdentifier(agentNameParam)
+  if normName.len == 0:
+    normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
+
+  let targetCmd = if normName.len > 0:
+    "rhizo hook codex-stop --agent " & normName
+  else:
+    "rhizo hook codex-stop"
+
+  case targetHarness.toLowerAscii
+  of "codex":
+    let targetDir = if isGlobal:
+      getHomeDir() / ".codex"
+    else:
+      getCurrentDir() / ".codex"
+    createDir(targetDir)
+    let hooksFile = targetDir / "hooks.json"
+    
+    var rootNode = newJObject()
+    if fileExists(hooksFile):
+      try:
+        rootNode = parseFile(hooksFile)
+      except CatchableError:
+        rootNode = newJObject()
+
+    if not rootNode.hasKey("hooks") or rootNode["hooks"].kind != JObject:
+      rootNode["hooks"] = newJObject()
+
+    var stopHooks = newJArray()
+    if rootNode["hooks"].hasKey("Stop") and rootNode["hooks"]["Stop"].kind == JArray:
+      stopHooks = rootNode["hooks"]["Stop"]
+
+    var alreadyRegistered = false
+    for item in stopHooks:
+      if item.kind == JObject:
+        let cmd = item.getOrDefault("command").getStr("")
+        if "rhizo hook" in cmd or "codex_stop_hook" in cmd:
+          alreadyRegistered = true
+          item["command"] = %targetCmd
+          break
+        if item.hasKey("hooks") and item["hooks"].kind == JArray:
+          for subItem in item["hooks"]:
+            if subItem.kind == JObject:
+              let subCmd = subItem.getOrDefault("command").getStr("")
+              if "rhizo hook" in subCmd or "codex_stop_hook" in subCmd:
+                alreadyRegistered = true
+                subItem["command"] = %targetCmd
+                break
+
+    if not alreadyRegistered:
+      var entry = newJObject()
+      entry["type"] = %"command"
+      entry["command"] = %targetCmd
+      stopHooks.add(entry)
+
+    rootNode["hooks"]["Stop"] = stopHooks
+    writeFile(hooksFile, pretty(rootNode, 2) & "\n")
+    return "✓ Successfully installed Rhizo Stop hook in " & hooksFile & "\n  Command: " & targetCmd
+
+  of "claude":
+    let settingsFile = getHomeDir() / ".claude" / "settings.json"
+    var rootNode = newJObject()
+    if fileExists(settingsFile):
+      try:
+        rootNode = parseFile(settingsFile)
+      except CatchableError:
+        rootNode = newJObject()
+
+    if not rootNode.hasKey("hooks") or rootNode["hooks"].kind != JObject:
+      rootNode["hooks"] = newJObject()
+
+    var stopHooks = newJArray()
+    if rootNode["hooks"].hasKey("Stop") and rootNode["hooks"]["Stop"].kind == JArray:
+      stopHooks = rootNode["hooks"]["Stop"]
+
+    var alreadyRegistered = false
+    for item in stopHooks:
+      if item.kind == JObject:
+        if item.hasKey("hooks") and item["hooks"].kind == JArray:
+          for subItem in item["hooks"]:
+            if subItem.kind == JObject and "rhizo hook" in subItem.getOrDefault("command").getStr(""):
+              alreadyRegistered = true
+              subItem["command"] = %targetCmd
+              break
+
+    if not alreadyRegistered:
+      var hookObj = newJObject()
+      hookObj["type"] = %"command"
+      hookObj["command"] = %targetCmd
+      hookObj["timeout"] = %10
+      hookObj["rhizo_managed"] = %true
+
+      var wrapper = newJObject()
+      var arr = newJArray()
+      arr.add(hookObj)
+      wrapper["hooks"] = arr
+      stopHooks.add(wrapper)
+
+    rootNode["hooks"]["Stop"] = stopHooks
+    writeFile(settingsFile, pretty(rootNode, 2) & "\n")
+    return "✓ Successfully installed Rhizo Stop hook in " & settingsFile & "\n  Command: " & targetCmd
+
+  else:
+    return "Error: Unknown harness '" & targetHarness & "'. Supported: codex, claude"
 
 # Main Entrypoint / CLI Router
 proc main() =
@@ -6455,6 +6666,57 @@ proc main() =
     let fromAgent = positional[0]
     let toAgent = positional[1]
     echo doReroute(cfg, fromAgent, toAgent, mode, jsonOut)
+
+  of "hook":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo hook <codex-stop|install> [options]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "codex-stop", "stop":
+      var targetAgent = ""
+      var expectWorker = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--agent="):
+          targetAgent = a[8..^1]
+        elif a in ["--agent", "-a"] and i + 1 < args.len:
+          targetAgent = args[i+1]
+          inc i
+        elif a in ["--expect-worker", "-w"]:
+          expectWorker = true
+        elif not a.startsWith("-") and targetAgent.len == 0:
+          targetAgent = a
+        inc i
+      let res = doHookCodexStop(cfg, targetAgent, expectWorker)
+      echo res
+    of "install":
+      var harness = "codex"
+      var targetAgent = ""
+      var isGlobal = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a in ["--codex"]:
+          harness = "codex"
+        elif a in ["--claude"]:
+          harness = "claude"
+        elif a in ["--global", "-g"]:
+          isGlobal = true
+        elif a.startsWith("--agent="):
+          targetAgent = a[8..^1]
+        elif a in ["--agent", "-a"] and i + 1 < args.len:
+          targetAgent = args[i+1]
+          inc i
+        elif not a.startsWith("-") and targetAgent.len == 0:
+          targetAgent = a
+        inc i
+      let res = doHookInstall(cfg, harness, targetAgent, isGlobal)
+      echo res
+    else:
+      stderr.writeLine("Error: Unknown hook action: '" & action & "'. Valid actions: codex-stop, install")
+      quit(1)
 
   else:
     var suggestion = ""

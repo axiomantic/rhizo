@@ -7,13 +7,13 @@
 import std/[os, strutils]
 
 const
-  GuideVersion* = "v1.3"
+  GuideVersion* = "v1.4"
   BeginMarker* = "<!-- BEGIN RHIZO GUIDE [" & GuideVersion & "] -->"
   EndMarker* = "<!-- END RHIZO GUIDE -->"
   MarkerPrefix* = "<!-- BEGIN RHIZO GUIDE"
 
 const CanonicalGuideContent* = """
-<!-- BEGIN RHIZO GUIDE [v1.3] -->
+<!-- BEGIN RHIZO GUIDE [v1.4] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -80,6 +80,16 @@ Orchestrator Non-Implementation Invariant: When acting as an Orchestrator (or in
 1. Enqueue to Cluster Work Queue ('rhizo enqueue queue:<project>:tasks')
 2. Dispatch Directly to Worker ('rhizo send <worker>')
 3. Execute Inline in Main Chat (only with explicit operator confirmation)
+</CRITICAL>
+
+### 9. Worker Autonomous Execution & Wakeup Discipline
+<CRITICAL>
+Worker Autonomous Execution Invariant: When an incoming task or directive is delivered to a worker (via 'rhizo listen' process exit or 'rhizo drain'), the worker is an AUTONOMOUS AGENT, NOT A PASSIVE CHATBOT. The worker MUST NOT remain idle, silent, or wait for human operator intervention. Upon message delivery, the worker MUST IMMEDIATELY:
+1. Inspect the delivered task payload, instructions, and target files.
+2. Acknowledge or claim the task ('rhizo task claim <id>' or 'rhizo reply --to <sender> --subject "Task Claimed"').
+3. Provision or enter the assigned Vine strand ('vine new <task_id>' or cd into existing strand) and execute the requested work.
+4. Verify changes against the Two-Key Gate ('vine gate') before reporting completion.
+5. Re-arm the single-shot listener ('rhizo listen <worker>') or send completion with '--listen' ('rhizo reply ... --listen') before completing the turn.
 </CRITICAL>
 <!-- END RHIZO GUIDE -->"""
 

@@ -120,6 +120,18 @@ Direct inline implementation is prohibited unless the operator explicitly direct
 </CRITICAL>
 
 <CRITICAL>
+Worker Autonomous Execution Invariant (GVR-017):
+Swarm workers are autonomous implementers, not passive chatbots.
+When an incoming task or directive is delivered to a worker (via 'rhizo listen' process exit or 'rhizo drain'), the worker MUST NOT remain idle, silent, or wait for human operator intervention.
+Upon message delivery, the worker MUST IMMEDIATELY:
+1. Inspect the delivered task payload, instructions, and target files.
+2. Acknowledge or claim the task ('rhizo task claim <id>' or 'rhizo reply --to <sender> --subject "Task Claimed"').
+3. Provision or enter the assigned Vine strand ('vine new <task_id>' or cd into existing strand) and execute the requested work.
+4. Verify changes against the Two-Key Gate ('vine gate') before reporting completion.
+5. Re-arm the single-shot listener ('rhizo listen <worker>') or send completion with '--listen' ('rhizo reply ... --listen') before completing the turn.
+</CRITICAL>
+
+<CRITICAL>
 Compaction Preservation Rider & Post-Compact Invariant (GVR-010):
 Context compaction purges detailed operational invariants, ceremony rules, and protocol mechanics from working memory.
 
@@ -252,6 +264,8 @@ Inspect your available runtime tools and execute the highest matching tier:
 | **Virtual Mock Time** | `rhizo time advance <seconds> / rhizo time reset` | Manipulates Redis virtual time offset for deterministic, instantaneous TTL testing. |
 | **Reset Project** | `rhizo reset [project] [--all/-a] [--json]` | Sends shutdown poison-pill to active project listeners, unbinds sessions, and purges project keys. Pass `--all` to nuke entire namespace. |
 | **Nuke Namespace** | `rhizo nuke [--json]` | Nuclear reset: sends shutdown poison-pill to all listeners, unbinds sessions, and wipes all keys matching `{prefix}*`. |
+| **Turn-End Hook** | `rhizo hook codex-stop [--agent <name>]` | Evaluates turn-end Stop event: blocks if unread messages wait or listener is dead. |
+| **Install Hook** | `rhizo hook install [--codex\|--claude] [--agent <name>]` | Scaffolds `.codex/hooks.json` or updates `settings.json` with turn-end interlock. |
 
 ---
 

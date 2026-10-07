@@ -237,6 +237,79 @@ class TestRhizoHooks(unittest.TestCase):
             ], capture_output=True, text=True, env=self.env)
             self.assertEqual(res_rm.returncode, 0)
 
+    def test_native_hook_cli(self):
+        """Test native rhizo hook codex-stop and rhizo hook install CLI commands."""
+        agent = "test_native_hook_agent"
+        inbox_key = f"{TEST_PREFIX}inbox:{agent}"
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
+
+        try:
+            # 1. Unregistered agent -> returns empty object {}
+            res = subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "hook", "stop", "--agent", agent
+            ], capture_output=True, text=True, env=self.env)
+            self.assertEqual(res.returncode, 0)
+            self.assertEqual(json.loads(res.stdout.strip()), {})
+
+            # 2. Registered agent with NO_LISTENER -> returns block decision
+            subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "open", agent, "test"
+            ], check=True, env=self.env)
+
+            res = subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "hook", "stop", "--agent", agent
+            ], capture_output=True, text=True, env=self.env)
+            self.assertEqual(res.returncode, 0)
+            data = json.loads(res.stdout.strip())
+            self.assertEqual(data.get("decision"), "block")
+            self.assertIn("listener is DEAD", data.get("reason", ""))
+            self.assertIn(f"@{agent}", data.get("reason", ""))
+
+            # 3. Message sent to agent -> returns block decision with message payload
+            subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "send", "--from", "test_sender", "--to", agent,
+                "--subject", "Critical Security Audit", "--body", "Investigate CVE-2026-99"
+            ], check=True, env=self.env)
+
+            res = subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "hook", "stop", "--agent", agent
+            ], capture_output=True, text=True, env=self.env)
+            self.assertEqual(res.returncode, 0)
+            data = json.loads(res.stdout.strip())
+            self.assertEqual(data.get("decision"), "block")
+            self.assertIn("Critical Security Audit", data.get("reason", ""))
+            self.assertIn("Investigate CVE-2026-99", data.get("reason", ""))
+
+            # 4. Test rhizo hook install --codex
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                res_inst = subprocess.run([
+                    str(BIN_RHIZO), "hook", "install", "--codex", "--agent", agent
+                ], capture_output=True, text=True, cwd=tmpdir)
+                self.assertEqual(res_inst.returncode, 0)
+                self.assertIn("Successfully installed", res_inst.stdout)
+
+                hooks_json_path = Path(tmpdir) / ".codex" / "hooks.json"
+                self.assertTrue(hooks_json_path.exists())
+                with open(hooks_json_path, "r", encoding="utf-8") as f:
+                    hooks_data = json.load(f)
+                self.assertIn("hooks", hooks_data)
+                self.assertIn("Stop", hooks_data["hooks"])
+                stop_entry = hooks_data["hooks"]["Stop"][0]
+                self.assertEqual(stop_entry.get("type"), "command")
+                self.assertIn(f"rhizo hook codex-stop --agent {agent}", stop_entry.get("command", ""))
+        finally:
+            subprocess.run([
+                str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
+                "close", agent
+            ], capture_output=True, env=self.env)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
+
 
 if __name__ == "__main__":
     unittest.main()

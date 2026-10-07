@@ -1,7 +1,7 @@
 class Rhizo < Formula
   desc "Inter-assistant Redis bus & multi-agent coordination mesh without background daemons"
   homepage "https://github.com/axiomantic/rhizo"
-  version "0.2.0"
+  version "0.2.6"
   license "MIT"
 
   on_macos do
