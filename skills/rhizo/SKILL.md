@@ -101,6 +101,37 @@ Never Wrap 'rhizo listen' in a Bash Loop: Never execute 'while true; do rhizo li
 Case-Insensitive Coordination: All channel names, agent codenames, inbox addresses, multicast tags ('@tag'), work queues ('queue:<name>'), distributed locks ('lock:<name>'), pub/sub channels ('channel:<name>'), task contracts, decisions, and run cancellation tokens are normalized case-insensitively. Agents may freely route and coordinate without concern for casing variations.
 </INVARIANT>
 
+<CRITICAL>
+Compaction Preservation Rider (GVR-010):
+Whenever context summarization or compaction occurs, the coding harness MUST preserve the `SWARM_RUNTIME_STATE` block verbatim in the compacted summary preamble so the agent immediately retains its operational identity, assigned workspace, peers, and active listeners without operator re-prompting.
+
+Maintain this exact block in the working context:
+<!-- SWARM_RUNTIME_STATE: DO NOT DISCARD OR ABBREVIATE IN COMPACTION -->
+- AGENT_NAME: <codename> (Role: <role>)
+- WORKSPACE_MODE: Root Trunk | Strand (<path>)
+- ACTIVE_STRAND: <branch> (Parent: <parent_branch>)
+- ACTIVE_PEERS:
+  * <peer_codename> (<project>: <current_task_description>)
+- ACTIVE_LISTENER: <task_id_or_pid> (Listening on inbox: <codename>)
+- ACTIVE_FENCING_TOKENS: <lock_key>=<token_int>
+<!-- END_SWARM_RUNTIME_STATE -->
+</CRITICAL>
+
+<CRITICAL>
+Orchestrator Turn-End Listener Invariant (GVR-014):
+Coding harnesses (Antigravity, Claude Code, OpenCode) are event-driven: yielding a conversation turn with text output completely suspends model execution. Redis inbox state changes CANNOT wake an idle harness without an active child process registered in the task manager.
+
+Whenever an Orchestrator or sender dispatches work or awaits peer replies, THE FINAL ACTION OF THAT TURN MUST BE ARMING A BACKGROUND LISTENER:
+`run_command(CommandLine="rhizo listen <agent>", IsDaemon=false, WaitMsBeforeAsync=500)`
+
+FORBIDDEN: Never conclude a turn after dispatching tasks without leaving an active background listener running. Yielding without a listener severs the swarm's physical lifeline, trapping worker replies in Redis and causing silent swarm stalls.
+
+Safety Net (Belt-and-Suspenders):
+Whenever dispatching batches or entering long wait states, set a fallback schedule timer:
+`schedule(DurationSeconds=120, Prompt="Check swarm liveness: run rhizo who and rhizo probe", TimerCondition="any")`
+If worker messages arrive early, the message satisfies the condition and cancels the timer. If no message arrives or the listener stalls, the timer wakes the orchestrator within 2 minutes instead of stalling indefinitely.
+</CRITICAL>
+
 ---
 
 ## 3. Capability-Based Listener Execution
