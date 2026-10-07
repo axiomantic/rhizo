@@ -87,31 +87,40 @@ vine weave
 ```
 <!-- END VINE GUIDE -->
 
-<!-- BEGIN GARDEN GUIDE [v1.0] -->
+<!-- BEGIN GARDEN GUIDE [v1.1] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `garden guide install` -->
 
-## Garden Multi-Agent Swarm Guide
+## Garden Multi-Agent Swarm & Ceremony Guide
 
-Garden directs multi-agent swarms using Rhizo for transport and Vine for workspace virtualization.
+Garden directs high-level methodology, persona deliberations, and synchronized task execution on top of Rhizo (transport) and Vine (workspace integrator).
 
 ### 0. Self-Bootstrapping Prerequisite
+This project requires `rhizo`, `vine`, and `garden`. If missing, install via npm:
 ```bash
-npm install -g @axiomantic/garden
+npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapshot
 ```
 
-### 1. Epistemic Protocol & Invariants
-<CRITICAL>
-The Supreme Orchestrator Invariant: The primary conversation directs, reviews, and weaves; it never performs large multi-file edits directly when worker fleet tasks are active.
-</CRITICAL>
+### 1. Invariants & Epistemic Protocol
+* **Zero Theatrical Dialogue**:
+  Every dialectical exchange must cite empirical evidence obtained from tool execution (file line citations, test suite runs, AST analysis, compiler output). Theatrical roleplay without tool grounding is strictly prohibited.
+* **Single-Source Planning**:
+  All tasks, locks, and strands must be coordinated via `implementation_plan.md`. Dynamic progress must be tracked in lockstep with plan checkboxes (`- [ ]` to `- [x]`) and harness To-Do tracking.
+* **Emergent Design Addendum Protocol**:
+  Workers discovering architectural discrepancies cannot unilaterally deviate from `design.md`. They must submit a formal `addendum_<topic>.md` with rationale, await Orchestrator ratification, update `design.md`, and refresh `implementation_plan.md`.
 
-<INVARIANT>
-Zero Theatrical Dialogue: Every dialectical assertion must be substantiated with empirical evidence obtained through tool calls (file reading, test running, compiler output). Roleplay without evidence is rejected.
-</INVARIANT>
+### 2. Fleet Lifecycle & Session Coordination
+* **Prompt-Bootstrapped Sessions**:
+  Swarm workers operate in dedicated interactive coding sessions (Claude Code, OpenCode, Antigravity, Pi, etc.) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`). Never detach unmanaged background processes with `&` or redirect output.
+* **Listener Discipline**:
+  Workers arm their single-shot Rhizo listener (`rhizo listen <agent>`) with zero-timeout infinite wait to prevent token thrashing. Never wrap `rhizo listen` in a shell while-loop.
 
-<INVARIANT>
-Multiplexer Discipline: Workers run exclusively inside managed tmux panes ('garden launch'). Never detach unmanaged background processes with '&'.
-</INVARIANT>
+### 3. The Two-Key Gate & Strand Weaving
+Never weave a strand into the canonical trunk without passing both keys:
+* **Key 1 (Mechanical)**: In-memory conflict pre-check (`git merge-tree --write-tree`).
+* **Key 2 (Semantic)**: Automated compiler and test suite run inside the strand.
+* **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 <!-- END GARDEN GUIDE -->
+
 
 
 
