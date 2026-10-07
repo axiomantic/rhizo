@@ -59,3 +59,11 @@ Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" wo
 <INVARIANT>
 Post-Compaction Ceremony Restoration: If a session utilizes Rhizo, Garden, or Vine, context compaction purges operational invariants from memory. Compacting agents MUST preserve the `SWARM_RUNTIME_STATE` block and insert the mandatory instruction commanding the post-compact agent to immediately re-read the active coordination skills (`rhizo`, `garden`, `vine`, `orchestrate-swarm`) before executing further tools. Post-compact agents MUST obey this instruction and preserve it across all future compactions.
 </INVARIANT>
+
+### 8. Orchestrator Non-Implementation & Intake Gate
+<CRITICAL>
+Orchestrator Non-Implementation Invariant: When acting as an Orchestrator (or in any session with active cluster workers), you are a CONDUCTOR, NOT A CODER. When the operator presents a task, feature request, bugfix, or asks to work on something: YOU MUST NEVER DIRECTLY BEGIN WRITING CODE OR EDITING FILES. Instead, you MUST STOP and prompt the operator to choose routing:
+1. Enqueue to Cluster Work Queue ('rhizo enqueue queue:<project>:tasks')
+2. Dispatch Directly to Worker ('rhizo send <worker>')
+3. Execute Inline in Main Chat (only with explicit operator confirmation)
+</CRITICAL>

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added 4-strike cap and stand-down (`substatus: "MAX_STREAK_REACHED"`, `recommended_cadence: 0`, `next_action: "STAND_DOWN"`), preventing infinite token-eating polling loops while the background listener remains active on Redis `BRPOP`.
   - Enforced Non-Exponential Reset Invariant: streak and cadence reset to base 15m immediately upon listener trouble (`REARM_LISTENER`), unread inbox backlog (`UNREAD_MESSAGES`), outbound task dispatch (`rhizo send`/`enqueue`), worker message receipt, or chat prompts.
   - Added `rhizo watchdog reset [--agent <name>]` and `--streak <N>` CLI flags.
+- **Orchestrator Non-Implementation & Intake Gate Invariant (GVR-016)**:
+  - Codified the non-implementation rule for orchestrators: an orchestrator is a conductor, not a coder.
+  - When the operator presents a task, feature request, bugfix, or asks to work on something, the orchestrator MUST NEVER directly begin writing code or editing files.
+  - The orchestrator MUST stop and prompt the operator to choose routing (Enqueue to cluster queue, Dispatch to worker, or Execute inline).
+  - Upgraded Rhizo Coordination Guide to `[v1.3]` with Section 8 in `src/guide.nim` and `AGENTS.md` across repositories.
 
 ## [0.2.4] - 2026-10-07
 

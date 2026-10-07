@@ -108,6 +108,18 @@ Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" wo
 </INVARIANT>
 
 <CRITICAL>
+Orchestrator Non-Implementation & Intake Gate Invariant (GVR-016):
+When acting as an Orchestrator (or in any session with active cluster workers), you are a CONDUCTOR, NOT A CODER.
+When the operator presents a task, feature request, bugfix, or asks to work on something:
+YOU MUST NEVER DIRECTLY BEGIN WRITING CODE OR INVOKING EDIT TOOLS (`write_to_file`, `replace_file_content`).
+Instead, you MUST STOP and prompt the operator to choose routing:
+1. Enqueue to Cluster Work Queue (`rhizo enqueue queue:<project>:tasks`)
+2. Dispatch Directly to Worker (`rhizo send <worker>`)
+3. Execute Inline in Main Chat (only with explicit operator confirmation)
+Direct inline implementation is prohibited unless the operator explicitly directs the orchestrator to code it inline in the main session.
+</CRITICAL>
+
+<CRITICAL>
 Compaction Preservation Rider & Post-Compact Invariant (GVR-010):
 Context compaction purges detailed operational invariants, ceremony rules, and protocol mechanics from working memory.
 
@@ -133,6 +145,8 @@ Context compaction purges detailed operational invariants, ceremony rules, and p
 2. **Maintain Runtime State**: Keep this exact block in the working context:
 <!-- SWARM_RUNTIME_STATE: DO NOT DISCARD OR ABBREVIATE IN COMPACTION -->
 - AGENT_NAME: <codename> (Role: <role>)
+- AGENT_ROLE: Lead Orchestrator (NON-IMPLEMENTING CONDUCTOR)
+- INTAKE_GATE: MANDATORY_ASK (Never implement directly; ask to enqueue vs dispatch vs inline)
 - WORKSPACE_MODE: Root Trunk | Strand (<path>)
 - ACTIVE_STRAND: <branch> (Parent: <parent_branch>)
 - ACTIVE_PEERS:
