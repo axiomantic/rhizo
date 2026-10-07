@@ -57,6 +57,11 @@
 
 Instead of running a complex background server, Rhizo routes and queues messages directly through **Redis** or **Valkey**.
 
+> [!NOTE]
+> ### Quick Note: Using Garden as your High-Level Swarm Wrapper
+> **Looking for the high-level multi-agent conductor? Use [Garden](https://github.com/axiomantic/garden).**  
+> While `rhizo` provides the Redis transport, distributed mutexes, and task queues, **Garden** is the high-level umbrella framework. Simply start a session in your favorite coding harness (Antigravity, Claude Code, OpenCode) and type `"garden: I want to build [feature]"`. Garden conducts an intake interview, generates clean 10-backtick prompt cards for your terminal tabs, and coordinates all workers over Rhizo and Vine!
+
 ### Standalone Yet Designed for the Axiomantic Triad
 
 Rhizo is completely standalone and can be used on its own for any inter-process or multi-agent Redis communication, locking, and queues.
@@ -64,7 +69,7 @@ Rhizo is completely standalone and can be used on its own for any inter-process 
 However, Rhizo is designed from the ground up to pair seamlessly with **Vine** and **Garden**:
 - **Rhizo** (Transport & Concurrency): Inter-agent messaging bus, monotonic fencing locks, and task queues over Redis.
 - [**Vine**](https://github.com/axiomantic/vine) (Workspaces & Verification): Sub-second APFS Copy-on-Write strands, polyglot build-cache normalization, and the Two-Key integration gate (`git merge-tree` mechanical + compiler/test suite semantic checks).
-- [**Garden**](https://github.com/axiomantic/garden) (Swarm Ceremonies): Tmux worker fleet provisioning, 3-stage empirical dialectical pump (research, architecture, audit), and master ceremonial implementation planning.
+- [**Garden**](https://github.com/axiomantic/garden) (Swarm Methodology & High-Level Wrapper): Conversational project intake interview, prompt-bootstrapped worker fleets (10-backtick cards), 3-stage empirical dialectical pump (research, architecture, audit), and master ceremonial implementation planning.
 
 #### Complete Workflow
 1. **Claim Task**: `rhizo claim queue:myproj:tasks --lease 1800` (yields monotonic `fencing_token`).
