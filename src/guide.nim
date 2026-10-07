@@ -7,13 +7,13 @@
 import std/[os, strutils]
 
 const
-  GuideVersion* = "v1.0"
+  GuideVersion* = "v1.1"
   BeginMarker* = "<!-- BEGIN RHIZO GUIDE [" & GuideVersion & "] -->"
   EndMarker* = "<!-- END RHIZO GUIDE -->"
   MarkerPrefix* = "<!-- BEGIN RHIZO GUIDE"
 
 const CanonicalGuideContent* = """
-<!-- BEGIN RHIZO GUIDE [v1.0] -->
+<!-- BEGIN RHIZO GUIDE [v1.1] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -62,6 +62,11 @@ System 1 Routing is strictly optional. All core primitives (messaging, locking, 
 ### 5. Case-Insensitive Coordination
 <INVARIANT>
 Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicast tags ('@tag'), work queues ('queue:<name>'), distributed locks ('lock:<name>'), pub/sub channels ('channel:<name>'), tasks, and run cancellations are normalized case-insensitively. Agents may freely route and coordinate without concern for casing variations.
+</INVARIANT>
+
+### 6. Delegation Precedence
+<INVARIANT>
+Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must ONLY be used if the operator explicitly requests a "subagent" by name, or if no cluster workers exist.
 </INVARIANT>
 <!-- END RHIZO GUIDE -->"""
 

@@ -2,7 +2,7 @@
 
 This repository guide establishes the runtime invariants, directory hygiene, and coordination protocols for AI coding agents operating across projects.
 
-<!-- BEGIN RHIZO GUIDE [v1.0] -->
+<!-- BEGIN RHIZO GUIDE [v1.1] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -52,6 +52,11 @@ System 1 Routing is strictly optional. All core primitives (messaging, locking, 
 <INVARIANT>
 Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicast tags ('@tag'), work queues ('queue:<name>'), distributed locks ('lock:<name>'), pub/sub channels ('channel:<name>'), tasks, and run cancellations are normalized case-insensitively. Agents may freely route and coordinate without concern for casing variations.
 </INVARIANT>
+
+### 6. Delegation Precedence
+<INVARIANT>
+Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must ONLY be used if the operator explicitly requests a "subagent" by name, or if no cluster workers exist.
+</INVARIANT>
 <!-- END RHIZO GUIDE -->
 
 <!-- BEGIN VINE GUIDE [v1.0] -->
@@ -87,7 +92,7 @@ vine weave
 ```
 <!-- END VINE GUIDE -->
 
-<!-- BEGIN GARDEN GUIDE [v1.2] -->
+<!-- BEGIN GARDEN GUIDE [v1.3] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `garden guide install` -->
 
 ## Garden Multi-Agent Swarm & Ceremony Guide
@@ -115,6 +120,8 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
   Swarm workers operate in dedicated interactive coding sessions (Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`) wrapped in 10 backticks. Never detach unmanaged background processes with `&` or redirect output.
 * **Listener Discipline**:
   Workers arm their single-shot Rhizo listener (`rhizo listen <agent>`) with zero-timeout infinite wait to prevent token thrashing. Never wrap `rhizo listen` in a shell while-loop.
+* **Delegation Precedence**:
+  When instructed to "delegate", "assign", or "dispatch" work, the orchestrator MUST route tasks to active cluster workers via Rhizo (`rhizo send`, `rhizo enqueue`, `rhizo task assign/claim`). Harness-internal subagents (e.g. `invoke_subagent`, `Task`, `Agent`) must ONLY be used if the operator explicitly specifies the word "subagent", or if no cluster workers exist in the roster (`rhizo who`).
 
 ### 3. The Two-Key Gate & Strand Weaving
 Never weave a strand into the canonical trunk without passing both keys:
@@ -122,6 +129,8 @@ Never weave a strand into the canonical trunk without passing both keys:
 * **Key 2 (Semantic)**: Automated compiler and test suite run inside the strand.
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 <!-- END GARDEN GUIDE -->
+
+
 
 
 
