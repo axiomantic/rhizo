@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.4"
+  RhizoVersion*  = "0.2.5"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -1388,6 +1388,15 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
       stderr.writeLine("[RHIZO LISTENER] Entering listening mode for agent '" & name & "'...")
       doListen(cfg, name, listenTimeoutSec)
 
+proc resetWatchdogStreak*(cfg: RhizoConfig, agentName: string) =
+  let normName = sanitizeIdentifier(agentName)
+  if normName.len == 0: return
+  try:
+    var client = connectRedis(cfg.redisUrl)
+    defer: (try: client.close() except CatchableError: discard)
+    discard client.hSet(cfg.prefix & "watchdog:" & normName, "streak", "0")
+  except CatchableError: discard
+
 proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: string,
             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", isBroadcast: bool = false,
             customTs: string = "", echoResult: bool = true, rearmListen: bool = false, listenTimeoutSec: int = -1,
@@ -1397,6 +1406,7 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let rawCleanTo = sanitizeIdentifier(toAgent)
   let normTo = if toAgent.strip() in ["*", "@*"] or rawCleanTo in ["*", "all", "@all"]: "*" else: rawCleanTo
   let normFrom = sanitizeIdentifier(fromAgent)
+  resetWatchdogStreak(cfg, normFrom)
 
   # Dynamic alias resolution (GVR-012)
   var resolvedTo = normTo
@@ -1588,6 +1598,7 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
   let name = sanitizeIdentifier(name)
   checkSupervisionAttached(name, force or continuous)
+  resetWatchdogStreak(cfg, name)
   let secret = getSecret(cfg)
   let inboxKey = cfg.prefix & "inbox:" & name
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
@@ -3521,7 +3532,7 @@ proc doReroute*(cfg: RhizoConfig, fromAgent, toAgent: string, mode: string = "al
   except CatchableError:
     return res
 
-proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput: bool = false, expectListening: bool = false): tuple[output: string, exitCode: int] =
+proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput: bool = false, expectListening: bool = false, streakOverride: int = -1): tuple[output: string, exitCode: int] =
   var normName = sanitizeIdentifier(agentNameParam)
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
@@ -3623,36 +3634,92 @@ proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
   var exitCode = 0
   var recommendedCommand = "none"
   var message = ""
+  let watchdogKey = cfg.prefix & "watchdog:" & probeTarget
+  var currentStreak = 0
+  var recommendedCadence = 900
+  var nextAction = "SCHEDULE_TIMER"
 
   if inboxDepth > 0:
     status = "ACTION_REQUIRED"
     substatus = "UNREAD_MESSAGES"
     actionRequired = true
     exitCode = 2
+    recommendedCadence = 900
+    nextAction = "SCHEDULE_TIMER"
     recommendedCommand = if not listenerActive: "rhizo listen " & normName else: "rhizo drain 10 " & normName
     message = "Agent @" & normName & " has " & $inboxDepth & " unread message(s) waiting in inbox."
+    try: discard client.hSet(watchdogKey, "streak", "0") except CatchableError: discard
   elif not listenerActive:
     if expectListening or tasksInFlight > 0:
       status = "ACTION_REQUIRED"
       substatus = "REARM_LISTENER"
       actionRequired = true
       exitCode = 2
+      recommendedCadence = 900
+      nextAction = "SCHEDULE_TIMER"
       recommendedCommand = "rhizo listen " & normName
       message = "Agent @" & normName & " has " & $tasksInFlight & " in-flight task(s), but listener is dead or not running."
+      try: discard client.hSet(watchdogKey, "streak", "0") except CatchableError: discard
     else:
       status = "STAND_DOWN"
       substatus = "IDLE"
       actionRequired = false
       exitCode = 0
+      recommendedCadence = 0
+      nextAction = "STAND_DOWN"
       recommendedCommand = "none"
       message = "Agent @" & normName & " is idle with zero unread messages and zero in-flight tasks. Listener not required."
+      try: discard client.hSet(watchdogKey, "streak", "0") except CatchableError: discard
   else:
-    status = "OK"
-    substatus = "LISTENING"
-    actionRequired = false
-    exitCode = 0
-    recommendedCommand = "none"
-    message = "Agent @" & normName & " listener is active and healthy (PID " & $listenerPid & " on " & listenerHost & ")."
+    if streakOverride >= 0:
+      currentStreak = streakOverride
+    else:
+      try:
+        let sVal = client.hGet(watchdogKey, "streak")
+        if sVal != redisNil and sVal.len > 0:
+          currentStreak = parseInt(sVal)
+      except CatchableError:
+        currentStreak = 0
+
+    inc currentStreak
+
+    if currentStreak == 1:
+      recommendedCadence = 1800 # 30m
+      status = "OK"
+      substatus = "LISTENING"
+      exitCode = 0
+      nextAction = "SCHEDULE_TIMER"
+      message = "Agent @" & normName & " listener is active and healthy (PID " & $listenerPid & " on " & listenerHost & "). Quiescent streak: 1/4 (next check in 30m)."
+    elif currentStreak == 2:
+      recommendedCadence = 3600 # 60m
+      status = "OK"
+      substatus = "LISTENING"
+      exitCode = 0
+      nextAction = "SCHEDULE_TIMER"
+      message = "Agent @" & normName & " listener is active and healthy (PID " & $listenerPid & " on " & listenerHost & "). Quiescent streak: 2/4 (next check in 60m)."
+    elif currentStreak == 3:
+      recommendedCadence = 7200 # 120m
+      status = "OK"
+      substatus = "LISTENING"
+      exitCode = 0
+      nextAction = "SCHEDULE_TIMER"
+      message = "Agent @" & normName & " listener is active and healthy (PID " & $listenerPid & " on " & listenerHost & "). Quiescent streak: 3/4 (next check in 120m)."
+    else:
+      # currentStreak >= 4: Max streak reached!
+      status = "STAND_DOWN"
+      substatus = "MAX_STREAK_REACHED"
+      actionRequired = false
+      exitCode = 0
+      recommendedCadence = 0
+      nextAction = "STAND_DOWN"
+      message = "Agent @" & normName & " listener has remained continuously stable and idle across " & $currentStreak & " checks. Watchdog standing down."
+
+    try:
+      discard client.hSet(watchdogKey, "streak", $currentStreak)
+      discard client.hSet(watchdogKey, "last_check", $int(getTime().toUnix()))
+      discard client.hSet(watchdogKey, "cadence", $recommendedCadence)
+      discard client.expire(watchdogKey, 86400)
+    except CatchableError: discard
 
   if jsonOutput:
     var j = newJObject()
@@ -3671,6 +3738,10 @@ proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
     j["tasks_in_flight"] = %tasksInFlight
     j["action_required"] = %actionRequired
     j["recommended_command"] = %recommendedCommand
+    j["streak"] = %currentStreak
+    j["max_streak"] = %4
+    j["recommended_cadence"] = %recommendedCadence
+    j["next_action"] = %nextAction
     j["message"] = %message
     return ($j, exitCode)
 
@@ -3684,12 +3755,77 @@ proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
   outStr.add("Listener Active    : " & (if listenerActive: "YES (PID " & $listenerPid & " on " & listenerHost & ")" else: "NO") & "\n")
   outStr.add("Inbox Depth        : " & $inboxDepth & " messages\n")
   outStr.add("Tasks In Flight    : " & $tasksInFlight & "\n")
+  outStr.add("Quiescent Streak   : " & $currentStreak & "/4\n")
+  if recommendedCadence > 0:
+    outStr.add("Recommended Cadence: " & $(recommendedCadence div 60) & " minutes (" & $recommendedCadence & "s)\n")
+  else:
+    outStr.add("Recommended Cadence: none (stand down)\n")
+  outStr.add("Next Action        : " & nextAction & "\n")
   outStr.add("Action Required    : " & (if actionRequired: "YES" else: "NO") & "\n")
   if recommendedCommand != "none":
     outStr.add("Recommended Command: " & recommendedCommand & "\n")
   outStr.add("Details            : " & message & "\n")
   outStr.add("====================================================")
   return (outStr, exitCode)
+
+proc doWatchdogReset*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput: bool = false): tuple[output: string, exitCode: int] =
+  var normName = sanitizeIdentifier(agentNameParam)
+  if normName.len == 0:
+    normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
+  if normName.len == 0:
+    let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
+    if fileExists(sessPath):
+      try:
+        let sNode = parseFile(sessPath)
+        if sNode.kind == JObject:
+          for k, v in sNode:
+            if v.kind == JObject and v.getOrDefault("status").getStr("") == "active":
+              normName = sanitizeIdentifier(v.getOrDefault("agent").getStr(""))
+              if normName.len > 0: break
+            elif v.kind == JString and v.getStr("").len > 0:
+              normName = sanitizeIdentifier(v.getStr(""))
+              break
+      except CatchableError: discard
+
+  if normName.len == 0:
+    let errStr = "Error: Missing required agent name for watchdog reset. Usage: rhizo watchdog reset [--agent <name>] [--json]"
+    if jsonOutput:
+      var j = newJObject()
+      j["error"] = %errStr
+      return ($j, 1)
+    return (errStr, 1)
+
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+
+  var probeTarget = normName
+  let aliasVal = try: client.hGet(cfg.prefix & "aliases", normName) except CatchableError: redisNil
+  if aliasVal != redisNil and aliasVal.len > 0:
+    probeTarget = sanitizeIdentifier(aliasVal)
+
+  let watchdogKey = cfg.prefix & "watchdog:" & probeTarget
+  try:
+    discard client.hSet(watchdogKey, "streak", "0")
+    discard client.hSet(watchdogKey, "last_reset", $int(getTime().toUnix()))
+  except CatchableError as e:
+    let errStr = "Failed to reset watchdog streak: " & e.msg
+    if jsonOutput:
+      var j = newJObject()
+      j["error"] = %errStr
+      return ($j, 1)
+    return (errStr, 1)
+
+  if jsonOutput:
+    var j = newJObject()
+    j["agent"] = %normName
+    j["status"] = %"OK"
+    j["streak"] = %0
+    j["recommended_cadence"] = %900
+    j["next_action"] = %"SCHEDULE_TIMER"
+    j["message"] = %("Watchdog streak reset to 0 for @" & normName & ". Next timer should use base 15m (900s).")
+    return ($j, 0)
+
+  return ("Watchdog streak reset to 0 for @" & normName & " (base cadence: 15m / 900s).", 0)
 
 # Main Entrypoint / CLI Router
 proc main() =
@@ -3803,7 +3939,7 @@ proc main() =
     echo "  rhizo sub <channel> [timeout_sec]"
     echo "  rhizo who [-a|--all] [--json] [filter_tag]"
     echo "  rhizo probe <agent> [--json]"
-    echo "  rhizo watchdog [check] [agent] [--agent <name>] [--expect-listening] [--json]"
+    echo "  rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
     echo "  rhizo sweep [--dry-run] [--raw]"
     echo "  rhizo tag <add|remove|set> <tags> [name]"
     echo "  rhizo check-inbox [name]"
@@ -6222,28 +6358,42 @@ proc main() =
     var targetAgent = ""
     var jsonOut = false
     var expectListening = false
+    var streakOverride = -1
     var i = 1
     while i < args.len:
       let a = args[i]
-      if a in ["check", "status"]:
+      if a in ["check", "status", "reset"]:
         subaction = a
       elif a in ["--json", "-j"]:
         jsonOut = true
       elif a in ["--expect-listening", "-e"]:
         expectListening = true
+      elif a.startsWith("--streak="):
+        try: streakOverride = parseInt(a[9..^1]) except CatchableError: discard
+      elif a in ["--streak", "-s"] and i + 1 < args.len:
+        try: streakOverride = parseInt(args[i+1]) except CatchableError: discard
+        inc i
       elif a.startsWith("--agent="):
         targetAgent = a[8..^1]
       elif a in ["--agent", "-a"] and i + 1 < args.len:
         targetAgent = args[i+1]
         inc i
       elif not a.startsWith("-"):
-        if targetAgent.len == 0:
+        if a in ["check", "status", "reset"]:
+          subaction = a
+        elif targetAgent.len == 0:
           targetAgent = a
       inc i
-    let (resOutput, resExitCode) = doWatchdogCheck(cfg, targetAgent, jsonOut, expectListening)
-    echo resOutput
-    if resExitCode != 0:
-      quit(resExitCode)
+    if subaction == "reset":
+      let (resOutput, resExitCode) = doWatchdogReset(cfg, targetAgent, jsonOut)
+      echo resOutput
+      if resExitCode != 0:
+        quit(resExitCode)
+    else:
+      let (resOutput, resExitCode) = doWatchdogCheck(cfg, targetAgent, jsonOut, expectListening, streakOverride)
+      echo resOutput
+      if resExitCode != 0:
+        quit(resExitCode)
 
   of "alias":
     if args.len < 2:

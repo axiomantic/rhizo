@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-10-07
+
+### Added
+- **Watchdog Stepped Backoff & 4-Strike Cap Protocol (GVR-015)**:
+  - Implemented Redis-backed streak tracking in hash `{prefix}watchdog:<agent>`.
+  - Added stepped backoff schedule (Base 15m $\rightarrow$ 30m $\rightarrow$ 60m $\rightarrow$ 120m) for orchestrator safety watchdog checks during consecutive quiescent checks with a healthy listener.
+  - Added 4-strike cap and stand-down (`substatus: "MAX_STREAK_REACHED"`, `recommended_cadence: 0`, `next_action: "STAND_DOWN"`), preventing infinite token-eating polling loops while the background listener remains active on Redis `BRPOP`.
+  - Enforced Non-Exponential Reset Invariant: streak and cadence reset to base 15m immediately upon listener trouble (`REARM_LISTENER`), unread inbox backlog (`UNREAD_MESSAGES`), outbound task dispatch (`rhizo send`/`enqueue`), worker message receipt, or chat prompts.
+  - Added `rhizo watchdog reset [--agent <name>]` and `--streak <N>` CLI flags.
+
 ## [0.2.4] - 2026-10-07
 
 ### Added

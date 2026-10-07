@@ -804,17 +804,70 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(data_expect["status"], "ACTION_REQUIRED")
         self.assertEqual(data_expect["substatus"], "REARM_LISTENER")
 
-        # 5. Active listener state (OK, exit 0)
+        # 5. Active listener state (OK, exit 0) with stepped backoff & 4-strike cap
         # Register a mock listener in Redis
         listener_payload = json.dumps({"pid": os.getpid(), "host": "127.0.0.1", "started": int(time.time())})
         subprocess.run(["redis-cli", "-u", REDIS_URL, "SETEX", f"{TEST_PREFIX}listener:{agent}", "60", listener_payload], check=True)
-        res_ok = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
-        self.assertEqual(res_ok.returncode, 0)
-        data_ok = json.loads(res_ok.stdout.strip())
-        self.assertEqual(data_ok["status"], "OK")
-        self.assertEqual(data_ok["substatus"], "LISTENING")
-        self.assertTrue(data_ok["listener_active"])
-        self.assertFalse(data_ok["action_required"])
+        
+        # Check 1: Streak 1, next cadence 1800s (30m)
+        res_ok1 = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_ok1.returncode, 0)
+        data_ok1 = json.loads(res_ok1.stdout.strip())
+        self.assertEqual(data_ok1["status"], "OK")
+        self.assertEqual(data_ok1["substatus"], "LISTENING")
+        self.assertTrue(data_ok1["listener_active"])
+        self.assertFalse(data_ok1["action_required"])
+        self.assertEqual(data_ok1["streak"], 1)
+        self.assertEqual(data_ok1["recommended_cadence"], 1800)
+        self.assertEqual(data_ok1["next_action"], "SCHEDULE_TIMER")
+
+        # Check 2: Streak 2, next cadence 3600s (60m)
+        res_ok2 = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_ok2.returncode, 0)
+        data_ok2 = json.loads(res_ok2.stdout.strip())
+        self.assertEqual(data_ok2["streak"], 2)
+        self.assertEqual(data_ok2["recommended_cadence"], 3600)
+        self.assertEqual(data_ok2["next_action"], "SCHEDULE_TIMER")
+
+        # Check 3: Streak 3, next cadence 7200s (120m)
+        res_ok3 = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_ok3.returncode, 0)
+        data_ok3 = json.loads(res_ok3.stdout.strip())
+        self.assertEqual(data_ok3["streak"], 3)
+        self.assertEqual(data_ok3["recommended_cadence"], 7200)
+        self.assertEqual(data_ok3["next_action"], "SCHEDULE_TIMER")
+
+        # Check 4: Streak 4 (Max Streak Reached -> Stand Down, cadence 0)
+        res_ok4 = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_ok4.returncode, 0)
+        data_ok4 = json.loads(res_ok4.stdout.strip())
+        self.assertEqual(data_ok4["status"], "STAND_DOWN")
+        self.assertEqual(data_ok4["substatus"], "MAX_STREAK_REACHED")
+        self.assertEqual(data_ok4["streak"], 4)
+        self.assertEqual(data_ok4["recommended_cadence"], 0)
+        self.assertEqual(data_ok4["next_action"], "STAND_DOWN")
+
+        # 6. Reset watchdog streak explicitly via CLI
+        res_reset = self.run_cmd(["watchdog", "reset", "--agent", agent, "--json"])
+        self.assertEqual(res_reset.returncode, 0)
+        data_reset = json.loads(res_reset.stdout.strip())
+        self.assertEqual(data_reset["streak"], 0)
+        self.assertEqual(data_reset["recommended_cadence"], 900)
+
+        # Re-check after reset: starts at streak 1
+        res_after_reset = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_after_reset.returncode, 0)
+        data_after = json.loads(res_after_reset.stdout.strip())
+        self.assertEqual(data_after["streak"], 1)
+
+        # 7. Activity reset: sending a message resets streak back to 0
+        res_send = self.run_cmd(["send", "--to", "other-agent", "--subject", "Hello", "--body", "World", "--from", agent])
+        self.assertEqual(res_send.returncode, 0)
+        # Next check should be streak 1 again (because send reset it to 0)
+        res_after_send = self.run_cmd(["watchdog", "check", "--agent", agent, "--json"])
+        self.assertEqual(res_after_send.returncode, 0)
+        data_after_send = json.loads(res_after_send.stdout.strip())
+        self.assertEqual(data_after_send["streak"], 1)
 
 
 if __name__ == "__main__":

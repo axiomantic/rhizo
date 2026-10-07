@@ -154,27 +154,34 @@ Whenever an Orchestrator or sender dispatches work or awaits peer replies, THE F
 
 FORBIDDEN: Never conclude a turn after dispatching tasks without leaving an active background listener running. Yielding without a listener severs the swarm's physical lifeline, trapping worker replies in Redis and causing silent swarm stalls.
 
-Safety Net (Scheduled Timer Watchdog & Debouncer Protocol):
+Safety Net (Scheduled Timer Watchdog & Debouncer Protocol — Stepped Backoff & 4-Strike Cap):
 In harnesses supporting `schedule` (e.g. Google Antigravity), arm a debounced watchdog timer to ensure an orchestrator session is never abandoned if a listener fails to arm or terminates prematurely.
-- **Cadence**: 15 minutes (`DurationSeconds=900`, range 10m–30m / 600s–1800s). Defaulting to 15m avoids slurping token budgets while guaranteeing a 15m upper bound on any stall.
+- **Base Cadence & Stepped Backoff**:
+  - Initial / After Activity: Base 15 minutes (`DurationSeconds=900`).
+  - Quiescent Check 1 (Streak 1): 30 minutes (`DurationSeconds=1800`).
+  - Quiescent Check 2 (Streak 2): 60 minutes (`DurationSeconds=3600`).
+  - Quiescent Check 3 (Streak 3): 120 minutes (`DurationSeconds=7200`).
+  - Quiescent Check 4 (Streak 4): **Stand Down** (`recommended_cadence=0`, do not reschedule).
+- **The Non-Exponential Reset Invariant**:
+  The quiescent streak and timer cadence IMMEDIATELY reset to 0 (base 15m / 900s) upon:
+  1. Any listener failure or missing process (`ACTION_REQUIRED: REARM_LISTENER`).
+  2. Any unread inbox backlog (`ACTION_REQUIRED: UNREAD_MESSAGES`).
+  3. Any outbound task dispatch (`rhizo send`, `rhizo enqueue`, `rhizo reply`).
+  4. Any worker gate report or message receipt.
+  5. Any operator interaction or new prompt in chat.
 - **Replace, Never Stack Invariant**:
   Harnesses prohibit concurrent timers with `TimerCondition="any"`. Before setting a timer, inspect running tasks with `manage_task(Action='list')`. If an existing watchdog task is active (`toolName == "schedule"` or prompt includes `[RHIZO WATCHDOG]`), cancel it via `manage_task(Action='kill', TaskId=...)`.
-- **Debounce Triggers (Early and Often)**:
-  Run the debouncer subroutine on:
-  1. Task Dispatch (`rhizo send`, `rhizo enqueue`).
-  2. Worker Message / Gate Report receipt.
-  3. Implementation Plan updates (`implementation_plan.md` checkboxes).
-  4. Watchdog Wakeup turn (if tasks are still in flight).
-- **Stand Down Invariant**:
-  When all tasks in `implementation_plan.md` are complete (`- [x]` 100%), kill any running watchdog timer and do not reschedule.
+- **Stand Down Invariants**:
+  1. When all tasks in `implementation_plan.md` are complete (`- [x]` 100%), kill any running watchdog timer and do not reschedule.
+  2. When the watchdog reaches `substatus: "MAX_STREAK_REACHED"` (streak 4/4), stand down and do not reschedule. The background listener process (`rhizo listen`) remains continuously active on Redis `BRPOP` and will wake the session on any new message.
 - **Zero-Token Happy Path**:
-  Because `TimerCondition="any"` is set, any arriving worker message or background task completion automatically cancels the timer early before it expires. The timer only fires if the orchestrator was silent and deaf for a full 15 minutes.
+  Because `TimerCondition="any"` is set, any arriving worker message or background task completion automatically cancels the timer early before it expires. The timer only fires if the orchestrator was silent and deaf for the full cadence duration.
 - **The Short Check (When Timer Fires)**:
   Run `rhizo watchdog check --agent <name> --json`.
-  * If `ACTION_REQUIRED: REARM_LISTENER`: start `rhizo listen <name>` in background and debounce timer.
-  * If `ACTION_REQUIRED: UNREAD_MESSAGES`: drain messages with `rhizo drain 10 <name>`, start listener, and debounce.
-  * If `OK: LISTENING`: listener is healthy; debounce timer and return to sleep.
-  * If `STAND_DOWN: IDLE`: no tasks in flight; stand down.
+  * If `ACTION_REQUIRED: REARM_LISTENER`: start `rhizo listen <name>` in background and schedule base timer (`DurationSeconds=900`).
+  * If `ACTION_REQUIRED: UNREAD_MESSAGES`: drain messages with `rhizo drain 10 <name>`, start listener, and schedule base timer (`DurationSeconds=900`).
+  * If `OK: LISTENING`: listener is healthy; check `recommended_cadence`. If `next_action == "SCHEDULE_TIMER"`, schedule timer with `DurationSeconds=recommended_cadence` and return to sleep with minimal or no user-facing chat output.
+  * If `STAND_DOWN: MAX_STREAK_REACHED` or `STAND_DOWN: IDLE`: stand down and do NOT reschedule.
 </CRITICAL>
 
 ---
