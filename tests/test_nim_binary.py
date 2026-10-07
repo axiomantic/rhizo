@@ -418,7 +418,7 @@ class TestLocutusNimBinary(unittest.TestCase):
     def test_08_active_agent_persistence(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # 1. Negative control: running listen in fresh empty directory without active agent exits 1
-            empty_listen = self.run_locutus(["listen", "1"], cwd=tmpdir)
+            empty_listen = self.run_locutus(["listen", "1"], cwd=tmpdir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(empty_listen.returncode, 1)
             self.assertIn("Error: No agent name specified", empty_listen.stderr)
 
@@ -1379,6 +1379,7 @@ secret_file = "{custom_secret_file_toml}"
                 "RHIZO_REDIS_URL": "",
                 "RHIZO_REDIS_PREFIX": "",
                 "RHIZO_PROJECT": "",
+                "RHIZO_AGENT_NAME": "",
                 "RHIZO_SECRET": "",
                 "RHIZO_SECRET_FILE": "",
             }

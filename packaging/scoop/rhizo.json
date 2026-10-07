@@ -1,11 +1,11 @@
 {
-  "version": "0.2.7",
+  "version": "0.2.9",
   "description": "High Performance Inter-Assistant Redis Bus & Multi-Agent Coordination Mesh",
   "homepage": "https://github.com/axiomantic/rhizo",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/axiomantic/rhizo/releases/download/v0.2.7/rhizo-windows-amd64.zip",
+      "url": "https://github.com/axiomantic/rhizo/releases/download/v0.2.9/rhizo-windows-amd64.zip",
       "bin": "rhizo.exe"
     }
   },

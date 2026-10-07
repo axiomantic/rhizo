@@ -1008,6 +1008,72 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.run_cmd(["close", "alpha-proj-architect"], env_overrides={"RHIZO_PROJECT": proj})
         self.run_cmd(["close", "alpha-proj-orchestrator"], env_overrides={"RHIZO_PROJECT": proj})
 
+    def test_23_terminal_title_and_poke_invariants(self):
+        """Verify dynamic ANSI terminal titling and rhizo poke doorbell safety interlocks."""
+        # 1. rhizo title sets terminal title via ANSI OSC escape sequence on stderr
+        res_title = self.run_cmd(["title", "custom-worker"])
+        self.assertEqual(res_title.returncode, 0)
+        self.assertIn("Terminal title set to: custom-worker", res_title.stdout)
+        self.assertIn("\x1b]0;custom-worker\x07", res_title.stderr)
+
+        # 2. rhizo title with project scoping
+        proj = "poke-proj"
+        res_title_scoped = self.run_cmd(["title", "architect"], env_overrides={"RHIZO_PROJECT": proj})
+        self.assertEqual(res_title_scoped.returncode, 0)
+        self.assertIn("Terminal title set to: poke-proj-architect", res_title_scoped.stdout)
+        self.assertIn("\x1b]0;poke-proj-architect\x07", res_title_scoped.stderr)
+
+        # 3. rhizo poke dry-run on non-existent window
+        res_poke_dry = self.run_cmd(["poke", "ghost-agent", "--dry-run", "--json"])
+        self.assertEqual(res_poke_dry.returncode, 0)
+        data_poke_dry = json.loads(res_poke_dry.stdout.strip())
+        self.assertEqual(data_poke_dry["status"], "NOT_FOUND")
+        self.assertTrue(data_poke_dry["dry_run"])
+        self.assertEqual(data_poke_dry["command"], "rhizo listen ghost-agent")
+
+        # 4. rhizo poke custom command dry-run
+        res_poke_cmd = self.run_cmd(["poke", "ghost-agent", "--cmd", "echo wakeup", "--dry-run", "--json"])
+        self.assertEqual(res_poke_cmd.returncode, 0)
+        data_poke_cmd = json.loads(res_poke_cmd.stdout.strip())
+        self.assertEqual(data_poke_cmd["command"], "echo wakeup")
+
+        # 5. rhizo poke safety check: when an agent is actively listening with 0 unread messages, poke is SKIPPED
+        target_agent = "healthy-worker"
+        self.run_cmd(["open", target_agent, "worker"])
+
+        # Register active listener state in Redis
+        import socket
+        my_pid = os.getpid()
+        my_host = socket.gethostname()
+        listener_json = json.dumps({"pid": my_pid, "host": my_host, "started": int(time.time())})
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", f"{TEST_PREFIX}listener:{target_agent}", listener_json], check=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SETEX", f"{TEST_PREFIX}heartbeat:{target_agent}", "120", "alive"], check=True)
+
+        # Verify probe reports HEALTHY listener
+        res_probe = self.run_cmd(["probe", target_agent, "--json"])
+        self.assertEqual(res_probe.returncode, 0)
+        probe_data = json.loads(res_probe.stdout.strip())
+        self.assertEqual(probe_data["status"], "HEALTHY")
+        self.assertTrue(probe_data["listener_registered"])
+        self.assertTrue(probe_data["listener_pid_alive"])
+
+        # Now rhizo poke MUST skip to prevent corrupting active listener stdin
+        res_poke_skip = self.run_cmd(["poke", target_agent, "--json"])
+        self.assertEqual(res_poke_skip.returncode, 0)
+        data_skip = json.loads(res_poke_skip.stdout.strip())
+        self.assertEqual(data_skip["status"], "SKIPPED")
+        self.assertEqual(data_skip["reason"], "ALREADY_LISTENING")
+        self.assertIn("already actively listening", data_skip["message"])
+
+        # With --force, the safety check is bypassed
+        res_poke_force = self.run_cmd(["poke", target_agent, "--force", "--dry-run", "--json"])
+        self.assertEqual(res_poke_force.returncode, 0)
+        data_force = json.loads(res_poke_force.stdout.strip())
+        self.assertNotEqual(data_force.get("status"), "SKIPPED")
+
+        # Clean up
+        self.run_cmd(["close", target_agent])
+
 
 if __name__ == "__main__":
     unittest.main()

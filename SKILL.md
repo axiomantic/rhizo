@@ -266,6 +266,8 @@ Inspect your available runtime tools and execute the highest matching tier:
 | **Nuke Namespace** | `rhizo nuke [--json]` | Nuclear reset: sends shutdown poison-pill to all listeners, unbinds sessions, and wipes all keys matching `{prefix}*`. |
 | **Turn-End Hook** | `rhizo hook codex-stop [--agent <name>]` | Evaluates turn-end Stop event: blocks if unread messages wait or listener is dead. |
 | **Install Hook** | `rhizo hook install [--codex\|--claude] [--agent <name>]` | Scaffolds `.codex/hooks.json` or updates `settings.json` with turn-end interlock. |
+| **Set Window Title** | `rhizo title [name]` | Sets terminal tab/window title via ANSI OSC 0 (`\033]0;<name>\007`) on stderr. |
+| **Doorbell Wakeup**  | `rhizo poke <agent> [--cmd <cmd>] [--force] [--dry-run] [--json]` | Injects wakeup keystroke into worker's window (Ghostty, tmux, Terminal, iTerm2, GUI). |
 
 ---
 
@@ -578,6 +580,31 @@ Exit Codes & Verdicts:
 - `0` (`STAND_DOWN` / `IDLE`): Zero in-flight tasks and zero unread messages. Stand down; listener not required.
 - `2` (`ACTION_REQUIRED` / `REARM_LISTENER`): In-flight tasks exist but listener is dead or missing. Run recommended command `rhizo listen <name>`.
 - `2` (`ACTION_REQUIRED` / `UNREAD_MESSAGES`): Unconsumed inbox messages waiting. Drain and re-arm listener.
+
+### L. Hybrid Window Targeting & The Doorbell Protocol (`rhizo title`, `rhizo poke`)
+
+1. **Dynamic ANSI Terminal Tab & Window Titling (`rhizo title`)**:
+   - `rhizo open <agent>` automatically stamps the active terminal tab and window name to `@<agent>` using standard ANSI OSC 0 escape sequences (`\033]0;<agent>\007`).
+   - `rhizo listen <agent>` dynamically stamps `@<agent> (listening)` while awaiting messages, and restores `@<agent>` upon exit.
+   - All escape sequences are emitted to `stderr`, keeping `stdout` completely clean for JSON parsing and shell piping (`rhizo listen | jq .`).
+   - Run `rhizo title [name]` to manually or programmatically set the window title of the current pane or tab.
+
+2. **Window-Targeted Doorbell Wakeup (`rhizo poke`)**:
+   When an agent has stalled, gone deaf, or when external tools (ChatGPT, macOS Accessibility, AppleScript) need to reach an agent window directly by name:
+   ```bash
+   rhizo poke claude-worker-1
+   ```
+   - **Cascading Target Resolution**:
+     1. `tmux`: checks `tmux list-panes` matching pane title or window name and dispatches `tmux send-keys -t <pane> <cmd> C-m`.
+     2. macOS `Ghostty`: sends native AppleScript (`tell application "Ghostty" ... input text cmd to term ... send key "enter" to term`) without stealing window focus.
+     3. macOS `Terminal.app`: uses `do script cmd in selected tab of w`.
+     4. macOS `iTerm2`: uses `tell s to write text cmd`.
+     5. macOS Universal GUI / Electron / IDEs (Antigravity, Cursor, VS Code, Claude Desktop): falls back to `System Events` targeting window title matches.
+   - **Health Interlock Safety Guard**:
+     `rhizo poke` queries `rhizo probe <agent>`. If the worker is already actively listening with 0 unread messages, injection is skipped (`status: SKIPPED`) to protect healthy listening agents from having text injected into their stdin.
+     Pass `--force` (`-f`) to override this check.
+   - **Dry Run**:
+     Pass `--dry-run` (`-n`) to inspect window discovery and verify matching windows without executing keystrokes.
 
 ---
 

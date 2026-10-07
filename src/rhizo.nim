@@ -3,7 +3,7 @@
 # Embeds Lua scripts at compile time and utilizes EVALSHA caching with automatic EVAL fallback.
 
 import std/[
-  os, osproc, strutils, json, openssl, sha1,
+  os, osproc, strutils, json, openssl, sha1, terminal,
   times, random, options, base64, tables, sets, nativesockets
 ]
 when defined(posix):
@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.8"
+  RhizoVersion*  = "0.2.9"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -129,6 +129,17 @@ proc secureFilePermissions*(path: string) =
       setFilePermissions(path, {fpUserRead, fpUserWrite})
     except CatchableError:
       discard
+
+proc setTerminalTitle*(title: string, force: bool = false) =
+  try:
+    # Standard ANSI OSC 0 escape sequence: sets both window title and icon/tab name.
+    # Write to stderr so stdout remains clean for piping and JSON consumers.
+    # Only emit when attached to a TTY (or forced) so captured non-interactive pipes remain 0 bytes.
+    if force or isatty(stderr):
+      stderr.write("\e]0;" & title & "\a")
+      stderr.flushFile()
+  except CatchableError:
+    discard
 
 proc parseRequiredInt*(val, flagName: string): int =
   try:
@@ -696,20 +707,34 @@ proc ensureProjectScopedName*(cfg: RhizoConfig, rawName: string): string =
 proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = false): string =
   if explicitName.len > 0:
     return ensureProjectScopedName(cfg, explicitName)
+
+  # Explicit Session ID resolution (CLI argument --session-id takes precedence over ambient env vars)
+  let explicitSid = if sessionId.len > 0: sessionId else: cfg.sessionId
+  if explicitSid.len > 0:
+    let localAgent = getLocalSessionAgent(explicitSid)
+    if localAgent.len > 0:
+      return ensureProjectScopedName(cfg, localAgent)
+    try:
+      let redisAgent = getRedisSessionMapping(cfg, explicitSid)
+      if redisAgent.len > 0:
+        return ensureProjectScopedName(cfg, redisAgent)
+    except CatchableError:
+      discard
+
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
     return ensureProjectScopedName(cfg, cfg.agentName)
   let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
   if envName.len > 0:
     return ensureProjectScopedName(cfg, envName)
 
-  # Session ID resolution
-  let sid = if sessionId.len > 0: sessionId elif cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
-  if sid.len > 0:
-    let localAgent = getLocalSessionAgent(sid)
+  # Ambient RHIZO_SESSION_ID fallback
+  let envSid = getEnv("RHIZO_SESSION_ID", "")
+  if envSid.len > 0 and envSid != explicitSid:
+    let localAgent = getLocalSessionAgent(envSid)
     if localAgent.len > 0:
       return ensureProjectScopedName(cfg, localAgent)
     try:
-      let redisAgent = getRedisSessionMapping(cfg, sid)
+      let redisAgent = getRedisSessionMapping(cfg, envSid)
       if redisAgent.len > 0:
         return ensureProjectScopedName(cfg, redisAgent)
     except CatchableError:
@@ -1329,7 +1354,7 @@ proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 
   var pfx = ""
   if optPrefix.len > 0:
     let trimmed = optPrefix.strip()
-    if proj.len > 0 and (isBareGenericRole(trimmed) or (not trimmed.startsWith(proj & "-") and not trimmed.endsWith("-" & proj) and trimmed != proj)):
+    if proj.len > 0 and isBareGenericRole(trimmed):
       pfx = proj & "-" & trimmed
     else:
       pfx = trimmed
@@ -1390,6 +1415,7 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 
   saveCurrentAgent(name)
   putEnv("RHIZO_AGENT_NAME", name)
+  setTerminalTitle(name)
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     saveLocalSessionMapping(sid, name)
@@ -1443,7 +1469,9 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   randomize()
   let secret = getSecret(cfg)
   let rawCleanTo = sanitizeIdentifier(toAgent)
-  let normTo = if toAgent.strip() in ["*", "@*"] or rawCleanTo in ["*", "all", "@all"]: "*" else: rawCleanTo
+  let normTo = if toAgent.strip() in ["*", "@*"] or rawCleanTo in ["*", "all", "@all"]: "*"
+               elif isBroadcast and rawCleanTo != "*": "@" & rawCleanTo
+               else: rawCleanTo
   let normFrom = sanitizeIdentifier(fromAgent)
   resetWatchdogStreak(cfg, normFrom)
 
@@ -1650,6 +1678,7 @@ proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
   let name = ensureProjectScopedName(cfg, name)
+  setTerminalTitle(name & " (listening)")
   checkSupervisionAttached(name, force or continuous)
   resetWatchdogStreak(cfg, name)
   let secret = getSecret(cfg)
@@ -1661,6 +1690,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   # Initial Heartbeat & Directory Registration
   var client = connectRedis(cfg.redisUrl)
   defer:
+    setTerminalTitle(name)
     try: client.close() except CatchableError: discard
 
   try:
@@ -1874,10 +1904,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         stderr.writeLine("")
         stderr.writeLine("================================================================================")
         stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
+        stderr.writeLine("[RHIZO LIFECYCLE NOTICE]")
         stderr.writeLine("Listener Identity: @" & name & " (this is YOU)")
         stderr.writeLine("Delivered Message: '" & id & "' from @" & fromAgent)
         stderr.writeLine("Subject: " & (if subject.len > 0: subject else: "<no subject>"))
-        stderr.writeLine("Harness Detected: " & harness)
+        stderr.writeLine("Detected harness: " & harness)
         stderr.writeLine("Listener Process Status: EXITED (0) after delivering payload")
         stderr.writeLine("")
         stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
@@ -1886,16 +1917,19 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         stderr.writeLine("   Immediately read the message payload above, claim the task, and begin implementation.")
         stderr.writeLine("2. RE-ARM BEFORE TURN-END: The listener has EXITED (0) after delivering this message.")
         stderr.writeLine("   You MUST re-arm your single-shot listener before concluding your turn (or use")
-        stderr.writeLine("   'rhizo reply ... --listen' when sending your completion report):")
+        stderr.writeLine("   'rhizo reply --to " & fromAgent & " ... --listen' when sending your completion report):")
+        stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\" --listen")
         stderr.writeLine("   Exact command: " & exactCmd)
+        stderr.writeLine("   Re-arm Listen: " & exactCmd)
+        stderr.writeLine("   Or if finished: rhizo close " & name)
         stderr.writeLine("Capability-Tier Invocations (SKILL.md Section 3):")
         case harness
         of "opencode", "pi":
-          stderr.writeLine("  - Tier 1 (In-Process Extension): In-process fiber handles listening automatically; DO NOT call listen.")
+          stderr.writeLine("  - Tier 1 (In-Process Extension): In-process extension fiber is active. DO NOT run a blocking 'rhizo listen'.")
         of "antigravity":
-          stderr.writeLine("  - Tier 2 (Shell Daemon): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
+          stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
         of "codex":
-          stderr.writeLine("  - Tier 3 (Subagent Task): Spawn a background listener subagent to run '" & exactCmd & "'.")
+          stderr.writeLine("  - Tier 3 (Subagent Task): Subagent ear discipline: spawn a background listener subagent to run '" & exactCmd & "'.")
         of "claude", "cursor", "copilot":
           stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
         else:
@@ -3586,6 +3620,198 @@ proc doReroute*(cfg: RhizoConfig, fromAgent, toAgent: string, mode: string = "al
   except CatchableError:
     return res
 
+proc doPoke*(cfg: RhizoConfig, targetAgent: string, optCmd: string = "", force: bool = false, dryRun: bool = false, jsonOut: bool = false): string =
+  let scopedTarget = ensureProjectScopedName(cfg, targetAgent)
+  let cmd = if optCmd.len > 0: optCmd else: "rhizo listen " & scopedTarget
+
+  # Probe check unless forced or dry-run
+  if not force and not dryRun:
+    let probeRes = doProbe(cfg, scopedTarget, jsonOutput = true)
+    try:
+      let pJson = parseJson(probeRes)
+      let listenerStatus = pJson.getOrDefault("status").getStr("")
+      let hasListener = pJson.getOrDefault("listener_registered").getBool(false)
+      let pidAlive = pJson.getOrDefault("listener_pid_alive").getBool(false)
+      let inboxDepth = pJson.getOrDefault("inbox_depth").getInt(0)
+      if hasListener and pidAlive and inboxDepth == 0 and listenerStatus == "HEALTHY":
+        if jsonOut:
+          var resObj = newJObject()
+          resObj["target"] = %scopedTarget
+          resObj["status"] = %"SKIPPED"
+          resObj["reason"] = %"ALREADY_LISTENING"
+          resObj["message"] = %("@" & scopedTarget & " is already actively listening with 0 unread messages. Use --force to poke anyway.")
+          return $resObj
+        else:
+          return "[POKE] Skipped @" & scopedTarget & ": already actively listening with 0 unread messages (use --force to poke anyway)."
+    except CatchableError:
+      discard
+
+  var methodFound = "NOT_FOUND"
+  var windowName = ""
+  var pokeDetails = ""
+
+  # 1. Check tmux if running
+  try:
+    let (tmuxCheck, code) = execCmdEx("command -v tmux")
+    if code == 0:
+      let (panesOut, pCode) = execCmdEx("tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}:#{window_name}:#{pane_title}'")
+      if pCode == 0 and panesOut.len > 0:
+        for line in panesOut.splitLines:
+          let parts = line.split(":")
+          if parts.len >= 3:
+            let targetPane = parts[0] & ":" & parts[1]
+            let winName = parts[2]
+            let paneTitle = if parts.len >= 4: parts[3] else: ""
+            if scopedTarget.toLowerAscii in winName.toLowerAscii or
+               targetAgent.toLowerAscii in winName.toLowerAscii or
+               scopedTarget.toLowerAscii in paneTitle.toLowerAscii or
+               targetAgent.toLowerAscii in paneTitle.toLowerAscii:
+              methodFound = "tmux"
+              windowName = winName
+              if not dryRun:
+                discard execCmdEx("tmux send-keys -t " & quoteShell(targetPane) & " " & quoteShell(cmd) & " C-m")
+              pokeDetails = "tmux pane " & targetPane & " (" & winName & ")"
+              break
+  except CatchableError:
+    discard
+
+  # 2. On macOS, check Ghostty, Terminal, iTerm2, and System Events
+  when defined(macosx) or defined(darwin):
+    if methodFound == "NOT_FOUND":
+      let appleScript = """
+on run argv
+  set target to item 1 of argv
+  set cmd to item 2 of argv
+  set isDry to (item 3 of argv = "true")
+
+  tell application "System Events"
+    set runningProcs to name of every process whose background only is false
+  end tell
+
+  -- 1. Ghostty
+  if runningProcs contains "ghostty" or runningProcs contains "Ghostty" then
+    try
+      tell application "Ghostty"
+        repeat with w in windows
+          if (name of w contains target) then
+            if not isDry then
+              set term to focused terminal of selected tab of w
+              input text cmd to term
+              send key "enter" to term
+            end if
+            return "ghostty::" & (name of w)
+          end if
+        end repeat
+      end tell
+    end try
+  end if
+
+  -- 2. Terminal.app
+  if runningProcs contains "Terminal" then
+    try
+      tell application "Terminal"
+        repeat with w in windows
+          if (name of w contains target) or (custom title of current settings of selected tab of w contains target) then
+            if not isDry then
+              do script cmd in selected tab of w
+            end if
+            return "terminal::" & (name of w)
+          end if
+        end repeat
+      end tell
+    end try
+  end if
+
+  -- 3. iTerm2
+  if runningProcs contains "iTerm2" or runningProcs contains "iTerm" then
+    try
+      tell application "iTerm2"
+        repeat with w in windows
+          repeat with t in tabs of w
+            repeat with s in sessions of t
+              if (name of s contains target) then
+                if not isDry then
+                  tell s to write text cmd
+                end if
+                return "iterm2::" & (name of s)
+              end if
+            end repeat
+          end repeat
+        end repeat
+      end tell
+    end try
+  end if
+
+  -- 4. General GUI / IDE windows via System Events (Antigravity, Cursor, VS Code, Claude, etc.)
+  repeat with pName in runningProcs
+    try
+      tell application "System Events"
+        tell process pName
+          repeat with w in (every window)
+            if (name of w contains target) then
+              if not isDry then
+                set frontmost to true
+                perform action "AXRaise" of w
+                keystroke cmd & return
+              end if
+              return (pName as text) & "::" & (name of w)
+            end if
+          end repeat
+        end tell
+      end tell
+    end try
+  end repeat
+
+  return "NOT_FOUND"
+end run
+"""
+      try:
+        let isDryStr = if dryRun: "true" else: "false"
+        let (asOut, asCode) = execCmdEx("osascript -e " & quoteShell(appleScript) & " " & quoteShell(scopedTarget) & " " & quoteShell(cmd) & " " & quoteShell(isDryStr))
+        let trimmed = asOut.strip()
+        if asCode == 0 and trimmed != "NOT_FOUND" and trimmed.contains("::"):
+          let parts = trimmed.split("::", 1)
+          methodFound = parts[0]
+          windowName = parts[1]
+          pokeDetails = methodFound & " window '" & windowName & "'"
+        elif asCode == 0 and trimmed == "NOT_FOUND" and scopedTarget != targetAgent:
+          let (asOut2, asCode2) = execCmdEx("osascript -e " & quoteShell(appleScript) & " " & quoteShell(targetAgent) & " " & quoteShell(cmd) & " " & quoteShell(isDryStr))
+          let trimmed2 = asOut2.strip()
+          if asCode2 == 0 and trimmed2 != "NOT_FOUND" and trimmed2.contains("::"):
+            let parts = trimmed2.split("::", 1)
+            methodFound = parts[0]
+            windowName = parts[1]
+            pokeDetails = methodFound & " window '" & windowName & "'"
+      except CatchableError:
+        discard
+
+  var resObj = newJObject()
+  resObj["target"] = %scopedTarget
+  resObj["command"] = %cmd
+  resObj["method"] = %methodFound
+  resObj["window"] = %windowName
+  resObj["dry_run"] = %dryRun
+
+  if methodFound != "NOT_FOUND":
+    resObj["status"] = if dryRun: %"FOUND" else: %"POKED"
+    let actionWord = if dryRun: "Found target" else: "Poked @" & scopedTarget
+    resObj["message"] = %(actionWord & " in " & pokeDetails & " with doorbell: " & cmd)
+    if jsonOut:
+      return $resObj
+    else:
+      let checkMark = if dryRun: "ℹ" else: "✓"
+      return checkMark & " [POKE] " & (if dryRun: "Found window for @" & scopedTarget else: "Poked @" & scopedTarget) & " via " & methodFound & "\n" &
+             "  Window  : " & windowName & "\n" &
+             "  Command : " & cmd
+  else:
+    resObj["status"] = %"NOT_FOUND"
+    resObj["message"] = %("Could not find an active window/tab matching @" & scopedTarget & " or '" & targetAgent & "'.")
+    if jsonOut:
+      return $resObj
+    else:
+      return "⚠️ [POKE] Window not found for @" & scopedTarget & "\n" &
+             "  Ensure worker's window or tab title contains the agent codename (e.g. via 'rhizo open " & scopedTarget & "')."
+
 proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput: bool = false, expectListening: bool = false, streakOverride: int = -1): tuple[output: string, exitCode: int] =
   var normName = sanitizeIdentifier(agentNameParam)
   if normName.len == 0:
@@ -4269,6 +4495,8 @@ proc main() =
     echo "  rhizo sub <channel> [timeout_sec]"
     echo "  rhizo who [-a|--all] [--json] [filter_tag]"
     echo "  rhizo probe <agent> [--json]"
+    echo "  rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json]"
+    echo "  rhizo title [name]"
     echo "  rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
     echo "  rhizo sweep [--dry-run] [--raw]"
     echo "  rhizo tag <add|remove|set> <tags> [name]"
@@ -4465,11 +4693,8 @@ proc main() =
 
     var name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
     if name.len == 0:
-      let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
-                 else: getCurrentDir().splitPath.tail
-      let reserved = reserveUniqueName(cfg, proj, 600)
-      name = sanitizeIdentifier(reserved.name)
-      stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
+      stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name ('rhizo listen <name>'), or export RHIZO_AGENT_NAME=<name>.")
+      quit(1)
     else:
       name = ensureProjectScopedName(cfg, name)
 
@@ -6981,6 +7206,50 @@ proc main() =
       stderr.writeLine("Error: Unknown hook action: '" & action & "'. Valid actions: codex-stop, install")
       quit(1)
 
+  of "title":
+    var agentName = ""
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if not a.startsWith("-") and agentName.len == 0:
+        agentName = a
+      inc i
+    if agentName.len == 0:
+      agentName = getActiveAgentName(cfg, fallbackDefault = true)
+    if agentName.len == 0:
+      agentName = "rhizo"
+    let scopedName = ensureProjectScopedName(cfg, agentName)
+    setTerminalTitle(scopedName, force = true)
+    echo "Terminal title set to: " & scopedName
+
+  of "poke", "nudge", "wake":
+    var targetAgent = ""
+    var optCmd = ""
+    var force = false
+    var dryRun = false
+    var jsonOut = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["--force", "-f"]:
+        force = true
+      elif a in ["--dry-run", "-n"]:
+        dryRun = true
+      elif a in ["--json", "-j"]:
+        jsonOut = true
+      elif a.startsWith("--cmd="):
+        optCmd = a[6..^1]
+      elif a in ["--cmd", "--command"] and i + 1 < args.len:
+        optCmd = args[i+1]
+        inc i
+      elif not a.startsWith("-") and targetAgent.len == 0:
+        targetAgent = a
+      inc i
+    if targetAgent.len == 0:
+      stderr.writeLine("Usage: rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json]")
+      quit(1)
+    echo doPoke(cfg, targetAgent, optCmd, force, dryRun, jsonOut)
+
   else:
     var suggestion = ""
     let lowCmd = subcmd.toLowerAscii
@@ -7006,6 +7275,8 @@ proc main() =
       suggestion = "alias"
     elif lowCmd in ["forward", "move-inbox", "transfer"]:
       suggestion = "reroute"
+    elif lowCmd in ["poke", "wake", "nudge", "bell", "doorbell"]:
+      suggestion = "poke"
 
     if suggestion.len > 0:
       stderr.writeLine("Error: Unknown subcommand '" & subcmd & "'. Did you mean 'rhizo " & suggestion & "'?")

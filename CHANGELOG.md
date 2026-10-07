@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-10-07
+
+### Added
+- **Dynamic ANSI Terminal Tab/Window Titling (`rhizo title` & Auto-Titling)**:
+  - Implemented `setTerminalTitle` emitting standard ANSI OSC 0 escape sequence (`\033]0;<agent>\007`) to `stderr` (preserving clean JSON/stdout pipeline streams).
+  - Integrated auto-titling across core commands: `rhizo open <agent>` updates window/tab to the agent codename, and `rhizo listen <agent>` dynamically stamps `<agent> (listening)` during wait cycles and restores `<agent>` upon completion.
+  - Added standalone `rhizo title [name]` CLI command for manual or scripted window titling with project scoping.
+  - Enables window-targeting AI tools (ChatGPT, macOS Accessibility, AppleScript) and human developers to locate agent tabs and windows deterministically.
+- **The "Doorbell" Protocol & `rhizo poke <agent>`**:
+  - Added `rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json]` (with aliases `wake`, `nudge`) to inject a non-destructive wakeup keystroke into stalled, deaf, or idle worker terminal windows.
+  - **Cascading Target Resolution**:
+    1. `tmux`: checks `list-panes` matching pane title or window name and injects `tmux send-keys -t <pane> <cmd> C-m`.
+    2. macOS `Ghostty`: uses native AppleScript API (`tell application "Ghostty" ... input text cmd to term ... send key "enter" to term`) without stealing focus.
+    3. macOS `Terminal.app`: uses `do script cmd in selected tab of w`.
+    4. macOS `iTerm2`: uses `tell session to write text cmd`.
+    5. macOS Universal GUI / Electron / IDEs (Antigravity, Cursor, VS Code, Claude Desktop): falls back to `System Events` targeting windows matching `<agent>`.
+  - **Health Interlock Guard**: Automatically queries `doProbe`. If the target agent is actively listening on Redis with 0 unread messages, `doPoke` safely skips injection (preventing stdin corruption) unless overridden with `--force`.
+  - Added invariant test `test_23_terminal_title_and_poke_invariants` to `tests/test_coordination_invariants.py`.
+
 ## [0.2.8] - 2026-10-07
 
 ### Added
