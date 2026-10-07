@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-10-07
+
+### Added
+- **Delegation Precedence Invariant**:
+  - Enforced that when instructed to "delegate", "assign", or "dispatch" work, orchestrator sessions MUST route tasks to active cluster workers via Rhizo (`rhizo send <worker>`, `rhizo enqueue queue:<project>:tasks`, or `rhizo task assign/claim`).
+  - Restricted harness-internal subagents (`invoke_subagent`, `Task`, `Agent`) to explicit operator requests by name or fallback when no cluster workers exist in `rhizo who`.
+- **Post-Compaction Ceremony Restoration Invariant (GVR-010)**:
+  - Added a mandatory compaction directive requiring compacting agents to preserve the `SWARM_RUNTIME_STATE` block and insert the ceremony restoration instruction.
+  - Resurrected agents must immediately re-read active coordination skills (`garden`, `orchestrate-swarm`, `rhizo`, `vine`) before executing further tools.
+- **Rhizo Coordination Guide v1.2**:
+  - Updated canonical guide in `src/guide.nim` and `AGENTS.md` across projects to encode delegation precedence and post-compaction ceremony restoration.
+
 ## [0.2.3] - 2026-10-06
 
 ### Added

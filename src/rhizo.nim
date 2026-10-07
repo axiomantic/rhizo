@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.3"
+  RhizoVersion*  = "0.2.4"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
