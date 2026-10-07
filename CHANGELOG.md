@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-10-07
+
+### Added
+- **Project-Scoped Role Naming & Anti-Collision Engine**:
+  - Implemented `ensureProjectScopedName` in `src/rhizo.nim` preventing bare generic roles (`orchestrator`, `architect`, `auditor`, `implementer`, `worker`, `agent`, `lead`, `reviewer`, `tester`, `coder`, `dev`) from colliding across multi-project clusters.
+  - Automatically scopes bare generic roles to `<project>-<role>` (e.g. `rhizo-orchestrator`, `rhizo-architect`) with clear diagnostic notices.
+  - Updated `reserveUniqueName` (`rhizo name`) to prefix bare roles or prefix-less requests with the active project namespace (`<project>-<word>` or `<project>-<role>-<word>`).
+  - Updated `rhizo listen`, `rhizo open`, `rhizo send`, `rhizo reply`, and `rhizo broadcast` to automatically resolve and target project-scoped agent identities.
+  - Added invariant test `test_22_bare_role_project_scoping` to `tests/test_coordination_invariants.py`.
+
 ## [0.2.7] - 2026-10-07
 
 ### Added

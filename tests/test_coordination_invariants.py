@@ -979,7 +979,37 @@ class TestCoordinationInvariants(unittest.TestCase):
         data_pass = json.loads(res_hook_pass.stdout.strip())
         self.assertNotEqual(data_pass.get("decision"), "block")
 
+    def test_22_bare_role_project_scoping(self):
+        """Verify that bare generic roles (architect, orchestrator, etc.) are never used bare and always project-scoped."""
+        proj = "alpha-proj"
+
+        # 1. rhizo name without args uses project prefix
+        res_name = self.run_cmd(["name"], env_overrides={"RHIZO_PROJECT": proj})
+        self.assertEqual(res_name.returncode, 0)
+        self.assertTrue(res_name.stdout.strip().startswith(proj + "-"))
+
+        # 2. rhizo name architect prefixes with project
+        res_name_arch = self.run_cmd(["name", "architect"], env_overrides={"RHIZO_PROJECT": proj})
+        self.assertEqual(res_name_arch.returncode, 0)
+        self.assertTrue(res_name_arch.stdout.strip().startswith(proj + "-architect-"))
+
+        # 3. rhizo open architect automatically scopes to alpha-proj-architect
+        res_open = self.run_cmd(["open", "architect"], env_overrides={"RHIZO_PROJECT": proj})
+        self.assertEqual(res_open.returncode, 0)
+        self.assertIn("alpha-proj-architect", res_open.stdout)
+        self.assertIn("automatically scoped to project", res_open.stderr)
+
+        # 4. rhizo listen with bare role scopes to alpha-proj-orchestrator
+        res_listen = self.run_cmd(["listen", "orchestrator", "--timeout", "1"], env_overrides={"RHIZO_PROJECT": proj})
+        self.assertEqual(res_listen.returncode, 0)
+        self.assertIn("alpha-proj-orchestrator", res_listen.stderr)
+
+        # Clean up
+        self.run_cmd(["close", "alpha-proj-architect"], env_overrides={"RHIZO_PROJECT": proj})
+        self.run_cmd(["close", "alpha-proj-orchestrator"], env_overrides={"RHIZO_PROJECT": proj})
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

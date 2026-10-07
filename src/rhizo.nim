@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.7"
+  RhizoVersion*  = "0.2.8"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -669,25 +669,49 @@ proc clearCurrentAgent*() =
     discard
 
 
+const BareGenericRoles* = [
+  "orchestrator", "architect", "auditor", "implementer",
+  "worker", "agent", "lead", "reviewer", "tester", "coder", "dev"
+]
+
+proc isBareGenericRole*(name: string): bool =
+  let lower = name.toLowerAscii
+  for r in BareGenericRoles:
+    if lower == r: return true
+  return false
+
+proc ensureProjectScopedName*(cfg: RhizoConfig, rawName: string): string =
+  let norm = sanitizeIdentifier(rawName)
+  if norm.len == 0:
+    return ""
+  if isBareGenericRole(norm):
+    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+               else: getCurrentDir().splitPath.tail
+    if proj.len > 0 and not (norm.startsWith(proj & "-") or norm.endsWith("-" & proj)):
+      let scoped = sanitizeIdentifier(proj & "-" & norm)
+      stderr.writeLine("[NOTICE] Bare generic role '" & norm & "' was automatically scoped to project: @" & scoped)
+      return scoped
+  return norm
+
 proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = false): string =
   if explicitName.len > 0:
-    return sanitizeIdentifier(explicitName)
+    return ensureProjectScopedName(cfg, explicitName)
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
-    return sanitizeIdentifier(cfg.agentName)
+    return ensureProjectScopedName(cfg, cfg.agentName)
   let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
   if envName.len > 0:
-    return sanitizeIdentifier(envName)
+    return ensureProjectScopedName(cfg, envName)
 
   # Session ID resolution
   let sid = if sessionId.len > 0: sessionId elif cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     let localAgent = getLocalSessionAgent(sid)
     if localAgent.len > 0:
-      return sanitizeIdentifier(localAgent)
+      return ensureProjectScopedName(cfg, localAgent)
     try:
       let redisAgent = getRedisSessionMapping(cfg, sid)
       if redisAgent.len > 0:
-        return sanitizeIdentifier(redisAgent)
+        return ensureProjectScopedName(cfg, redisAgent)
     except CatchableError:
       discard
 
@@ -695,8 +719,10 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
 
   if fallbackDefault:
     if cfg.agentName.len > 0:
-      return sanitizeIdentifier(cfg.agentName)
-    return if cfg.project.len > 0: sanitizeIdentifier(cfg.project & "-worker") else: "worker"
+      return ensureProjectScopedName(cfg, cfg.agentName)
+    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+               else: getCurrentDir().splitPath.tail
+    return if proj.len > 0: sanitizeIdentifier(proj & "-worker") else: "node-worker"
   return ""
 
 proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string] =
@@ -1298,11 +1324,21 @@ proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 
 proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 600): tuple[name, prefix, codename: string] =
   randomize()
-  var pfx = if optPrefix.len > 0: optPrefix.strip()
-            elif cfg.project.len > 0: cfg.project.strip()
-            else: "worker"
+  let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+             else: getCurrentDir().splitPath.tail
+  var pfx = ""
+  if optPrefix.len > 0:
+    let trimmed = optPrefix.strip()
+    if proj.len > 0 and (isBareGenericRole(trimmed) or (not trimmed.startsWith(proj & "-") and not trimmed.endsWith("-" & proj) and trimmed != proj)):
+      pfx = proj & "-" & trimmed
+    else:
+      pfx = trimmed
+  elif proj.len > 0:
+    pfx = proj
+  else:
+    pfx = "node"
   if pfx.len == 0:
-    pfx = "worker"
+    pfx = "node"
 
   let ttl = if ttlSec > 0: ttlSec else: 600
 
@@ -1334,10 +1370,13 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   defer:
     try: client.close() except CatchableError: discard
 
-  var name = sanitizeIdentifier(optName)
+  var name = ensureProjectScopedName(cfg, optName)
   if name.len == 0:
-    let reserved = reserveUniqueName(cfg, "", 600)
+    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+               else: getCurrentDir().splitPath.tail
+    let reserved = reserveUniqueName(cfg, proj, 600)
     name = sanitizeIdentifier(reserved.name)
+    stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
   else:
     try:
       if client.exists(cfg.prefix & "heartbeat:" & name):
@@ -1610,7 +1649,7 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
 proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
-  let name = sanitizeIdentifier(name)
+  let name = ensureProjectScopedName(cfg, name)
   checkSupervisionAttached(name, force or continuous)
   resetWatchdogStreak(cfg, name)
   let secret = getSecret(cfg)
@@ -4424,10 +4463,15 @@ proc main() =
           if explicitName == "": explicitName = sanitizeIdentifier(a)
       inc i
 
-    let name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
+    var name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
     if name.len == 0:
-      stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name ('rhizo listen <name>'), or export RHIZO_AGENT_NAME=<name>.")
-      quit(1)
+      let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+                 else: getCurrentDir().splitPath.tail
+      let reserved = reserveUniqueName(cfg, proj, 600)
+      name = sanitizeIdentifier(reserved.name)
+      stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
+    else:
+      name = ensureProjectScopedName(cfg, name)
 
     if not forceListen:
       let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, name)
@@ -4558,6 +4602,11 @@ proc main() =
         else:
           stderr.writeLine("Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body> [--immediate|--soon]")
       quit(1)
+
+    if not isBroadcast and toAgent.len > 0 and not toAgent.startsWith("@") and toAgent != "*":
+      toAgent = ensureProjectScopedName(cfg, toAgent)
+    if listenAgent.len > 0:
+      listenAgent = ensureProjectScopedName(cfg, listenAgent)
 
     discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent)
 

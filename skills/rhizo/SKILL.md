@@ -413,7 +413,7 @@ TASK_ID=$(echo "$TASK" | jq -r '.id')
 # 2. Execute task...
 # 3. Confirm completion and release lease:
 rhizo ack queue:frontend:tasks "$TASK_ID"
-rhizo reply --to orchestrator --subject "Task complete" --body '{"status":"ok"}' --reply-to "$TASK_ID"
+rhizo reply --to <project>-orchestrator --subject "Task complete" --body '{"status":"ok"}' --reply-to "$TASK_ID"
 ```
 
 ### D. System 1 Intelligent Directive Routing
@@ -545,7 +545,7 @@ When `rhizo listen` delivers a message, it exits with code 0 and prints:
 ```text
 [RE-ARM INSTRUCTION FOR CODING AGENT]
 Listener Identity: @claude-worker-1 (this is YOU)
-Delivered Message: 'msg_104' from @orchestrator
+Delivered Message: 'msg_104' from @<project>-orchestrator
 To continue listening, relaunch this EXACT command using your capability tier (NOT a shell loop!):
   Exact command: rhizo listen claude-worker-1
 Capability-Tier Invocations (SKILL.md Section 3):
