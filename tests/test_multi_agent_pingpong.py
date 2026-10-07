@@ -38,6 +38,8 @@ def run_bash(cmd: str, role: str = "AGENT") -> str:
         env.setdefault("RHIZO_REDIS_PREFIX", "rhizo:")
         env.setdefault("RHIZO_PROJECT", "locutus")
         env.setdefault("RHIZO_SCRIPTS_DIR", os.path.abspath("scripts"))
+        if role and role != "AGENT":
+            env["RHIZO_AGENT_NAME"] = role.lower()
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, env=env)
         output = (res.stdout + res.stderr).strip()
         print(f"[OUTPUT]: {output[:300]}")

@@ -269,7 +269,113 @@ Inspect your available runtime tools and execute the highest matching tier:
 
 ---
 
-## 5. Essential Coordination Workflows
+## 5. Unified Work Item State Machine (WISM)
+
+Rhizo, Garden, and Vine coordinate all multi-agent work through the formal **Work Item State Machine (WISM)**. Every task progresses through 10 deterministic states with atomic Redis transitions, automated DAG unblocking, and Two-Key integration gates.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFTED : rhizo task create <id>
+    DRAFTED --> BLOCKED : Unmet DAG dependencies (depends_on)
+    DRAFTED --> QUEUED : Zero unmet dependencies
+    BLOCKED --> QUEUED : Parent task COMPLETED (Auto-promoted by Lua engine)
+
+    QUEUED --> DELIVERED : Listener pops message (Transport Receipt emitted)
+    DELIVERED --> CLAIMED : Worker acknowledges (Acquires monotonic lease)
+    DELIVERED --> ORPHANED : Receipt timeout (180s without claim)
+
+    CLAIMED --> IN_PROGRESS : Worker provisions strand (vine new <id>)
+    IN_PROGRESS --> IN_PROGRESS : Progress reported (rhizo task progress, lease extended)
+    IN_PROGRESS --> GATE_EVALUATING : Verification initiated (vine gate)
+    IN_PROGRESS --> YIELDED : rhizo task yield (Returned to pool)
+    IN_PROGRESS --> ORPHANED : Lease expires without progress
+
+    GATE_EVALUATING --> IN_PROGRESS : Gate failed (Tests red or merge conflict)
+    GATE_EVALUATING --> READY_TO_WEAVE : Two-Key Gate PASSED (Cryptographic gate token stamped)
+
+    READY_TO_WEAVE --> COMPLETED : vine weave && rhizo task complete (Unblocks downstream DAG children)
+
+    ORPHANED --> QUEUED : Re-queued for retry (attempts < 3)
+    ORPHANED --> DEAD_LETTER : Max delivery retries exceeded (attempts >= 3)
+    YIELDED --> QUEUED : Returned to pool
+
+    COMPLETED --> [*]
+    DEAD_LETTER --> [*]
+```
+
+### ASCII State Transition Reference (LLM Fast-Path)
+
+```text
+  [rhizo task create]
+          │
+          ▼
+     +---------+      Unmet deps
+     | DRAFTED | ──────────────────► [ BLOCKED ]
+     +---------+                         │
+          │ Zero deps                    │ Parent task COMPLETED
+          ▼                              ▼
+     +---------+ ◄───────────────────────+
+     | QUEUED  |
+     +---------+
+          │
+          │ rhizo listen pops task (Transport Receipt emitted)
+          ▼
+    +-----------+      180s Receipt Timeout
+    | DELIVERED | ─────────────────────────────────► [ ORPHANED ]
+    +-----------+                                          │
+          │                                                │ Attempts >= 3
+          │ rhizo task claim / rhizo reply                 ▼
+          ▼                                         [ DEAD_LETTER ]
+     +---------+
+     | CLAIMED |
+     +---------+
+          │
+          │ vine new <task_id> (Provision strand)
+          ▼
+   +-------------+      Lease expires
+   | IN_PROGRESS | ────────────────────────────────► [ ORPHANED ]
+   +-------------+
+     │        ▲
+     │ vine   │ Gate fails
+     │ gate   │ (Tests red or conflict)
+     ▼        │
+  +-----------------+
+  | GATE_EVALUATING |
+  +-----------------+
+          │
+          │ Two-Key Gate PASSED (Key 1 merge-tree + Key 2 live test suite green)
+          ▼
+  +----------------+
+  | READY_TO_WEAVE |
+  +----------------+
+          │
+          │ vine weave && rhizo task complete
+          ▼
+    +-----------+
+    | COMPLETED | ──► Auto-promotes BLOCKED child tasks to QUEUED!
+    +-----------+
+```
+
+### State Definitions & Invariants
+
+| State | CLI Trigger | Atomic Action & Side Effects | Timeout / Failure Escalation |
+| :--- | :--- | :--- | :--- |
+| **`DRAFTED`** | `rhizo task create <id> --title <t>` | Creates immutable task contract hash `task:<id>` in Redis. | N/A |
+| **`BLOCKED`** | Evaluated on create | Stamped if `depends_on` contains incomplete tasks. Workers cannot claim. | N/A |
+| **`QUEUED`** | Auto on create or parent complete | Pushed to queue/inbox. Available for worker consumption. | N/A |
+| **`DELIVERED`** | `rhizo listen` consumes payload | **Atomically moves into `task:<id>` DELIVERED state**. Instant transport receipt emitted to orchestrator. Mirrored to local `~/.config/rhizo/current_task.json` for turn-end hook interlocks. | 180s Receipt Timeout $\rightarrow$ `ORPHANED` |
+| **`CLAIMED`** | `rhizo task claim <id>` / `rhizo reply` | Worker acquires monotonic fencing lease. Isolated Vine strand provisioned (`vine new <id>`). Turn-end hook blocks until work starts. | Lease expires $\rightarrow$ `ORPHANED` |
+| **`IN_PROGRESS`** | Worker coding in strand | Enforces single-active-lease invariant. Periodic `rhizo task progress` extends lease. | Lease expires $\rightarrow$ `ORPHANED` |
+| **`GATE_EVALUATING`**| `vine gate` | Key 1 (mechanical merge-tree) & Key 2 (live compiler/test suite) evaluated. | Exit 1 $\rightarrow$ `CONFLICTED`<br>Exit 2 $\rightarrow$ `GATE_FAILED` |
+| **`READY_TO_WEAVE`** | Both keys pass 100% | Cryptographic gate token stamped (`gate_token`). Report sent to orchestrator. | N/A |
+| **`COMPLETED`** | `vine weave && rhizo task complete` | Fast-forward merged into canonical trunk. Strand pruned. Locks released. **Downstream DAG dependencies automatically unblocked (`BLOCKED` $\rightarrow$ `QUEUED`)!** | N/A |
+| **`ORPHANED`** | Receipt timeout or lease expired | Stalled worker detected. Increments `delivery_attempts`. If $\ge 3 \rightarrow$ `DEAD_LETTER`. Otherwise returns to `QUEUED`. | Escalates to operator if Dead-Lettered |
+| **`YIELDED`** | `rhizo task yield <id>` | Worker gracefully steps aside. Task returned to `QUEUED`. | N/A |
+| **`DEAD_LETTER`** | Retries exhausted ($\ge 3$) | Moved to dead-letter queue. Alerts orchestrator and operator. | Requires manual operator triage |
+
+---
+
+## 6. Essential Coordination Workflows
 
 ### A. Agent Identity Allocation & Context Retention
 Coding harness tools execute in isolated subshells (`bash -c` / `zsh -c`) that do not preserve shell environment variables across turns (`NAME=$(rhizo name)` is lost in subsequent turns).

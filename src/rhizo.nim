@@ -84,7 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
-  RhizoVersion*  = "0.2.6"
+  RhizoVersion*  = "0.2.7"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -1408,6 +1408,19 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let normFrom = sanitizeIdentifier(fromAgent)
   resetWatchdogStreak(cfg, normFrom)
 
+  # Causal clearing of current_task on reply or outbound progress message
+  if msgType in ["reply", "progress", "complete"]:
+    let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+    let curTaskFile = rhizoCfgDir / "current_task.json"
+    if fileExists(curTaskFile):
+      try: removeFile(curTaskFile) except CatchableError: discard
+    try:
+      var client = connectRedis(cfg.redisUrl)
+      defer: (try: client.close() except CatchableError: discard)
+      discard client.del(@[cfg.prefix & "current_task:" & normFrom])
+    except CatchableError:
+      discard
+
   # Dynamic alias resolution (GVR-012)
   var resolvedTo = normTo
   if not (isBroadcast or normTo == "*"):
@@ -1594,6 +1607,7 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
       discard execCmdEx("notify-send " & quoteShell(title) & " " & quoteShell(displayBody))
   except Exception:
     discard
+proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
   let name = sanitizeIdentifier(name)
@@ -1786,6 +1800,21 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
       if notify:
         sendDesktopNotification(parsed)
+
+      # Record in Unified Work Item State Machine as DELIVERED
+      try:
+        discard doTask(cfg, "deliver", [id, name, "180", subject, body])
+      except CatchableError:
+        discard
+
+      # Mirror active delivery to local disk stamp for sub-millisecond hook inspection
+      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+      try:
+        createDir(rhizoCfgDir)
+        writeFile(rhizoCfgDir / "current_task.json", $parsed)
+      except CatchableError:
+        discard
+
       echo $parsed
       flushFile(stdout)
 
@@ -3193,13 +3222,18 @@ proc formatTasksTable*(jsonStr: string): string =
       let state = item.getOrDefault("state").getStr("UNASSIGNED")
       let owner = item.getOrDefault("owner").getStr("-")
       let lease = try: parseInt(item.getOrDefault("lease_until").getStr("0")) except ValueError: 0
+      let delivery = try: parseInt(item.getOrDefault("delivery_until").getStr("0")) except ValueError: 0
       let nowSec = getTime().toUnix()
-      let remSec = if lease > nowSec: $(lease - nowSec) & "s" else: "-"
+      var remSec = "-"
+      if state in ["IN_PROGRESS", "CLAIMED"] and lease > nowSec:
+        remSec = $(lease - nowSec) & "s (lease)"
+      elif state == "DELIVERED" and delivery > nowSec:
+        remSec = $(delivery - nowSec) & "s (claim)"
       rows.add((id, if owner.len > 0: owner else: "-", state, remSec, title))
-    result = "TASK ID              OWNER           STATE          LEASE REMAINING    TITLE\n"
-    result.add("--------------------------------------------------------------------------------------\n")
+    result = "TASK ID              OWNER           STATE            LEASE/TIMEOUT      TITLE\n"
+    result.add("----------------------------------------------------------------------------------------------------\n")
     for (id, owner, state, rem, title) in rows:
-      result.add(id.alignLeft(21) & owner.alignLeft(16) & state.alignLeft(15) & rem.alignLeft(19) & title & "\n")
+      result.add(id.alignLeft(21) & owner.alignLeft(16) & state.alignLeft(17) & rem.alignLeft(19) & title & "\n")
     result = result.strip()
   except CatchableError:
     return jsonStr
@@ -3863,6 +3897,51 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
   if blockCount >= 3:
     return "{}"
 
+  # 0. Active unacknowledged work item check (Local stamp + Redis state)
+  let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+  let currentTaskFile = rhizoCfgDir / "current_task.json"
+  var pendingTaskPayload = ""
+  if fileExists(currentTaskFile):
+    try:
+      let rawStamp = readFile(currentTaskFile).strip()
+      let sNode = parseJson(rawStamp)
+      let owner = sNode.getOrDefault("owner").getStr(sNode.getOrDefault("target").getStr(sNode.getOrDefault("to").getStr("")))
+      if owner.len == 0 or sanitizeIdentifier(owner) == probeTarget:
+        pendingTaskPayload = rawStamp
+    except CatchableError: discard
+
+  if pendingTaskPayload.len == 0:
+    let cTaskStr = doTask(cfg, "current", [probeTarget])
+    if cTaskStr.len > 0 and cTaskStr != "{}":
+      pendingTaskPayload = cTaskStr
+
+  if pendingTaskPayload.len > 0:
+    try:
+      let tNode = parseJson(pendingTaskPayload)
+      let tState = tNode.getOrDefault("state").getStr("DELIVERED")
+      if tState in ["DELIVERED", "CLAIMED", "IN_PROGRESS"]:
+        let tid = tNode.getOrDefault("id").getStr("")
+        let tTitle = tNode.getOrDefault("title").getStr(tNode.getOrDefault("subject").getStr(""))
+        let tSpec = tNode.getOrDefault("spec").getStr(tNode.getOrDefault("body").getStr(""))
+        
+        let newCount = client.incr(thrashKey)
+        if newCount == 1:
+          discard client.expire(thrashKey, 60)
+
+        var reason = "🚨 [CRITICAL RHIZO INTERLOCK] You have an UNACKNOWLEDGED ACTIVE TASK waiting for execution (@" & normName & ")!\n\n"
+        reason.add("Task ID: " & tid & "\n")
+        reason.add("Title: " & tTitle & "\n")
+        reason.add("State: " & tState & "\n")
+        if tSpec.len > 0:
+          reason.add("Instructions / Spec:\n" & tSpec & "\n\n")
+        reason.add("MANDATORY DIRECTIVE: You are an autonomous cluster worker. DO NOT yield your turn with unhandled tasks! Claim the task ('rhizo task claim " & tid & "'), execute in your Vine strand, verify with 'vine gate', and rearm your listener ('rhizo listen " & normName & "') before completing your turn.")
+
+        var jOut = newJObject()
+        jOut["decision"] = %"block"
+        jOut["reason"] = %reason
+        return $jOut
+    except CatchableError: discard
+
   # 1. Unread inbox backlog
   if inboxDepth > 0:
     try:
@@ -3937,10 +4016,11 @@ proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentName
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
 
+  let exePath = getAppFilename()
   let targetCmd = if normName.len > 0:
-    "rhizo hook codex-stop --agent " & normName
+    "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook codex-stop --agent " & normName & "'"
   else:
-    "rhizo hook codex-stop"
+    "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook codex-stop'"
 
   case targetHarness.toLowerAscii
   of "codex":
@@ -5950,7 +6030,7 @@ proc main() =
 
   of "task":
     if args.len < 2:
-      stderr.writeLine("Usage: rhizo task <create|claim|progress|complete|yield|get|list> [args...]")
+      stderr.writeLine("Usage: rhizo task <create|claim|progress|gate-report|complete|yield|current|sweep|get|list> [args...]")
       quit(1)
     let action = args[1].toLowerAscii
     case action
@@ -5959,6 +6039,9 @@ proc main() =
       var title = ""
       var deliverable = ""
       var spec = ""
+      var dependsOn = ""
+      var target = ""
+      var fencingKeys = ""
       var i = 2
       while i < args.len:
         let a = args[i]
@@ -5968,19 +6051,30 @@ proc main() =
         elif a == "--deliverable" and i + 1 < args.len: deliverable = args[i+1]; inc i
         elif a.startsWith("--spec="): spec = resolveVal(a[7..^1])
         elif a == "--spec" and i + 1 < args.len: spec = resolveVal(args[i+1]); inc i
+        elif a.startsWith("--depends-on="): dependsOn = a[13..^1]
+        elif a == "--depends-on" and i + 1 < args.len: dependsOn = args[i+1]; inc i
+        elif a.startsWith("--target="): target = a[9..^1]
+        elif a == "--target" and i + 1 < args.len: target = args[i+1]; inc i
+        elif a.startsWith("--fencing-keys="): fencingKeys = a[15..^1]
+        elif a == "--fencing-keys" and i + 1 < args.len: fencingKeys = args[i+1]; inc i
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
           elif title.len == 0: title = a
         inc i
       if taskId.len == 0:
-        stderr.writeLine("Error: Missing task id. Usage: rhizo task create <id> --title <title> [--deliverable <deliv>] [--spec <spec>]")
+        stderr.writeLine("Error: Missing task id. Usage: rhizo task create <id> --title <title> [--deliverable <deliv>] [--spec <spec>] [--depends-on <ids>] [--target <worker|queue>]")
         quit(1)
-      let res = doTask(cfg, "create", [taskId, title, deliverable, spec])
+      let res = doTask(cfg, "create", [taskId, title, deliverable, spec, dependsOn, target, fencingKeys])
       if res.startsWith("ERR"):
         stderr.writeLine(res)
         quit(1)
       doAuditLog(cfg, getActiveAgentName(cfg, fallbackDefault = true), "task.create", taskId & " - " & title)
-      echo "CREATED task '" & taskId & "'"
+      try:
+        let node = parseJson(res)
+        let st = node.getOrDefault("state").getStr("QUEUED")
+        echo "CREATED task '" & taskId & "' (state: " & st & ")"
+      except CatchableError:
+        echo "CREATED task '" & taskId & "'"
 
     of "claim":
       var taskId = ""
@@ -6024,6 +6118,20 @@ proc main() =
       if res.startsWith("ERR"):
         stderr.writeLine(res)
         quit(1)
+
+      # Mirror claimed task locally
+      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+      try:
+        createDir(rhizoCfgDir)
+        var tObj = newJObject()
+        tObj["id"] = %taskId
+        tObj["owner"] = %worker
+        tObj["state"] = %"IN_PROGRESS"
+        tObj["lease_sec"] = %leaseSec
+        tObj["strand_path"] = %strandPath
+        writeFile(rhizoCfgDir / "current_task.json", $tObj)
+      except CatchableError: discard
+
       doAuditLog(cfg, worker, "task.claim", taskId & " (lease " & $leaseSec & "s)")
       if strandPath.len > 0:
         echo "CLAIMED task '" & taskId & "' for worker '" & worker & "' (lease: " & $leaseSec & "s, strand: " & strandPath & ")"
@@ -6059,6 +6167,37 @@ proc main() =
         quit(1)
       doAuditLog(cfg, worker, "task.progress", taskId & ": " & progressText)
       echo "UPDATED progress on task '" & taskId & "'"
+
+    of "gate-report":
+      var taskId = ""
+      var worker = ""
+      var gateToken = ""
+      var strandPath = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--worker="): worker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif a.startsWith("--gate-token="): gateToken = a[13..^1]
+        elif a == "--gate-token" and i + 1 < args.len: gateToken = args[i+1]; inc i
+        elif a.startsWith("--token="): gateToken = a[8..^1]
+        elif a == "--token" and i + 1 < args.len: gateToken = args[i+1]; inc i
+        elif a.startsWith("--strand="): strandPath = a[9..^1]
+        elif a == "--strand" and i + 1 < args.len: strandPath = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if taskId.len == 0: taskId = a
+          elif gateToken.len == 0: gateToken = a
+        inc i
+      if taskId.len == 0 or gateToken.len == 0:
+        stderr.writeLine("Error: Missing task id or gate token. Usage: rhizo task gate-report <id> --token <token> [--strand <path>]")
+        quit(1)
+      if worker.len == 0:
+        worker = getActiveAgentName(cfg, fallbackDefault = true)
+      let res = doTask(cfg, "gate-report", [taskId, worker, gateToken, strandPath])
+      if res.startsWith("ERR"):
+        stderr.writeLine(res)
+        quit(1)
+      echo "REPORTED gate pass for task '" & taskId & "' (token: " & gateToken & ", state: READY_TO_WEAVE)"
 
     of "complete":
       var taskId = ""
@@ -6117,8 +6256,23 @@ proc main() =
       if res.startsWith("ERR"):
         stderr.writeLine(res)
         quit(1)
+
+      # Clear local mirror
+      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+      let curTaskFile = rhizoCfgDir / "current_task.json"
+      if fileExists(curTaskFile):
+        try: removeFile(curTaskFile) except CatchableError: discard
+
       doAuditLog(cfg, worker, "task.complete", taskId & (if gateToken.len > 0: " (" & gateToken & ")" else: ""))
-      echo "COMPLETED task '" & taskId & "'"
+      try:
+        let cNode = parseJson(res)
+        let unblockedCount = cNode.getOrDefault("unblocked_count").getInt(0)
+        if unblockedCount > 0:
+          echo "COMPLETED task '" & taskId & "' (automatically unblocked " & $unblockedCount & " dependent task(s))"
+        else:
+          echo "COMPLETED task '" & taskId & "'"
+      except CatchableError:
+        echo "COMPLETED task '" & taskId & "'"
 
     of "yield", "abandon":
       var taskId = ""
@@ -6144,8 +6298,62 @@ proc main() =
       if res.startsWith("ERR"):
         stderr.writeLine(res)
         quit(1)
+
+      let rhizoCfgDir = getHomeDir() / ".config" / "rhizo"
+      let curTaskFile = rhizoCfgDir / "current_task.json"
+      if fileExists(curTaskFile):
+        try: removeFile(curTaskFile) except CatchableError: discard
+
       doAuditLog(cfg, worker, "task.yield", taskId & (if reason.len > 0: ": " & reason else: ""))
       echo "YIELDED task '" & taskId & "'"
+
+    of "current":
+      var worker = ""
+      var jsonOut = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a == "--json": jsonOut = true
+        elif a.startsWith("--worker="): worker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if worker.len == 0: worker = a
+        inc i
+      if worker.len == 0:
+        worker = getActiveAgentName(cfg, fallbackDefault = true)
+      let res = doTask(cfg, "current", [worker])
+      if jsonOut:
+        echo res
+      else:
+        try:
+          let node = parseJson(res)
+          if node.len == 0:
+            echo "No active task for @" & worker & "."
+          else:
+            echo "Active Task for @" & worker & ":"
+            for k, v in node.pairs:
+              echo "  " & k.alignLeft(16) & ": " & v.getStr($v)
+        except CatchableError:
+          echo res
+
+    of "sweep":
+      var jsonOut = false
+      for a in args[2..^1]:
+        if a == "--json": jsonOut = true
+      let res = doTask(cfg, "sweep", [])
+      if jsonOut:
+        echo res
+      else:
+        try:
+          let node = parseJson(res)
+          if node.len == 0:
+            echo "Zero stalled tasks found. All task leases healthy."
+          else:
+            echo "Swept " & $node.len & " stalled/orphaned task(s):"
+            for item in node:
+              echo "  Task: " & item.getOrDefault("id").getStr("") & " -> " & item.getOrDefault("new_state").getStr("")
+        except CatchableError:
+          echo res
 
     of "get":
       if args.len < 3:
@@ -6171,16 +6379,22 @@ proc main() =
 
     of "list":
       var jsonOut = false
-      for a in args[2..^1]:
+      var stateFilter = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
         if a == "--json": jsonOut = true
-      let res = doTask(cfg, "list", [])
+        elif a.startsWith("--state="): stateFilter = a[8..^1]
+        elif a == "--state" and i + 1 < args.len: stateFilter = args[i+1]; inc i
+        inc i
+      let res = doTask(cfg, "list", [stateFilter])
       if jsonOut:
         echo res
       else:
         echo formatTasksTable(res)
 
     else:
-      stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, complete, yield, get, list")
+      stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, gate-report, complete, yield, current, sweep, get, list")
       quit(1)
 
   of "decision":

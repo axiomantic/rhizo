@@ -869,6 +869,116 @@ class TestCoordinationInvariants(unittest.TestCase):
         data_after_send = json.loads(res_after_send.stdout.strip())
         self.assertEqual(data_after_send["streak"], 1)
 
+    def test_21_work_item_state_machine(self):
+        """Verify the unified Work Item State Machine (WISM), DAG dependencies, causal clearing, and hook gates."""
+        prefix = TEST_PREFIX
+        agent_parent = "wism-parent-worker"
+        agent_child = "wism-child-worker"
+        task_parent = "wism-task-1"
+        task_child = "wism-task-2"
+
+        # 1. Clean Redis state for test keys
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL",
+                        f"{prefix}task:{task_parent}",
+                        f"{prefix}task:{task_child}",
+                        f"{prefix}task:tasks_all",
+                        f"{prefix}task:tasks_state:queued",
+                        f"{prefix}task:tasks_state:blocked",
+                        f"{prefix}task:tasks_state:delivered",
+                        f"{prefix}task:tasks_state:in_progress",
+                        f"{prefix}task:tasks_state:ready_to_weave",
+                        f"{prefix}task:tasks_state:completed",
+                        f"{prefix}task:tasks_state:orphaned",
+                        f"{prefix}task:tasks_state:dead_letter",
+                        f"{prefix}current_task:{agent_parent}",
+                        f"{prefix}current_task:{agent_child}"], check=True)
+
+        # 2. DAG Dependency Blocking & Automatic Unblocking
+        # Create parent task (should start QUEUED)
+        res_p = self.run_cmd(["task", "create", task_parent, "--title", "Parent Foundation Task"])
+        self.assertEqual(res_p.returncode, 0)
+        
+        res_p_get = self.run_cmd(["task", "get", task_parent, "--json"])
+        self.assertEqual(res_p_get.returncode, 0)
+        data_p = json.loads(res_p_get.stdout.strip())
+        self.assertEqual(data_p["state"], "QUEUED")
+
+        # Create child task with dependency on parent (should start BLOCKED)
+        res_c = self.run_cmd(["task", "create", task_child, "--title", "Child Dependent Task", "--depends-on", task_parent])
+        self.assertEqual(res_c.returncode, 0)
+
+        res_c_get = self.run_cmd(["task", "get", task_child, "--json"])
+        self.assertEqual(res_c_get.returncode, 0)
+        data_c = json.loads(res_c_get.stdout.strip())
+        self.assertEqual(data_c["state"], "BLOCKED")
+        self.assertIn(task_parent, data_c["depends_on"])
+
+        # Claim and complete parent task
+        res_p_claim = self.run_cmd(["task", "claim", task_parent, "--worker", agent_parent, "--lease", "60", "--no-vine"])
+        self.assertEqual(res_p_claim.returncode, 0)
+
+        res_p_comp = self.run_cmd(["task", "complete", task_parent, "--worker", agent_parent])
+        self.assertEqual(res_p_comp.returncode, 0)
+
+        # Invariant check: Parent is COMPLETED, Child is AUTOMATICALLY promoted to QUEUED!
+        res_c_get2 = self.run_cmd(["task", "get", task_child, "--json"])
+        self.assertEqual(res_c_get2.returncode, 0)
+        data_c2 = json.loads(res_c_get2.stdout.strip())
+        self.assertEqual(data_c2["state"], "QUEUED")
+
+        # 3. Full Lifecycle: Claim -> Progress -> Gate-Report -> Complete
+        res_c_claim = self.run_cmd(["task", "claim", task_child, "--worker", agent_child, "--lease", "60", "--no-vine"])
+        self.assertEqual(res_c_claim.returncode, 0)
+
+        res_c_curr = self.run_cmd(["task", "current", agent_child, "--json"])
+        self.assertEqual(res_c_curr.returncode, 0)
+        data_curr = json.loads(res_c_curr.stdout.strip())
+        self.assertEqual(data_curr["state"], "IN_PROGRESS")
+        self.assertEqual(data_curr["id"], task_child)
+
+        # Progress update
+        res_prog = self.run_cmd(["task", "progress", task_child, "Implemented unit tests", "--worker", agent_child])
+        self.assertEqual(res_prog.returncode, 0)
+
+        # Gate Report
+        res_gate = self.run_cmd(["task", "gate-report", task_child, "--gate-token", "GATE-OK-SHA-999", "--worker", agent_child])
+        self.assertEqual(res_gate.returncode, 0)
+        res_c_get3 = self.run_cmd(["task", "get", task_child, "--json"])
+        data_c3 = json.loads(res_c_get3.stdout.strip())
+        self.assertEqual(data_c3["state"], "READY_TO_WEAVE")
+        self.assertEqual(data_c3["gate_token"], "GATE-OK-SHA-999")
+
+        # Complete
+        res_c_comp = self.run_cmd(["task", "complete", task_child, "--worker", agent_child])
+        self.assertEqual(res_c_comp.returncode, 0)
+        res_c_curr2 = self.run_cmd(["task", "current", agent_child, "--json"])
+        self.assertEqual(res_c_curr2.stdout.strip(), "{}")
+
+        # 4. Turn-End Codex Stop Hook Verification with local current_task.json
+        rhizo_dir = os.path.join(self.test_home, ".config", "rhizo")
+        os.makedirs(rhizo_dir, exist_ok=True)
+        task_stamp_file = os.path.join(rhizo_dir, "current_task.json")
+
+        # Negative control: when current_task.json exists, hook MUST BLOCK
+        mock_task = {"id": "pending-task-1", "subject": "Fix issue", "body": "Do work", "state": "DELIVERED"}
+        with open(task_stamp_file, "w") as f:
+            json.dump(mock_task, f)
+
+        res_hook_block = self.run_cmd(["hook", "codex-stop", "--agent", "test-worker"])
+        self.assertEqual(res_hook_block.returncode, 0)
+        data_block = json.loads(res_hook_block.stdout.strip())
+        self.assertEqual(data_block.get("decision"), "block")
+        self.assertIn("UNACKNOWLEDGED ACTIVE TASK", data_block.get("reason", ""))
+
+        # Positive control: when current_task.json is cleaned, hook MUST PASS (no block decision)
+        if os.path.exists(task_stamp_file):
+            os.remove(task_stamp_file)
+
+        res_hook_pass = self.run_cmd(["hook", "codex-stop", "--agent", "test-worker"])
+        self.assertEqual(res_hook_pass.returncode, 0)
+        data_pass = json.loads(res_hook_pass.stdout.strip())
+        self.assertNotEqual(data_pass.get("decision"), "block")
+
 
 if __name__ == "__main__":
     unittest.main()

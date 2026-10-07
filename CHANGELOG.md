@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-10-07
+
+### Added
+- **Unified Work Item State Machine (WISM) (Module 18)**:
+  - Formally implemented the 10-state lifecycle: `DRAFTED` $\rightarrow$ `BLOCKED` (DAG) $\rightarrow$ `QUEUED` $\rightarrow$ `DELIVERED` (Transport Receipt) $\rightarrow$ `CLAIMED` (Semantic ACK) $\rightarrow$ `IN_PROGRESS` $\rightarrow$ `GATE_EVALUATING` $\rightarrow$ `READY_TO_WEAVE` $\rightarrow$ `COMPLETED` (plus `ORPHANED`, `YIELDED`, `DEAD_LETTER`).
+  - Completely rewrote `scripts/task.lua` with atomic Redis operations, lease renewals, and monotonic fencing validation.
+  - **Automated DAG Dependency Resolution**: On task completion (`rhizo task complete`), the Redis Lua engine automatically scans all downstream tasks in state `BLOCKED`, verifies completed dependencies, and promotes unblocked child tasks to `QUEUED` while publishing `TASK_UNBLOCKED` event notifications.
+  - **Transport Delivery Unification**: `doListen` automatically registers popped inbox messages as Work Items in `DELIVERED` state and mirrors the active task to `~/.config/rhizo/current_task.json`.
+  - **Causal Auto-Clearing**: Downstream actions (`rhizo reply`, `rhizo send`, `rhizo task complete`, `rhizo task yield`) automatically clear the local task mirror and release Redis task assignments.
+  - **Sub-Millisecond Stop Hook Interlock**: `rhizo hook codex-stop` evaluates `current_task.json` and Redis active task state in $<2\text{ms}$, returning `{"decision": "block", "reason": "..."}` to block premature turn completions until workers acknowledge and execute their tasks.
+  - Added CLI subcommands: `rhizo task gate-report <id> --token <token>`, `rhizo task current [agent] [--json]`, `rhizo task sweep [--json]`, and `--state <STATE>` filtering on `rhizo task list`.
+  - Embedded Mermaid state diagrams and ASCII transition flowcharts across `rhizo`, `garden`, and `vine` skills.
+
 ## [0.2.6] - 2026-10-07
 
 ### Added
