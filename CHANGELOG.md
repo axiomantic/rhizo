@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-10-07
+
+### Changed
+- **Watchdog Timer Protocol Clarification (Exempting Antigravity & OpenCode)**:
+  - Updated Section 2 turn-end listener protocol in `skills/rhizo/SKILL.md` and `SKILL.md` to explicitly designate scheduled watchdog timers as strictly for OpenAI Codex / ChatGPT CLI.
+  - Formally exempted Google Antigravity (where native background listener processes reactively wake the session on message receipt via `run_command(..., WaitMsBeforeAsync=500)`) and OpenCode (using background ear) from setting scheduled timers.
+
 ## [0.2.10] - 2026-10-07
 
 ### Fixed
