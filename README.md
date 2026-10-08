@@ -68,12 +68,12 @@ Rhizo is completely standalone and can be used on its own for any inter-process 
 
 However, Rhizo is designed from the ground up to pair seamlessly with **Vine** and **Garden**:
 - **Rhizo** (Transport & Concurrency): Inter-agent messaging bus, monotonic fencing locks, and task queues over Redis.
-- [**Vine**](https://github.com/axiomantic/vine) (Workspaces & Verification): Sub-second APFS Copy-on-Write strands, polyglot build-cache normalization, and the Two-Key integration gate (`git merge-tree` mechanical + compiler/test suite semantic checks).
+- [**Vine**](https://github.com/axiomantic/vine) (Workspaces & Verification): Zero-cost Rift copy-on-write strands, polyglot build-cache normalization, and the Two-Key integration gate (`git merge-tree` mechanical + compiler/test suite semantic checks).
 - [**Garden**](https://github.com/axiomantic/garden) (Swarm Methodology & High-Level Wrapper): Conversational project intake interview, prompt-bootstrapped worker fleets (10-backtick cards), 3-stage empirical dialectical pump (research, architecture, audit), and master ceremonial implementation planning.
 
 #### Complete Workflow
 1. **Claim Task**: `rhizo claim queue:myproj:tasks --lease 1800` (yields monotonic `fencing_token`).
-2. **Spin Zero-Cost Strand**: `vine new <task_id> --worktree` (sub-second APFS CoW workspace).
+2. **Spin Zero-Cost Strand**: `vine new <task_id>` (sub-second Rift CoW workspace).
 3. **Verify Two-Key Gate**: `vine gate --json` (Key 1 in-memory conflict check + Key 2 live compiler/test suite).
 4. **Weave & Acknowledge**: `vine weave && rhizo ack queue:myproj:tasks <task_id>`.
 
@@ -90,7 +90,7 @@ npx skills add -g axiomantic/vine
 npx skills add -g axiomantic/garden
 
 # Or install the CLI tools:
-npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden
+npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapshot
 ```
 
 ### 2. Try it in Your Terminals

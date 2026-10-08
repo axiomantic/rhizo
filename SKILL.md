@@ -493,7 +493,7 @@ rhizo task create task-auth-01 \
 ```bash
 # Atomically claims task with a 30-minute lease and provisions an isolated Vine strand:
 rhizo task claim task-auth-01 --lease 1800
-# Automatic stdout: [VINE INTEGRATION] Provisioned APFS CoW strand 'task-auth-01' via 'vine new task-auth-01'
+# Automatic stdout: [VINE INTEGRATION] Provisioned Rift CoW strand 'task-auth-01' via 'vine new task-auth-01'
 ```
 
 3. **Progress Updates**:
