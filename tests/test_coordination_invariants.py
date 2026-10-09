@@ -14,7 +14,7 @@ import unittest
 
 BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo"))
 REDIS_URL = os.environ.get("RHIZO_REDIS_URL", "redis://127.0.0.1:6379/0")
-TEST_PREFIX = "test_coord_inv:"
+TEST_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", f"test_coord_inv_{os.getpid()}:")
 
 
 class TestCoordinationInvariants(unittest.TestCase):
@@ -42,7 +42,8 @@ class TestCoordinationInvariants(unittest.TestCase):
         cmd_env = self.env.copy()
         if env_overrides:
             cmd_env.update(env_overrides)
-        return subprocess.run([BIN_PATH] + args, capture_output=True, text=True, env=cmd_env, cwd=cwd)
+        actual_cwd = cwd if cwd is not None else self.test_home
+        return subprocess.run([BIN_PATH] + args, capture_output=True, text=True, env=cmd_env, cwd=actual_cwd)
 
     # -------------------------------------------------------------------------
     # Problem 1: Identity Isolation (No Cross-Process ~/.config Leaks)

@@ -27,6 +27,133 @@ export interface RhizoMessagePayload {
   urgency?: "immediate" | "soon"
   host?: string
   timestamp?: string
+  reminders?: Reminder[]
+}
+
+export interface Reminder {
+  id: string
+  priority: "CRITICAL" | "HIGH" | "MED" | "LOW" | "INFO" | string
+  scope?: string
+  text?: string
+  directive?: string
+  target?: string
+  author?: string
+  created_at?: string
+  expires_at?: string
+  cadence_sec?: string
+  ack_count?: number
+}
+
+export interface PubSubHandle {
+  kill: () => void
+  procs?: any[]
+}
+
+export const activeTaskMap = new Map<string, string>() // agentName -> taskId
+export const lastKeepAliveMap = new Map<string, number>() // taskId -> timestamp
+
+export function setActiveTask(agentName: string, taskId: string): void {
+  if (!agentName || !taskId) return
+  activeTaskMap.set(agentName, taskId)
+}
+
+export function getActiveTask(agentName: string): string | null {
+  if (!agentName) return null
+  return activeTaskMap.get(agentName) || null
+}
+
+export function resolveActiveTaskId(agentName: string, sessionId?: string): string | null {
+  if (agentName && activeTaskMap.has(agentName)) {
+    return activeTaskMap.get(agentName)!
+  }
+  if (sessionId) {
+    const map = loadLocalSessionMap()
+    const entry = map[`pi:${sessionId}`]
+    if (entry && typeof entry === "object" && entry.task_id) {
+      if (agentName) activeTaskMap.set(agentName, entry.task_id)
+      return entry.task_id
+    }
+  }
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || ""
+    const currentTaskPath = join(home, ".config", "rhizo", "current_task.json")
+    if (existsSync(currentTaskPath)) {
+      const data = JSON.parse(readFileSync(currentTaskPath, "utf8"))
+      if (data && (data.id || data.task_id)) {
+        const id = data.id || data.task_id
+        if (agentName) activeTaskMap.set(agentName, id)
+        return id
+      }
+    }
+  } catch {}
+  return null
+}
+
+export async function pingTaskProgress(
+  bin: string = getRhizoBin(),
+  taskId: string,
+  agentName: string,
+  reason: string = "Active tool execution",
+  renewSec: number = 180,
+  force: boolean = false
+): Promise<boolean> {
+  if (!taskId) return false
+  const now = Date.now()
+  const lastPing = lastKeepAliveMap.get(taskId) || 0
+  if (!force && now - lastPing < 15000) {
+    return false
+  }
+  lastKeepAliveMap.set(taskId, now)
+
+  try {
+    const env = { ...process.env }
+    if (agentName) env.RHIZO_AGENT_NAME = agentName
+    const proc = spawn(
+      bin,
+      ["task", "progress", taskId, "--progress", reason, "--renew", String(renewSec)],
+      { stdio: "ignore", env, detached: true }
+    )
+    if (proc.unref) proc.unref()
+    console.error(`[rhizo-pi-ear] extended lease for task '${taskId}' (agent: ${agentName || "unknown"}, renew: ${renewSec}s)`)
+    return true
+  } catch (err: any) {
+    console.error(`[rhizo-pi-ear] failed to ping task progress: ${err?.message}`)
+    return false
+  }
+}
+
+export function queryActiveReminders(bin: string = getRhizoBin()): Reminder[] {
+  try {
+    const res = spawnSync(bin, ["reminder", "list", "--json"], {
+      encoding: "utf8",
+      timeout: 3000,
+    })
+    if (res.status === 0 && res.stdout) {
+      const parsed = JSON.parse(res.stdout)
+      if (Array.isArray(parsed.reminders)) {
+        return parsed.reminders
+      }
+    }
+  } catch {}
+  return []
+}
+
+export function formatAdvisoryBlock(reminders: Reminder[]): string {
+  if (!reminders || reminders.length === 0) return ""
+  const highPriority = reminders.filter((r) => {
+    const p = String(r.priority || "").toUpperCase()
+    return p === "CRITICAL" || p === "HIGH" || p === "URGENT"
+  })
+  if (highPriority.length === 0) return ""
+
+  const blocks = highPriority.map((r) => {
+    const priority = String(r.priority || "HIGH").toUpperCase()
+    const id = r.id || "unspecified"
+    const text = r.text || r.directive || ""
+    return `[ACTIVE ADVISORY - PRIORITY: ${priority} (${id})]:\n${text}`
+  })
+
+  return blocks.join("\n\n") + "\n\n"
 }
 
 export function getRhizoBin(): string {
@@ -126,18 +253,25 @@ export function resolveMessageUrgency(text: string): "immediate" | "soon" {
   return "soon"
 }
 
-export async function deliverPiPrompt(pi: any, text: string): Promise<void> {
+export async function deliverPiPrompt(pi: any, text: string, reminders?: Reminder[]): Promise<void> {
+  let promptText = text
+  const activeReminders = reminders !== undefined ? reminders : queryActiveReminders()
+  const advisory = formatAdvisoryBlock(activeReminders)
+  if (advisory && !promptText.includes("[ACTIVE ADVISORY")) {
+    promptText = advisory + promptText
+  }
+
   if (typeof pi?.sendMessage === "function") {
-    await pi.sendMessage(text)
+    await pi.sendMessage(promptText)
   } else if (typeof pi?.sendPrompt === "function") {
-    await pi.sendPrompt(text)
+    await pi.sendPrompt(promptText)
   } else if (typeof pi?.session?.promptAsync === "function") {
-    await pi.session.promptAsync({ body: { parts: [{ type: "text", text }] } })
+    await pi.session.promptAsync({ body: { parts: [{ type: "text", text: promptText }] } })
   } else if (typeof pi?.session?.prompt === "function") {
-    await pi.session.prompt({ body: { parts: [{ type: "text", text }] } })
+    await pi.session.prompt({ body: { parts: [{ type: "text", text: promptText }] } })
   } else {
     // Fallback: emit to standard output
-    console.log(text)
+    console.log(promptText)
   }
 }
 
@@ -154,6 +288,72 @@ export async function interruptPiIfBusy(pi: any): Promise<void> {
   }
 }
 
+export function startPubSubPreemption(pi: any, agentName: string, cwd: string = process.cwd()): PubSubHandle {
+  const bin = getRhizoBin()
+  const procs: any[] = []
+  let active = true
+
+  const channels = ["cancel", "immediate"]
+  if (agentName) {
+    channels.push(agentName)
+  }
+
+  for (const chan of channels) {
+    try {
+      const child = spawn(bin, ["sub", chan], {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      procs.push(child)
+
+      let stdoutData = ""
+      child.stdout?.on("data", (chunk) => {
+        if (!active) return
+        stdoutData += chunk.toString("utf8")
+        let idx: number
+        while ((idx = stdoutData.indexOf("\n")) >= 0) {
+          const line = stdoutData.slice(0, idx).trim()
+          stdoutData = stdoutData.slice(idx + 1)
+          if (!line) continue
+
+          console.error(`[rhizo-pi-ear] pubsub message on '${chan}': ${line}`)
+          let shouldPreempt = true
+          let cancelReason = "Preempted via Redis pub/sub"
+
+          try {
+            const parsed = JSON.parse(line)
+            if (parsed.target && parsed.target !== "*" && parsed.target !== agentName) {
+              shouldPreempt = false
+            }
+            if (parsed.reason) cancelReason = parsed.reason
+            if (parsed.action && parsed.action !== "cancel" && parsed.urgency !== "immediate") {
+              shouldPreempt = false
+            }
+          } catch {}
+
+          if (shouldPreempt) {
+            console.error(`[rhizo-pi-ear] in-flight preemption triggered for @${agentName}: ${cancelReason}`)
+            interruptPiIfBusy(pi).catch(() => {})
+            deliverPiPrompt(pi, `[RHIZO PREEMPTION: Operation cancelled via Redis pub/sub (${cancelReason})]`).catch(() => {})
+          }
+        }
+      })
+    } catch (err: any) {
+      console.error(`[rhizo-pi-ear] could not start pubsub listener for channel ${chan}: ${err?.message}`)
+    }
+  }
+
+  return {
+    kill: () => {
+      active = false
+      for (const p of procs) {
+        try { p.kill() } catch {}
+      }
+    },
+    procs,
+  }
+}
+
 /**
  * Main Pi Extension entrypoint.
  * Registered by Pi during startup.
@@ -163,6 +363,7 @@ export function RhizoPiExtension(pi: any) {
 
   const rhizoBin = getRhizoBin()
   let activeProc: any = null
+  let pubsubHandle: PubSubHandle | null = null
   let running = true
 
   // 1. Register rhizo CLI tool natively in Pi
@@ -216,6 +417,45 @@ export function RhizoPiExtension(pi: any) {
       activeProc = null
     }
 
+    if (pubsubHandle) {
+      try { pubsubHandle.kill() } catch {}
+      pubsubHandle = null
+    }
+
+    // Start pub/sub preemption listener
+    pubsubHandle = startPubSubPreemption(pi, agentName)
+
+    // Automated lease keep-alive helper for tools and file edits
+    const handleKeepAlive = (reason?: string) => {
+      const effAgent = process.env.RHIZO_AGENT_NAME || agentName
+      const sid = process.env.RHIZO_SESSION_ID ? process.env.RHIZO_SESSION_ID.replace(/^pi:/, "") : sessionId
+      const taskId = resolveActiveTaskId(effAgent, sid)
+      if (taskId) {
+        pingTaskProgress(rhizoBin, taskId, effAgent, reason || "Tool/file activity")
+      }
+    }
+
+    if (typeof pi?.on === "function") {
+      const toolHandler = (d?: any) => {
+        const name = d?.name || d?.tool || "tool"
+        handleKeepAlive(`tool:${name}`)
+      }
+      const fileHandler = (d?: any) => {
+        const p = d?.path || d?.file || "file"
+        handleKeepAlive(`file:${p}`)
+      }
+      pi.on("tool_call", toolHandler)
+      pi.on("tool.call", toolHandler)
+      pi.on("tool_execution", toolHandler)
+      pi.on("tool.execute", toolHandler)
+      pi.on("tool_start", toolHandler)
+      pi.on("tool_end", toolHandler)
+      pi.on("file_edit", fileHandler)
+      pi.on("file.edit", fileHandler)
+      pi.on("file_write", fileHandler)
+      pi.on("file.write", fileHandler)
+    }
+
     const startListener = async () => {
       while (running) {
         try {
@@ -238,16 +478,30 @@ export function RhizoPiExtension(pi: any) {
                     await interruptPiIfBusy(pi)
                   }
                   let promptText = `[rhizo:${agentName}] ${line}`
+                  let lineReminders: Reminder[] | undefined
                   try {
                     const parsed = JSON.parse(line)
+                    const taskId = parsed.task_id || (typeof parsed.id === "string" && parsed.id.startsWith("task-") ? parsed.id : null)
+                    if (taskId) {
+                      setActiveTask(agentName, taskId)
+                    }
+                    if (typeof parsed.body === "string") {
+                      const match = parsed.body.match(/Task ID:\s*([a-zA-Z0-9_-]+)/i)
+                      if (match && match[1]) {
+                        setActiveTask(agentName, match[1])
+                      }
+                    }
+                    if (Array.isArray(parsed.reminders)) {
+                      lineReminders = parsed.reminders
+                    }
                     const from = parsed.from || "unknown"
                     const host = parsed.host ? ` [host: ${parsed.host}]` : ""
                     const subj = parsed.subject ? ` (subject: "${parsed.subject}")` : ""
-                    const urg = (parsed.urgency === "immediate") ? " [URGENT: IMMEDIATE]" : ""
+                    const urg = parsed.urgency === "immediate" ? " [URGENT: IMMEDIATE]" : ""
                     const body = parsed.body || ""
                     promptText = `[RHIZO BUS message for @${agentName} from @${from}${host}${subj}${urg}]:\n${body}`
                   } catch {}
-                  await deliverPiPrompt(pi, promptText)
+                  await deliverPiPrompt(pi, promptText, lineReminders)
                 })()
               }
             }
@@ -278,6 +532,10 @@ export function RhizoPiExtension(pi: any) {
       if (activeProc) {
         try { activeProc.kill() } catch {}
       }
+      if (pubsubHandle) {
+        try { pubsubHandle.kill() } catch {}
+        pubsubHandle = null
+      }
       const sid = process.env.RHIZO_SESSION_ID
       if (sid) {
         removeLocalSessionMapping(sid)
@@ -297,7 +555,18 @@ export function RhizoPiExtension(pi: any) {
       if (activeProc) {
         try { activeProc.kill() } catch {}
       }
-    }
+      if (pubsubHandle) {
+        try { pubsubHandle.kill() } catch {}
+        pubsubHandle = null
+      }
+    },
+    setActiveTask,
+    getActiveTask,
+    resolveActiveTaskId,
+    pingTaskProgress,
+    queryActiveReminders,
+    formatAdvisoryBlock,
+    startPubSubPreemption,
   }
 }
 

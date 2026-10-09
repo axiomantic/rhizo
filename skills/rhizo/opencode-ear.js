@@ -142,10 +142,113 @@ function resolveSessionAgent(sessionId, fallbackName) {
 }
 
 // src/supervisor.ts
-import { spawn as nodeSpawn } from "child_process";
+import { spawn as nodeSpawn, spawnSync } from "child_process";
 import { createInterface } from "readline";
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "fs";
+import { join as join2 } from "path";
 var activeListeners = new Map;
 var sessionToAgent = new Map;
+var activeTaskMap = new Map;
+var lastKeepAliveMap = new Map;
+function setActiveTask(agentName, taskId) {
+  if (!agentName || !taskId)
+    return;
+  activeTaskMap.set(agentName, taskId);
+}
+function getActiveTask(agentName) {
+  if (!agentName)
+    return null;
+  return activeTaskMap.get(agentName) || null;
+}
+function resolveActiveTaskId(agentName, sessionId) {
+  if (agentName && activeTaskMap.has(agentName)) {
+    return activeTaskMap.get(agentName);
+  }
+  if (sessionId) {
+    const map = readLocalSessionMap();
+    const entry = map[`opencode:${sessionId}`];
+    if (entry && typeof entry === "object" && entry.task_id) {
+      if (agentName)
+        activeTaskMap.set(agentName, entry.task_id);
+      return entry.task_id;
+    }
+  }
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const currentTaskPath = join2(home, ".config", "rhizo", "current_task.json");
+    if (existsSync2(currentTaskPath)) {
+      const data = JSON.parse(readFileSync2(currentTaskPath, "utf8"));
+      if (data && (data.id || data.task_id)) {
+        const id = data.id || data.task_id;
+        if (agentName)
+          activeTaskMap.set(agentName, id);
+        return id;
+      }
+    }
+  } catch {}
+  return null;
+}
+async function pingTaskProgress(bin = getRhizoBin(), taskId, agentName, reason = "Active tool execution", renewSec = 180, force = false) {
+  if (!taskId)
+    return false;
+  const now = Date.now();
+  const lastPing = lastKeepAliveMap.get(taskId) || 0;
+  if (!force && now - lastPing < 15000) {
+    return false;
+  }
+  lastKeepAliveMap.set(taskId, now);
+  try {
+    const env = { ...process.env };
+    if (agentName)
+      env.RHIZO_AGENT_NAME = agentName;
+    const proc = nodeSpawn(bin, ["task", "progress", taskId, "--progress", reason, "--renew", String(renewSec)], { stdio: "ignore", env, detached: true });
+    if (proc.unref)
+      proc.unref();
+    console.error(`[rhizo-ear] extended lease for task '${taskId}' (agent: ${agentName || "unknown"}, renew: ${renewSec}s)`);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[rhizo-ear] failed to ping task progress: ${msg}`);
+    return false;
+  }
+}
+function queryActiveReminders(bin = getRhizoBin()) {
+  try {
+    const res = spawnSync(bin, ["reminder", "list", "--json"], {
+      encoding: "utf8",
+      timeout: 3000
+    });
+    if (res.status === 0 && res.stdout) {
+      const parsed = JSON.parse(res.stdout);
+      if (Array.isArray(parsed.reminders)) {
+        return parsed.reminders;
+      }
+    }
+  } catch {}
+  return [];
+}
+function formatAdvisoryBlock(reminders) {
+  if (!reminders || reminders.length === 0)
+    return "";
+  const highPriority = reminders.filter((r) => {
+    const p = String(r.priority || "").toUpperCase();
+    return p === "CRITICAL" || p === "HIGH" || p === "URGENT";
+  });
+  if (highPriority.length === 0)
+    return "";
+  const blocks = highPriority.map((r) => {
+    const priority = String(r.priority || "HIGH").toUpperCase();
+    const id = r.id || "unspecified";
+    const text = r.text || r.directive || "";
+    return `[ACTIVE ADVISORY - PRIORITY: ${priority} (${id})]:
+${text}`;
+  });
+  return blocks.join(`
+
+`) + `
+
+`;
+}
 function isListenerAlive(agentName) {
   const listener = activeListeners.get(agentName);
   if (!listener || !listener.state)
@@ -259,10 +362,16 @@ async function interruptSessionIfBusy(client, sessionId) {
     console.error(`[rhizo-ear] could not interrupt session ${sessionId}:`, msg);
   }
 }
-async function deliverPrompt(client, sessionId, text) {
+async function deliverPrompt(client, sessionId, text, reminders) {
+  let promptText = text;
+  const activeReminders = reminders !== undefined ? reminders : queryActiveReminders();
+  const advisory = formatAdvisoryBlock(activeReminders);
+  if (advisory && !promptText.includes("[ACTIVE ADVISORY")) {
+    promptText = advisory + promptText;
+  }
   const payload = {
     path: { id: sessionId },
-    body: { parts: [{ type: "text", text }] }
+    body: { parts: [{ type: "text", text: promptText }] }
   };
   if (typeof client?.session?.promptAsync === "function") {
     await client.session.promptAsync(payload);
@@ -284,9 +393,84 @@ function resolveMessageUrgency(text) {
   } catch {}
   return "soon";
 }
+function startPubSubPreemption(client, agentName, targetSessionId, cwd = process.cwd()) {
+  const bin = getRhizoBin();
+  const procs = [];
+  let active = true;
+  const channels = ["cancel", "immediate"];
+  if (agentName) {
+    channels.push(agentName);
+  }
+  for (const chan of channels) {
+    try {
+      const child = nodeSpawn(bin, ["sub", chan], {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      procs.push(child);
+      if (child.stdout) {
+        const rl = createInterface({ input: child.stdout });
+        rl.on("line", async (line) => {
+          if (!active)
+            return;
+          const trimmed = line.trim();
+          if (!trimmed)
+            return;
+          console.error(`[rhizo-ear] pubsub message on '${chan}': ${trimmed}`);
+          let shouldPreempt = true;
+          let cancelReason = "Preempted via Redis pub/sub";
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.target && parsed.target !== "*" && parsed.target !== agentName) {
+              shouldPreempt = false;
+            }
+            if (parsed.reason)
+              cancelReason = parsed.reason;
+            if (parsed.action && parsed.action !== "cancel" && parsed.urgency !== "immediate") {
+              shouldPreempt = false;
+            }
+          } catch {}
+          if (shouldPreempt) {
+            let sid = targetSessionId || getSessionIdForAgent(agentName);
+            if (!sid && client?.session?.list) {
+              try {
+                const res = await client.session.list();
+                const list = Array.isArray(res) ? res : res && ("data" in res) && Array.isArray(res.data) ? res.data : [];
+                sid = list[0]?.id || null;
+              } catch {}
+            }
+            if (sid) {
+              console.error(`[rhizo-ear] in-flight preemption triggered for session ${sid}: ${cancelReason}`);
+              await interruptSessionIfBusy(client, sid);
+              deliverPrompt(client, sid, `[RHIZO PREEMPTION: Operation cancelled via Redis pub/sub (${cancelReason})]`).catch(() => {});
+            }
+          }
+        });
+      }
+    } catch (err) {
+      console.error(`[rhizo-ear] could not start pubsub listener for channel ${chan}:`, err);
+    }
+  }
+  return {
+    kill: () => {
+      active = false;
+      for (const p of procs) {
+        try {
+          p.kill();
+        } catch {}
+      }
+    },
+    procs
+  };
+}
 function stopAgentListener(name) {
   const listener = activeListeners.get(name);
   if (listener) {
+    if (listener.pubsub) {
+      try {
+        listener.pubsub.kill();
+      } catch {}
+    }
     if (listener.state)
       listener.state.aborted = true;
     if (listener.state?.proc?.kill) {
@@ -308,7 +492,8 @@ function startAgentListener(client, name, cwd, targetSessionId) {
   if (activeListeners.has(name))
     return;
   const state = { aborted: false, proc: null };
-  activeListeners.set(name, { state, targetSessionId });
+  const pubsub = startPubSubPreemption(client, name, targetSessionId, cwd);
+  activeListeners.set(name, { state, targetSessionId, pubsub });
   let busy = false;
   const queue = [];
   function next() {
@@ -367,7 +552,16 @@ function startAgentListener(client, name, cwd, targetSessionId) {
     }
   }
   function offer(text) {
+    const isImmediate = resolveMessageUrgency(text) === "immediate";
     if (busy) {
+      if (isImmediate) {
+        console.error(`[rhizo-ear] urgent in-flight preemption: aborting busy session...`);
+        resolveTargetSession().then(async (id) => {
+          if (id) {
+            await interruptSessionIfBusy(client, id);
+          }
+        }).catch(() => {});
+      }
       queue.push(text);
       return;
     }
@@ -380,11 +574,32 @@ function startAgentListener(client, name, cwd, targetSessionId) {
       for await (const line of listenLines(name, cwd, state)) {
         if (state.aborted)
           break;
+        try {
+          const jsonStart = line.indexOf("{");
+          if (jsonStart >= 0) {
+            const parsed = JSON.parse(line.slice(jsonStart));
+            const taskId = parsed.task_id || (typeof parsed.id === "string" && parsed.id.startsWith("task-") ? parsed.id : null);
+            if (taskId) {
+              setActiveTask(name, taskId);
+            }
+            if (typeof parsed.body === "string") {
+              const match = parsed.body.match(/Task ID:\s*([a-zA-Z0-9_-]+)/i);
+              if (match && match[1]) {
+                setActiveTask(name, match[1]);
+              }
+            }
+          }
+        } catch {}
         offer(`[rhizo:${name}] ${line}`);
       }
     } catch (e) {
       console.error(`[rhizo-ear] listener error for ${name}:`, e);
     } finally {
+      if (pubsub) {
+        try {
+          pubsub.kill();
+        } catch {}
+      }
       activeListeners.delete(name);
     }
   })();
@@ -455,6 +670,15 @@ function getOrientationReminder(sessionId) {
 
 // src/index.ts
 var armedDirectories = new Set;
+async function handleKeepAlive(sessionId, reason) {
+  const agent = sessionId ? sessionToAgent.get(sessionId) || isSessionSupposedToListen(sessionId) : process.env.RHIZO_AGENT_NAME;
+  const effectiveAgent = agent || process.env.RHIZO_AGENT_NAME || "";
+  const taskId = resolveActiveTaskId(effectiveAgent, sessionId);
+  if (taskId) {
+    return await pingTaskProgress(getRhizoBin(), taskId, effectiveAgent, reason || "Tool/file activity");
+  }
+  return false;
+}
 var RhizoEar = async (ctx) => {
   if (process.env.RHIZO_EAR_DISABLED === "1")
     return {};
@@ -484,9 +708,33 @@ var RhizoEar = async (ctx) => {
         }
       }
     },
+    "tool.execute.before": async (data) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id;
+      const toolName = data?.name || data?.tool || "tool";
+      await handleKeepAlive(sid, `tool.execute.before:${toolName}`);
+    },
+    "tool.execute.after": async (data) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id;
+      const toolName = data?.name || data?.tool || "tool";
+      await handleKeepAlive(sid, `tool.execute.after:${toolName}`);
+    },
+    "fs.write": async (data) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id;
+      const path = data?.path || data?.file || "file";
+      await handleKeepAlive(sid, `fs.write:${path}`);
+    },
+    "file.edited": async (data) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id;
+      const path = data?.path || data?.file || "file";
+      await handleKeepAlive(sid, `file.edited:${path}`);
+    },
     event: async ({ event }) => {
       if (!event)
         return;
+      if (event.type && (event.type.startsWith("tool.") || event.type === "tool_call" || event.type === "tool_execution" || event.type.startsWith("file.") || event.type.startsWith("fs."))) {
+        const sid = event.properties?.info?.id || event.properties?.sessionID;
+        await handleKeepAlive(sid, `event:${event.type}`);
+      }
       if (event.type === "session.created" && event.properties?.info?.id) {
         const s = event.properties.info;
         let name = isSessionSupposedToListen(s.id);
@@ -530,11 +778,20 @@ var attachHelpers = (fn) => {
   fn.isListenerAlive = isListenerAlive;
   fn.setMappedAgent = setMappedAgent;
   fn.getOrientationReminder = getOrientationReminder;
+  fn.pingTaskProgress = pingTaskProgress;
+  fn.queryActiveReminders = queryActiveReminders;
+  fn.formatAdvisoryBlock = formatAdvisoryBlock;
+  fn.startPubSubPreemption = startPubSubPreemption;
+  fn.setActiveTask = setActiveTask;
+  fn.getActiveTask = getActiveTask;
+  fn.resolveActiveTaskId = resolveActiveTaskId;
+  fn.handleKeepAlive = handleKeepAlive;
   return fn;
 };
 attachHelpers(RhizoEar);
 var src_default = RhizoEar;
 export {
+  handleKeepAlive,
   src_default as default,
   RhizoEar
 };

@@ -1,15 +1,133 @@
-import { spawn as nodeSpawn } from "node:child_process"
+import { spawn as nodeSpawn, spawnSync } from "node:child_process"
 import { createInterface } from "node:readline"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import {
   getRhizoBin,
   isSessionSupposedToListen,
   resolveSessionAgent,
-  getSessionIdForAgent
+  getSessionIdForAgent,
+  readLocalSessionMap
 } from "./sessions"
-import type { ListenerState, ActiveListener, OpenCodeClient, SubprocessHandle, OpenCodeSessionInfo } from "./types"
+import type {
+  ListenerState,
+  ActiveListener,
+  OpenCodeClient,
+  SubprocessHandle,
+  OpenCodeSessionInfo,
+  Reminder,
+  PubSubHandle
+} from "./types"
 
-export const activeListeners = new Map<string, ActiveListener>() // agentName -> { state, targetSessionId }
+export const activeListeners = new Map<string, ActiveListener>() // agentName -> { state, targetSessionId, pubsub }
 export const sessionToAgent = new Map<string, string>() // sessionId -> agentName
+export const activeTaskMap = new Map<string, string>() // agentName -> taskId
+export const lastKeepAliveMap = new Map<string, number>() // taskId -> timestamp
+
+export function setActiveTask(agentName: string, taskId: string): void {
+  if (!agentName || !taskId) return
+  activeTaskMap.set(agentName, taskId)
+}
+
+export function getActiveTask(agentName: string): string | null {
+  if (!agentName) return null
+  return activeTaskMap.get(agentName) || null
+}
+
+export function resolveActiveTaskId(agentName: string, sessionId?: string): string | null {
+  if (agentName && activeTaskMap.has(agentName)) {
+    return activeTaskMap.get(agentName)!
+  }
+  if (sessionId) {
+    const map = readLocalSessionMap()
+    const entry = map[`opencode:${sessionId}`]
+    if (entry && typeof entry === "object" && entry.task_id) {
+      if (agentName) activeTaskMap.set(agentName, entry.task_id)
+      return entry.task_id
+    }
+  }
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || ""
+    const currentTaskPath = join(home, ".config", "rhizo", "current_task.json")
+    if (existsSync(currentTaskPath)) {
+      const data = JSON.parse(readFileSync(currentTaskPath, "utf8"))
+      if (data && (data.id || data.task_id)) {
+        const id = data.id || data.task_id
+        if (agentName) activeTaskMap.set(agentName, id)
+        return id
+      }
+    }
+  } catch {}
+  return null
+}
+
+export async function pingTaskProgress(
+  bin: string = getRhizoBin(),
+  taskId: string,
+  agentName: string,
+  reason: string = "Active tool execution",
+  renewSec: number = 180,
+  force: boolean = false
+): Promise<boolean> {
+  if (!taskId) return false
+  const now = Date.now()
+  const lastPing = lastKeepAliveMap.get(taskId) || 0
+  if (!force && now - lastPing < 15000) {
+    return false
+  }
+  lastKeepAliveMap.set(taskId, now)
+
+  try {
+    const env = { ...process.env }
+    if (agentName) env.RHIZO_AGENT_NAME = agentName
+    const proc = nodeSpawn(
+      bin,
+      ["task", "progress", taskId, "--progress", reason, "--renew", String(renewSec)],
+      { stdio: "ignore", env, detached: true }
+    )
+    if (proc.unref) proc.unref()
+    console.error(`[rhizo-ear] extended lease for task '${taskId}' (agent: ${agentName || "unknown"}, renew: ${renewSec}s)`)
+    return true
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[rhizo-ear] failed to ping task progress: ${msg}`)
+    return false
+  }
+}
+
+export function queryActiveReminders(bin: string = getRhizoBin()): Reminder[] {
+  try {
+    const res = spawnSync(bin, ["reminder", "list", "--json"], {
+      encoding: "utf8",
+      timeout: 3000,
+    })
+    if (res.status === 0 && res.stdout) {
+      const parsed = JSON.parse(res.stdout)
+      if (Array.isArray(parsed.reminders)) {
+        return parsed.reminders
+      }
+    }
+  } catch {}
+  return []
+}
+
+export function formatAdvisoryBlock(reminders: Reminder[]): string {
+  if (!reminders || reminders.length === 0) return ""
+  const highPriority = reminders.filter((r) => {
+    const p = String(r.priority || "").toUpperCase()
+    return p === "CRITICAL" || p === "HIGH" || p === "URGENT"
+  })
+  if (highPriority.length === 0) return ""
+
+  const blocks = highPriority.map((r) => {
+    const priority = String(r.priority || "HIGH").toUpperCase()
+    const id = r.id || "unspecified"
+    const text = r.text || r.directive || ""
+    return `[ACTIVE ADVISORY - PRIORITY: ${priority} (${id})]:\n${text}`
+  })
+
+  return blocks.join("\n\n") + "\n\n"
+}
 
 export function isListenerAlive(agentName: string): boolean {
   const listener = activeListeners.get(agentName)
@@ -120,10 +238,22 @@ export async function interruptSessionIfBusy(client: OpenCodeClient, sessionId: 
   }
 }
 
-export async function deliverPrompt(client: OpenCodeClient, sessionId: string, text: string): Promise<void> {
+export async function deliverPrompt(
+  client: OpenCodeClient,
+  sessionId: string,
+  text: string,
+  reminders?: Reminder[]
+): Promise<void> {
+  let promptText = text
+  const activeReminders = reminders !== undefined ? reminders : queryActiveReminders()
+  const advisory = formatAdvisoryBlock(activeReminders)
+  if (advisory && !promptText.includes("[ACTIVE ADVISORY")) {
+    promptText = advisory + promptText
+  }
+
   const payload = {
     path: { id: sessionId },
-    body: { parts: [{ type: "text", text }] },
+    body: { parts: [{ type: "text", text: promptText }] },
   }
 
   if (typeof client?.session?.promptAsync === "function") {
@@ -147,9 +277,91 @@ export function resolveMessageUrgency(text: string): "immediate" | "soon" {
   return "soon"
 }
 
+export function startPubSubPreemption(
+  client: OpenCodeClient,
+  agentName: string,
+  targetSessionId: string | null,
+  cwd: string = process.cwd()
+): PubSubHandle {
+  const bin = getRhizoBin()
+  const procs: SubprocessHandle[] = []
+  let active = true
+
+  const channels = ["cancel", "immediate"]
+  if (agentName) {
+    channels.push(agentName)
+  }
+
+  for (const chan of channels) {
+    try {
+      const child = nodeSpawn(bin, ["sub", chan], {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+      }) as unknown as SubprocessHandle
+      procs.push(child)
+
+      if (child.stdout) {
+        const rl = createInterface({ input: child.stdout as NodeJS.ReadableStream })
+        rl.on("line", async (line) => {
+          if (!active) return
+          const trimmed = line.trim()
+          if (!trimmed) return
+
+          console.error(`[rhizo-ear] pubsub message on '${chan}': ${trimmed}`)
+          let shouldPreempt = true
+          let cancelReason = "Preempted via Redis pub/sub"
+
+          try {
+            const parsed = JSON.parse(trimmed)
+            if (parsed.target && parsed.target !== "*" && parsed.target !== agentName) {
+              shouldPreempt = false
+            }
+            if (parsed.reason) cancelReason = parsed.reason
+            if (parsed.action && parsed.action !== "cancel" && parsed.urgency !== "immediate") {
+              shouldPreempt = false
+            }
+          } catch {}
+
+          if (shouldPreempt) {
+            let sid = targetSessionId || getSessionIdForAgent(agentName)
+            if (!sid && client?.session?.list) {
+              try {
+                const res = await client.session.list()
+                const list = Array.isArray(res) ? res : ((res && "data" in res && Array.isArray(res.data)) ? res.data : [])
+                sid = list[0]?.id || null
+              } catch {}
+            }
+
+            if (sid) {
+              console.error(`[rhizo-ear] in-flight preemption triggered for session ${sid}: ${cancelReason}`)
+              await interruptSessionIfBusy(client, sid)
+              deliverPrompt(client, sid, `[RHIZO PREEMPTION: Operation cancelled via Redis pub/sub (${cancelReason})]`).catch(() => {})
+            }
+          }
+        })
+      }
+    } catch (err: unknown) {
+      console.error(`[rhizo-ear] could not start pubsub listener for channel ${chan}:`, err)
+    }
+  }
+
+  return {
+    kill: () => {
+      active = false
+      for (const p of procs) {
+        try { p.kill() } catch {}
+      }
+    },
+    procs,
+  }
+}
+
 export function stopAgentListener(name: string): void {
   const listener = activeListeners.get(name)
   if (listener) {
+    if (listener.pubsub) {
+      try { listener.pubsub.kill() } catch {}
+    }
     if (listener.state) listener.state.aborted = true
     if (listener.state?.proc?.kill) {
       try {
@@ -176,7 +388,8 @@ export function startAgentListener(
 
   if (activeListeners.has(name)) return
   const state: ListenerState = { aborted: false, proc: null }
-  activeListeners.set(name, { state, targetSessionId })
+  const pubsub = startPubSubPreemption(client, name, targetSessionId, cwd)
+  activeListeners.set(name, { state, targetSessionId, pubsub })
 
   let busy = false
   const queue: string[] = []
@@ -241,7 +454,16 @@ export function startAgentListener(
   }
 
   function offer(text: string) {
+    const isImmediate = resolveMessageUrgency(text) === "immediate"
     if (busy) {
+      if (isImmediate) {
+        console.error(`[rhizo-ear] urgent in-flight preemption: aborting busy session...`)
+        resolveTargetSession().then(async (id) => {
+          if (id) {
+            await interruptSessionIfBusy(client, id)
+          }
+        }).catch(() => {})
+      }
       queue.push(text)
       return
     }
@@ -255,11 +477,30 @@ export function startAgentListener(
     try {
       for await (const line of listenLines(name, cwd, state)) {
         if (state.aborted) break
+        try {
+          const jsonStart = line.indexOf("{")
+          if (jsonStart >= 0) {
+            const parsed = JSON.parse(line.slice(jsonStart))
+            const taskId = parsed.task_id || (typeof parsed.id === "string" && parsed.id.startsWith("task-") ? parsed.id : null)
+            if (taskId) {
+              setActiveTask(name, taskId)
+            }
+            if (typeof parsed.body === "string") {
+              const match = parsed.body.match(/Task ID:\s*([a-zA-Z0-9_-]+)/i)
+              if (match && match[1]) {
+                setActiveTask(name, match[1])
+              }
+            }
+          }
+        } catch {}
         offer(`[rhizo:${name}] ${line}`)
       }
     } catch (e) {
       console.error(`[rhizo-ear] listener error for ${name}:`, e)
     } finally {
+      if (pubsub) {
+        try { pubsub.kill() } catch {}
+      }
       activeListeners.delete(name)
     }
   })()
