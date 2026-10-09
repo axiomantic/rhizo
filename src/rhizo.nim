@@ -86,7 +86,7 @@ const
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.12"
+  RhizoVersion*  = "0.2.13"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
