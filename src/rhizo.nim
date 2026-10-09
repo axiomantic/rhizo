@@ -1360,7 +1360,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 proc isCompletionSubject*(subject: string): bool
 proc findVineManifestPath*(startDir: string = ""): string
-proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = ""): tuple[passed: bool, token: string, errorMsg: string]
+proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string]
 proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
              rearmListen: bool = false, listenTimeoutSec: int = -1,
@@ -1521,7 +1521,7 @@ proc isCompletionSubject*(subject: string): bool =
     return true
   return false
 
-proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = ""): tuple[passed: bool, token: string, errorMsg: string] =
+proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string] =
   var manifestPath = ""
   if strandPath.len > 0:
     manifestPath = findVineManifestPath(strandPath)
@@ -1533,8 +1533,47 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
       try: vjLocal = parseFile(localManifest) except CatchableError: discard
       if vjLocal != nil:
         let mTaskId = vjLocal.getOrDefault("task_id").getStr("")
-        # If the local manifest has a task_id, only apply it if it matches taskId or taskId is empty (e.g. in reply)
-        if mTaskId.len == 0 or taskId.len == 0 or mTaskId == taskId:
+        var isRelevant = false
+        if taskId.len > 0:
+          isRelevant = (mTaskId.len == 0 or mTaskId == taskId)
+        elif mTaskId.len == 0:
+          isRelevant = true
+        else:
+          # taskId was not passed explicitly (e.g. in reply or send)
+          # Check whether this agent/context is associated with mTaskId
+          if subject.len > 0 and mTaskId.toLowerAscii() in subject.toLowerAscii():
+            isRelevant = true
+          elif worker.len > 0:
+            let wClean = sanitizeIdentifier(worker)
+            let vjOwner = vjLocal.getOrDefault("owner").getStr(vjLocal.getOrDefault("assignee").getStr(vjLocal.getOrDefault("worker").getStr("")))
+            if vjOwner.len > 0 and sanitizeIdentifier(vjOwner) == wClean:
+              isRelevant = true
+            else:
+              # Check local current_task file
+              let curTaskFile = currentTaskFilePath(wClean)
+              if fileExists(curTaskFile):
+                try:
+                  let curJson = parseFile(curTaskFile)
+                  if curJson.getOrDefault("id").getStr("") == mTaskId:
+                    isRelevant = true
+                except CatchableError: discard
+              # Check Redis for worker's current task or task owner
+              if not isRelevant and cfg.redisUrl.len > 0:
+                try:
+                  var client = connectRedis(cfg.redisUrl)
+                  defer: (try: client.close() except CatchableError: discard)
+                  let rCur = client.get(cfg.prefix & "current_task:" & wClean)
+                  if rCur != redisNil and rCur == mTaskId:
+                    isRelevant = true
+                  if not isRelevant:
+                    let rOwner = client.hGet(cfg.prefix & "task:" & mTaskId, "owner")
+                    if rOwner != redisNil and sanitizeIdentifier(rOwner) == wClean:
+                      isRelevant = true
+                except CatchableError: discard
+          else:
+            isRelevant = true
+
+        if isRelevant:
           manifestPath = localManifest
 
   # Not in a vine strand -> no gate check required
@@ -1766,7 +1805,7 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              urgency: string = "soon", format: string = "text", listenAgent: string = "",
              skipGate: bool = false): string =
   if isCompletionSubject(subject) and not skipGate:
-    let (passed, _, err) = checkVineGateInterlock()
+    let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
     if not passed:
       stderr.writeLine(err)
       quit(1)
@@ -3438,7 +3477,7 @@ proc formatTasksTable*(jsonStr: string): string =
 proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken: var string,
                      strandPath: string = "", weave: bool = false, skipGate: bool = false): string =
   if not skipGate:
-    let (passed, verifiedToken, err) = checkVineGateInterlock(taskId, "", strandPath, gateToken)
+    let (passed, verifiedToken, err) = checkVineGateInterlock(taskId, "", strandPath, gateToken, worker, cfg)
     if not passed:
       stderr.writeLine(err)
       quit(1)
@@ -5017,7 +5056,7 @@ proc main() =
       discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate)
     else:
       if subcmd == "send" and isCompletionSubject(subject) and not skipGate:
-        let (passed, _, err) = checkVineGateInterlock()
+        let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
         if not passed:
           stderr.writeLine(err)
           quit(1)
