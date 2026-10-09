@@ -15,7 +15,7 @@ import redis
 from tests.schema import LocutusMessage
 
 REDIS_URL = os.environ.get("RHIZO_REDIS_URL", "redis://127.0.0.1:6379")
-TEST_PREFIX = "locutus_test:"
+TEST_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", f"locutus_test_{os.getpid()}:")
 if os.name == "nt":
     BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
 else:
