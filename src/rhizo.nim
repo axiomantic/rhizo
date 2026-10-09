@@ -6616,7 +6616,16 @@ proc main() =
       except CatchableError:
         discard
 
-      if not skipGate and (strandPath.len > 0 or fileExists(".vine.json")) and findExe("vine").len > 0:
+      var isLocalStrandForTask = false
+      if fileExists(".vine.json"):
+        try:
+          let vj = parseJson(readFile(".vine.json"))
+          if vj.getOrDefault("task_id").getStr("") == taskId:
+            isLocalStrandForTask = true
+        except CatchableError:
+          discard
+
+      if not skipGate and (strandPath.len > 0 or isLocalStrandForTask) and findExe("vine").len > 0:
         stderr.writeLine("[VINE] Verifying Two-Key integration gate...")
         let gateCmd = if strandPath.len > 0: "vine gate --dir " & quoteShell(strandPath) else: "vine gate"
         let (gateOut, gateCode) = execCmdEx(gateCmd)
