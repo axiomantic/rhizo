@@ -32,6 +32,12 @@ for _, agent in ipairs(agents) do
     local last_seen = tonumber(meta[4]) or now
     local hb_ttl = tonumber(meta[5]) or 150
     local cur_task = meta[6] or ""
+    if cur_task == "" then
+        local at = redis.call('GET', prefix .. 'agent_task:' .. agent)
+        if at and at ~= false and at ~= "" then
+            cur_task = at
+        end
+    end
     if cur_task ~= "" and (state == "idle" or state == "busy") then
         state = "busy (" .. cur_task .. ")"
     end
@@ -41,6 +47,19 @@ for _, agent in ipairs(agents) do
     local alive = 0
     if hb_exists == 1 and elapsed <= hb_ttl then
         alive = 1
+    end
+
+    -- In-Flight Task Lease Liveness:
+    -- If agent holds an active task lease (state IN_PROGRESS or CLAIMED and now < lease_until),
+    -- treat agent as alive and state as busy (<cur_task>), preventing STALE during long work.
+    if cur_task ~= "" then
+        local t_meta = redis.call('HMGET', prefix .. 'task:' .. string.lower(cur_task), 'state', 'lease_until')
+        local t_state = t_meta[1]
+        local t_lease = tonumber(t_meta[2]) or 0
+        if (t_state == "IN_PROGRESS" or t_state == "CLAIMED") and now < t_lease then
+            alive = 1
+            state = "busy (" .. cur_task .. ")"
+        end
     end
 
     local listener_raw = redis.call('GET', prefix .. 'listener:' .. agent)

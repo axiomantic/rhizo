@@ -211,7 +211,9 @@ elseif action == "claim" then
     )
     redis.call('SET', prefix .. "agent_task:" .. worker, task_id)
     redis.call('SET', prefix .. "current_task:" .. worker, task_id)
-    redis.call('HSET', prefix .. "agent:" .. worker, "current_task", task_id)
+    local hb_ttl = tonumber(redis.call('HGET', prefix .. "agent:" .. worker, "heartbeat_ttl")) or 150
+    redis.call('SET', prefix .. "heartbeat:" .. worker, '1', 'EX', hb_ttl)
+    redis.call('HSET', prefix .. "agent:" .. worker, "current_task", task_id, "last_seen", now)
     return "OK"
 
 elseif action == "progress" then
@@ -232,6 +234,13 @@ elseif action == "progress" then
 
     local new_lease = now + renew_lease
     redis.call('HSET', task_key, "progress", progress_text, "lease_until", new_lease)
+
+    local target_worker = (worker ~= "" and worker or current_owner)
+    if target_worker ~= "" then
+        local hb_ttl = tonumber(redis.call('HGET', prefix .. "agent:" .. target_worker, "heartbeat_ttl")) or 150
+        redis.call('SET', prefix .. "heartbeat:" .. target_worker, '1', 'EX', hb_ttl)
+        redis.call('HSET', prefix .. "agent:" .. target_worker, "last_seen", now)
+    end
     return "OK"
 
 elseif action == "gate-report" then

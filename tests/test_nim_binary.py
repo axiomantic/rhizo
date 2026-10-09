@@ -5702,6 +5702,64 @@ secret = "my_inline_secret_test_555"
             self.assertNotIn("BEGIN RHIZO GUIDE", content2)
             self.assertNotIn("BEGIN LOCUTUS GUIDE", content2)
 
+    def test_72_inflight_lease_liveness_and_task_heartbeat(self):
+        """Verify WISM in-flight lease prevents STALE status in rhizo who and claim/progress auto-refreshes heartbeat."""
+        r = redis.from_url(REDIS_URL)
+
+        # Part 1: Auto-Heartbeat Refresh on claim and progress
+        worker = f"worker_liveness_{os.getpid()}"
+        res = self.run_locutus(["open", worker, "tester"])
+        self.assertEqual(res.returncode, 0)
+
+        # Artificially delete heartbeat key to simulate expiry
+        r.delete(f"{TEST_PREFIX}heartbeat:{worker}")
+        self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 0)
+
+        # Create task
+        t_create = self.run_locutus(["task", "create", "task-hb-test", "--title", "Heartbeat Test Task"])
+        self.assertEqual(t_create.returncode, 0)
+
+        # Claim task: should refresh heartbeat:<worker> and update last_seen
+        t_claim = self.run_locutus(["task", "claim", "task-hb-test", "--worker", worker, "--lease", "3600", "--no-vine"])
+        self.assertEqual(t_claim.returncode, 0)
+        self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 1)
+        ttl = r.ttl(f"{TEST_PREFIX}heartbeat:{worker}")
+        self.assertGreater(ttl, 0)
+
+        # Artificially delete heartbeat key again
+        r.delete(f"{TEST_PREFIX}heartbeat:{worker}")
+        self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 0)
+
+        # Progress update: should also refresh heartbeat:<worker> and update last_seen
+        t_prog = self.run_locutus(["task", "progress", "task-hb-test", "--progress", "50% done", "--worker", worker, "--renew", "1800"])
+        self.assertEqual(t_prog.returncode, 0)
+        self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 1)
+        ttl2 = r.ttl(f"{TEST_PREFIX}heartbeat:{worker}")
+        self.assertGreater(ttl2, 0)
+
+        # Part 2: WISM In-Flight Lease Liveness in 'rhizo who' during long builds
+        # Delete heartbeat key and artificially set last_seen far in the past (> hb_ttl)
+        r.delete(f"{TEST_PREFIX}heartbeat:{worker}")
+        r.hset(f"{TEST_PREFIX}agent:{worker}", "last_seen", 1000)
+
+        # Query directory via rhizo who --json
+        who_res = self.run_locutus(["who", "--json"])
+        self.assertEqual(who_res.returncode, 0)
+        agents = json.loads(who_res.stdout)
+        worker_entry = next((a for a in agents if a["agent"] == worker), None)
+        self.assertIsNotNone(worker_entry, f"Worker {worker} not found in rhizo who output: {who_res.stdout}")
+
+        # In-flight active task lease must prevent STALE status:
+        self.assertEqual(worker_entry["status"], "ACTIVE")
+        self.assertIn("BUSY (TASK-HB-TEST)", worker_entry["state"])
+
+        # Also verify tabular rhizo who output
+        who_table = self.run_locutus(["who"])
+        self.assertEqual(who_table.returncode, 0)
+        self.assertIn(worker, who_table.stdout)
+        self.assertIn("ACTIVE", who_table.stdout)
+        self.assertIn("BUSY (TASK-HB-TEST)", who_table.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
