@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] - 2026-10-09
+
+### Added
+- **Automated Harness Hook & Ear Installers (`rhizo hook install`)**:
+  - Implemented `rhizo hook install --opencode` and `rhizo hook install --pi` supporting global and `--local` scopes.
+  - Automatically provisions `rhizo-ear.js` / `rhizo-ear.ts` into `.opencode/plugins` and `.pi/agent/extensions` via symlink, copying, or compiled embedded fallbacks.
+  - Added unit test suite in `tests/test_hooks.py`.
+- **Two-Key Gate Command Interlock**:
+  - Integrated Vine Two-Key verification directly into `rhizo task complete` and `rhizo reply`.
+  - Enforces that tasks with active Vine strands cannot be completed or acknowledged without passing mechanical merge pre-checks and live semantic test suites (`READY_FOR_WEAVE` with valid `gate_token`), preventing unverified commits from entering trunk.
+- **OpenCode & Pi Ear Extension Supervisors**:
+  - Added automated lease keep-alive heartbeats triggered during active tool calls and file edits, preventing long refactor turns from timing out.
+  - Implemented in-flight run cancellation interrupts via Redis pub/sub (`RHIZO_INTERRUPT`), allowing operators and orchestrators to abort runaway sessions.
+  - Added active advisory injection: automatically surfaces critical cluster reminders and self-audit guardrails into prompt contexts.
+  - Added 22 integration tests in `tests/test_opencode_ear.test.js` and `tests/test_pi_ear.test.js`.
+- **Garden Guide v1.8**:
+  - Integrated Garden Guide v1.8 in `AGENTS.md` featuring the Active Swarm Fast-Path and elimination of standalone model pairing quizzes.
+
 ## [0.2.12] - 2026-10-09
 
 ### Added

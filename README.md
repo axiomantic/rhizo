@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/axiomantic/rhizo/actions/workflows/ci.yml/badge.svg)](https://github.com/axiomantic/rhizo/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-129%20Passing-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-155%20Passing-success.svg)](tests/)
 [![Redis](https://img.shields.io/badge/Redis-6.2%2B-red.svg)](https://redis.io)
 [![Valkey](https://img.shields.io/badge/Valkey-7.2%2B-purple.svg)](https://valkey.io)
 [![Nim](https://img.shields.io/badge/Nim-2.0%2B-yellow.svg)](https://nim-lang.org)
@@ -615,6 +615,12 @@ npx skills remove rhizo -g
 | `rhizo claim <queue> [timeout_sec]` | Non-destructively leases task from queue with DLQ escalation (default: 0 / infinite wait). | `rhizo claim jobs --lease 60 --run-id run_01` |
 | `rhizo claim renew <queue> <id>` | Safely extends active worker lease deadline before task expires. | `rhizo claim renew jobs "task_123" --lease 120` |
 | `rhizo ack <queue> <task_id>` | Acknowledges task completion and releases active worker lease. | `rhizo ack jobs "task_123"` |
+| `rhizo task <cmd> [args...]` | Unified Work Item State Machine (WISM) lifecycle (`create`, `list`, `get`, `claim`, `progress`, `yield`, `complete`) with Two-Key Gate verification. | `rhizo task create task-01 --subject "Feature"` |
+| `rhizo hook install [--flags]` | Automated one-line configuration installer for coding harness hooks & plugins (`--opencode`, `--pi`, `--claude`, `--codex`). | `rhizo hook install --opencode --local` |
+| `rhizo probe <agent>` | Health probe assessing heartbeat TTL, listener PID, socket responsiveness, and unread backlog. | `rhizo probe worker-1` |
+| `rhizo alias <set\|remove\|list>` | Manages agent alias mappings in Redis. | `rhizo alias set coder-lead worker-1` |
+| `rhizo reroute <from_agent> <to_agent>` | Atomically reroutes inbox messages and aliases from one agent to another. | `rhizo reroute worker-1 worker-2` |
+| `rhizo reminder <cmd> [args...]` | Distributed reminder and delayed notification scheduling with Redis sorted sets (`set`, `cancel`, `list`, `due`). | `rhizo reminder set "Review PR" 1800` |
 | `rhizo blackboard <cmd> <room> ...` | Shared persistent scratchpad memory (`set`, `get`, `append`, `rev`, `snapshot`/`dump`, `load`/`restore`). | `rhizo blackboard snapshot room1 state.json` |
 | `rhizo floor <cmd> <room> ...` | Turn-taking floor control for roundtables (`request`, `yield`, `pass`, `status`). | `rhizo floor request room1 30` |
 | `rhizo cancel <run_id> ...` | Global run cancellation tokens (`cancel`, `check`, `clear`). | `rhizo cancel run_042 --reason "Aborted"` |
@@ -809,7 +815,71 @@ When `rhizo listen` delivers a message and exits, the Nim engine automatically p
 
 ---
 
-### 1. Claude Code Hook Configuration (`.claude/settings.json`)
+### Automated Harness Hook & Extension Installer (`rhizo hook install`)
+
+Instead of manually editing JSON settings or copying scripts across machines, `rhizo` provides an automated one-line setup for your coding assistants:
+
+```bash
+# OpenCode: Installs opencode-ear.js into plugins and registers in opencode.json
+rhizo hook install --opencode           # Global (~/.config/opencode)
+rhizo hook install --opencode --local   # Project-local (.opencode/)
+
+# Pi Coding Agent: Provisions rhizo.ts extension and SKILL.md
+rhizo hook install --pi                 # Global (~/.pi/agent)
+rhizo hook install --pi --local         # Project-local (.pi/agent)
+
+# Claude Code: Configures Stop, SessionStart, and SessionEnd hooks in settings.json
+rhizo hook install --claude             # Global (~/.claude/settings.json)
+rhizo hook install --claude --local     # Project-local (.claude/settings.json)
+
+# OpenAI Codex: Configures Stop and Session lifecycle hooks in hooks.json
+rhizo hook install --codex              # Global (~/.codex/hooks.json)
+rhizo hook install --codex --local      # Project-local (.codex/hooks.json)
+```
+
+- **Zero Manual JSON Editing**: `rhizo hook install` non-destructively parses existing configuration files, inserts the necessary hooks/plugins while preserving existing user settings, and creates any missing parent directories automatically.
+- **Embedded Asset Fallback**: Even if skills repositories or source folders are moved, the compiled Nim engine contains embedded fallbacks of `opencode-ear.js` and `pi-ear.ts` to ensure 100% reliable bootstrapping.
+
+---
+
+### In-Process Extension Supervisors (`opencode-ear.js` & `pi-ear.ts`)
+
+For OpenCode and Pi Coding Agent, Rhizo's in-process extensions operate as continuous background supervisors within the host runtime (Node.js/Bun), offering three critical autonomous capabilities:
+
+1. **Automated Lease Keep-Alives**:
+   During active tool execution (compilations, test runs, large multi-file refactors), the supervisor periodically extends active task leases (`rhizo claim renew <queue> <id> --lease <sec>`). This prevents long-running tasks from prematurely expiring or escalating to Dead Letter Queues (DLQ) while the assistant is hard at work.
+2. **In-Flight Preemption & Cancellation Interrupts**:
+   The supervisor maintains a Redis pub/sub listener for `RHIZO_INTERRUPT` and messages with `urgency: immediate`. If an operator or orchestrator aborts a run or delivers an urgent interrupt while a tool call is in flight, the supervisor immediately aborts the active session (`pi.abort()` or OpenCode session abort) and injects the cancellation context into the next turn.
+3. **Active Advisory Injection**:
+   Non-blocking cluster notifications, background reminder alerts, and self-audit guardrails are formatted as system advisories and injected directly into prompt turns without human intervention.
+
+---
+
+### Two-Key Gate Command Interlock
+
+Rhizo integrates directly with Vine's **Two-Key Integration Gate** to prevent broken or unverified code from being reported as completed:
+
+```bash
+# Completes task and verifies Two-Key Gate if inside a Vine strand
+rhizo task complete <task_id>
+
+# Or reply with completion and verify Two-Key Gate
+rhizo reply --to <orchestrator> --subject "Task Done" --body "..." --reply-to "<id>"
+```
+
+- **Automatic Pre-Flight Verification**: When `rhizo task complete` or `rhizo reply` is called from within an active Vine strand (or when `.vine.json` is present), Rhizo automatically invokes `vine gate`.
+- **Enforces Key 1 & Key 2**:
+  - **Key 1 (Mechanical)**: In-memory conflict check (`git merge-tree --write-tree`).
+  - **Key 2 (Semantic)**: Live compiler and test suite run inside the strand.
+- **Zero Green Mirage**: If `vine gate` fails or reports conflicts, the command exits non-zero and refuses to mark the task `COMPLETED` or deliver the reply, protecting trunk branches from regression.
+
+---
+
+### Manual Hook & Extension Configuration Reference
+
+If configuring hooks manually without `rhizo hook install`:
+
+#### 1. Claude Code Hook Configuration (`.claude/settings.json`)
 
 Configure Claude Code to automatically check the Rhizo inbox whenever a response finishes:
 
@@ -853,7 +923,7 @@ Configure Claude Code to automatically check the Rhizo inbox whenever a response
 }
 ```
 
-### 2. OpenAI Codex Hook Configuration (`~/.codex/hooks.json`)
+#### 2. OpenAI Codex Hook Configuration (`~/.codex/hooks.json`)
 
 Configure Codex to feed incoming messages directly into continuation turns:
 
@@ -894,7 +964,7 @@ Configure Codex to feed incoming messages directly into continuation turns:
 }
 ```
 
-### 3. OpenCode Plugin Configuration (`opencode.json`)
+#### 3. OpenCode Plugin Configuration (`opencode.json`)
 
 Add `opencode-ear.js` to your `opencode.json` plugin array:
 
@@ -907,7 +977,7 @@ Add `opencode-ear.js` to your `opencode.json` plugin array:
 ```
 *Automatically maps `opencode:<sessionId>` in `~/.config/rhizo/sessions.json`, injects `RHIZO_SESSION_ID` via `shell.env`, and delivers messages via `promptAsync` (or `abort` for `--immediate`).*
 
-### 4. Desktop Notifications for Idle Sessions (`rhizo listen --notify`)
+#### 4. Desktop Notifications for Idle Sessions (`rhizo listen --notify`)
 
 When running an assistant in Cursor, VS Code, or an idle terminal tab in the background, you can enable native operating system notifications:
 
@@ -918,7 +988,7 @@ rhizo listen backend-worker --notify
 ```
 When a peer message arrives, Rhizo displays a native OS notification banner (macOS Notification Center, Windows Action Center toast, or Linux `notify-send`) alerting you to the incoming task.
 
-### 5. Pi Coding Agent Extension (`~/.pi/agent/extensions/rhizo.ts`)
+#### 5. Pi Coding Agent Extension (`~/.pi/agent/extensions/rhizo.ts`)
 
 For [Pi Coding Agent (`pi.dev`)](https://pi.dev), Rhizo provides a native TypeScript extension (`pi-ear.ts`):
 
@@ -934,7 +1004,7 @@ cp skills/rhizo/SKILL.md ~/.pi/agent/skills/rhizo/SKILL.md
 - **Background Listener Fiber**: Asynchronously streams `rhizo listen <agent> 0` in an unblocked fiber.
 - **Urgent Preemption**: For `--immediate` messages, triggers `pi.abort()` to halt active computation before injecting the prompt into the session turn.
 
-### 6. Cursor Rules (`.cursor/rules/rhizo.mdc`)
+#### 6. Cursor Rules (`.cursor/rules/rhizo.mdc`)
 
 Equip Cursor agents with project or user-level rules:
 
@@ -952,7 +1022,7 @@ cp skills/rhizo/rules/cursor-rules.mdc ~/.cursor/rules/rhizo.mdc
 - **In-Turn Waiting**: Zero-timeout listening (`rhizo listen <my-name>`) while waiting for expected peer responses.
 - **Idle Notifications**: Run `rhizo listen <name> --notify` in a background terminal for native desktop notifications.
 
-### 7. GitHub Copilot Instructions (`.github/copilot-instructions.md`)
+#### 7. GitHub Copilot Instructions (`.github/copilot-instructions.md`)
 
 Instruct GitHub Copilot CLI and Copilot Chat agent mode:
 
