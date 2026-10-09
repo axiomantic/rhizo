@@ -84,6 +84,8 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
+  EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
+  EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
   RhizoVersion*  = "0.2.12"
 
 # Cryptographic Helpers
@@ -4308,7 +4310,69 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
 
   return "{}"
 
-proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentNameParam: string = "", isGlobal: bool = false): string =
+proc resolveSkillFile(filename: string): string =
+  let envDir = getEnv("RHIZO_SKILLS_DIR", "")
+  if envDir.len > 0:
+    let cand = envDir / filename
+    if fileExists(cand): return absolutePath(cand)
+
+  var cur = getCurrentDir()
+  for _ in 0..5:
+    let cand = cur / "skills" / "rhizo" / filename
+    if fileExists(cand):
+      return absolutePath(cand)
+    let parent = parentDir(cur)
+    if parent == cur: break
+    cur = parent
+
+  let appBase = getAppDir()
+  let appCand1 = appBase / ".." / "skills" / "rhizo" / filename
+  if fileExists(appCand1):
+    return absolutePath(appCand1)
+  let appCand2 = appBase / "skills" / "rhizo" / filename
+  if fileExists(appCand2):
+    return absolutePath(appCand2)
+
+  let home = getHomeDir()
+  let homeCandidates = [
+    home / ".config" / "rhizo" / "skills" / "rhizo" / filename,
+    home / ".gemini" / "config" / "skills" / "rhizo" / filename,
+    home / ".local" / "share" / "rhizo" / "skills" / "rhizo" / filename
+  ]
+  for cand in homeCandidates:
+    if fileExists(cand):
+      return absolutePath(cand)
+
+  return ""
+
+proc installEarFile(harnessName, srcFilename, destFilename, targetDir, embeddedContent: string): string =
+  createDir(targetDir)
+  let targetFile = targetDir / destFilename
+  let srcPath = resolveSkillFile(srcFilename)
+
+  try:
+    removeFile(targetFile)
+  except CatchableError:
+    discard
+
+  if srcPath.len > 0:
+    var symlinked = false
+    try:
+      createSymlink(srcPath, targetFile)
+      symlinked = true
+    except CatchableError:
+      symlinked = false
+
+    if not symlinked:
+      copyFile(srcPath, targetFile)
+
+    let mode = if symlinked: "symlinked" else: "copied"
+    return "✓ Successfully installed Rhizo " & harnessName & " in " & targetFile & " (" & mode & " from " & srcPath & ")"
+  else:
+    writeFile(targetFile, embeddedContent)
+    return "✓ Successfully installed Rhizo " & harnessName & " in " & targetFile & " (embedded)"
+
+proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentNameParam: string = "", isGlobal: bool = false, isLocal: bool = false): string =
   var normName = sanitizeIdentifier(agentNameParam)
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
@@ -4412,8 +4476,22 @@ proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentName
     writeFile(settingsFile, pretty(rootNode, 2) & "\n")
     return "✓ Successfully installed Rhizo Stop hook in " & settingsFile & "\n  Command: " & targetCmd
 
+  of "opencode":
+    let targetDir = if isLocal:
+      getCurrentDir() / ".opencode" / "plugins"
+    else:
+      getHomeDir() / ".config" / "opencode" / "plugins"
+    return installEarFile("OpenCode ear plugin", "opencode-ear.js", "rhizo-ear.js", targetDir, EmbeddedOpencodeEar)
+
+  of "pi":
+    let targetDir = if isLocal:
+      getCurrentDir() / ".pi" / "agent" / "extensions"
+    else:
+      getHomeDir() / ".pi" / "agent" / "extensions"
+    return installEarFile("Pi ear extension", "pi-ear.ts", "rhizo-ear.ts", targetDir, EmbeddedPiEar)
+
   else:
-    return "Error: Unknown harness '" & targetHarness & "'. Supported: codex, claude"
+    return "Error: Unknown harness '" & targetHarness & "'. Supported: codex, claude, opencode, pi"
 
 # Main Entrypoint / CLI Router
 proc main() =
@@ -4541,6 +4619,7 @@ proc main() =
     echo "  rhizo get-secret"
     echo "  rhizo config <show|get|path|init>"
     echo "  rhizo guide <install|uninstall|check> [path]"
+    echo "  rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local]"
     echo ""
     echo "Global Options:"
     echo "  --version, -v         Print version and exit"
@@ -7192,7 +7271,7 @@ proc main() =
 
   of "hook":
     if args.len < 2:
-      stderr.writeLine("Usage: rhizo hook <codex-stop|install> [options]")
+      stderr.writeLine("Usage: rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local] [options]")
       quit(1)
     let action = args[1].toLowerAscii
     case action
@@ -7218,6 +7297,7 @@ proc main() =
       var harness = "codex"
       var targetAgent = ""
       var isGlobal = false
+      var isLocal = false
       var i = 2
       while i < args.len:
         let a = args[i]
@@ -7225,17 +7305,31 @@ proc main() =
           harness = "codex"
         elif a in ["--claude"]:
           harness = "claude"
+        elif a in ["--opencode"]:
+          harness = "opencode"
+        elif a in ["--pi"]:
+          harness = "pi"
         elif a in ["--global", "-g"]:
           isGlobal = true
+        elif a in ["--local", "-l"]:
+          isLocal = true
+        elif a.startsWith("--harness="):
+          harness = a[10..^1].toLowerAscii
+        elif a in ["--harness"] and i + 1 < args.len:
+          harness = args[i+1].toLowerAscii
+          inc i
         elif a.startsWith("--agent="):
           targetAgent = a[8..^1]
         elif a in ["--agent", "-a"] and i + 1 < args.len:
           targetAgent = args[i+1]
           inc i
-        elif not a.startsWith("-") and targetAgent.len == 0:
-          targetAgent = a
+        elif not a.startsWith("-"):
+          if a.toLowerAscii in ["codex", "claude", "opencode", "pi"]:
+            harness = a.toLowerAscii
+          elif targetAgent.len == 0:
+            targetAgent = a
         inc i
-      let res = doHookInstall(cfg, harness, targetAgent, isGlobal)
+      let res = doHookInstall(cfg, harness, targetAgent, isGlobal, isLocal)
       echo res
     else:
       stderr.writeLine("Error: Unknown hook action: '" & action & "'. Valid actions: codex-stop, install")

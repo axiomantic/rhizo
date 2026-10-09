@@ -310,6 +310,124 @@ class TestRhizoHooks(unittest.TestCase):
             ], capture_output=True, env=self.env)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
 
+    def test_hook_install_opencode_global(self):
+        """Test rhizo hook install --opencode in default/global mode."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = self.env.copy()
+            env["HOME"] = tmpdir
+            res = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--opencode"
+            ], capture_output=True, text=True, cwd=tmpdir, env=env)
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("Successfully installed", res.stdout)
+            self.assertIn("OpenCode", res.stdout)
+
+            target_file = Path(tmpdir) / ".config" / "opencode" / "plugins" / "rhizo-ear.js"
+            self.assertTrue(target_file.exists())
+            content = target_file.read_text(encoding="utf-8")
+            self.assertIn("opencode:", content)
+            self.assertIn("getRhizoBin", content)
+
+    def test_hook_install_opencode_local(self):
+        """Test rhizo hook install --opencode --local in project directory."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--opencode", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("Successfully installed", res.stdout)
+            self.assertIn("OpenCode", res.stdout)
+
+            target_file = Path(tmpdir) / ".opencode" / "plugins" / "rhizo-ear.js"
+            self.assertTrue(target_file.exists())
+            content = target_file.read_text(encoding="utf-8")
+            self.assertIn("opencode:", content)
+
+            # Test idempotent re-installation
+            res_reinstall = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--opencode", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res_reinstall.returncode, 0)
+            self.assertIn("Successfully installed", res_reinstall.stdout)
+
+    def test_hook_install_pi_global(self):
+        """Test rhizo hook install --pi in default/global mode."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = self.env.copy()
+            env["HOME"] = tmpdir
+            res = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--pi"
+            ], capture_output=True, text=True, cwd=tmpdir, env=env)
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("Successfully installed", res.stdout)
+            self.assertIn("Pi", res.stdout)
+
+            target_file = Path(tmpdir) / ".pi" / "agent" / "extensions" / "rhizo-ear.ts"
+            self.assertTrue(target_file.exists())
+            content = target_file.read_text(encoding="utf-8")
+            self.assertIn("pi-ear.ts", content)
+            self.assertIn("getRhizoBin", content)
+
+    def test_hook_install_pi_local(self):
+        """Test rhizo hook install --pi --local in project directory."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--pi", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("Successfully installed", res.stdout)
+            self.assertIn("Pi", res.stdout)
+
+            target_file = Path(tmpdir) / ".pi" / "agent" / "extensions" / "rhizo-ear.ts"
+            self.assertTrue(target_file.exists())
+            content = target_file.read_text(encoding="utf-8")
+            self.assertIn("pi-ear.ts", content)
+
+            # Test idempotent re-installation
+            res_reinstall = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--pi", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res_reinstall.returncode, 0)
+            self.assertIn("Successfully installed", res_reinstall.stdout)
+
+    def test_hook_install_positional_and_flag_variants(self):
+        """Test positional harness syntax ('hook install opencode', 'hook install pi') and --harness=... flag."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Positional opencode
+            res1 = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "opencode", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res1.returncode, 0)
+            self.assertIn("OpenCode", res1.stdout)
+            self.assertTrue((Path(tmpdir) / ".opencode" / "plugins" / "rhizo-ear.js").exists())
+
+            # Positional pi
+            res2 = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "pi", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res2.returncode, 0)
+            self.assertIn("Pi", res2.stdout)
+            self.assertTrue((Path(tmpdir) / ".pi" / "agent" / "extensions" / "rhizo-ear.ts").exists())
+
+            # --harness=opencode
+            res3 = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--harness=opencode", "--local"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertEqual(res3.returncode, 0)
+            self.assertIn("OpenCode", res3.stdout)
+
+            # Unknown harness via --harness
+            res_err = subprocess.run([
+                str(BIN_RHIZO), "hook", "install", "--harness=unsupported"
+            ], capture_output=True, text=True, cwd=tmpdir, env=self.env)
+            self.assertIn("Error: Unknown harness 'unsupported'", res_err.stdout)
+            self.assertIn("Supported: codex, claude, opencode, pi", res_err.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
