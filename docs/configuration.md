@@ -70,7 +70,7 @@ All Rhizo-controlled environment variables use the canonical `RHIZO_` prefix. Fo
 | `RHIZO_ROUTES_LOCAL_FILE` | `SYSTEMONE_ROUTES_LOCAL_FILE` | Path | `.rhizo-routes.local.yaml`| Local developer route override overlay. |
 | `RHIZO_GLOBAL_ROUTES_FILE`| `SYSTEMONE_GLOBAL_ROUTES_FILE`| Path | `~/.config/rhizo/rhizo-routes.yaml`| Machine-wide fallback route configuration. |
 | `RHIZO_SERVICE_URL`| `SYSTEMONE_URL`, `LAYA_URL` | URL | `http://127.0.0.1:8100` | HTTP endpoint for the local or remote System 1 inference service. |
-| `RHIZO_API_KEY` | `SYSTEMONE_API_KEY`, `JEV_API_KEY` | String | *None* | Optional bearer token or API key for System 1 endpoint authentication. |
+| `LAYA_API_KEY` | `RHIZO_LAYA_API_KEY` | String | *None* | Optional bearer token or API key for System 1 (Laya) endpoint authentication. |
 | `RHIZO_MODEL` | `SYSTEMONE_MODEL`, `LAYA_MODEL` | String | `default` | Name of the fast triage model running on the System 1 inference backend. |
 | `RHIZO_ROUTE_TIMEOUT` | `SYSTEMONE_TIMEOUT` | Seconds | `5.0` | HTTP connection and response timeout for semantic routing evaluation. |
 

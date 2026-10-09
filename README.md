@@ -481,7 +481,7 @@ rhizo route lint --check-service  # Validate rules & verify daemon connectivity
    pip install "git+https://github.com/axiomantic/local-systemone.git#egg=local-systemone[full]"
    local-systemone --install-daemon   # macOS launchd or Linux systemd daemon on port 8100
    ```
-2. **Cloud Alternative**: TypeSafe Jev API at `https://api.typesafe.ai` with `RHIZO_API_KEY`.
+2. **Cloud Alternative**: TypeSafe Jev API at `https://api.typesafe.ai` with `LAYA_API_KEY`.
    *For detailed service setup, macOS Metal & Linux deployment instructions, and schema definitions, see [references/system_one_setup.md](references/system_one_setup.md).*
 
 ---

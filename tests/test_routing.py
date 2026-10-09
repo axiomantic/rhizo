@@ -357,7 +357,7 @@ routes:
             cwd=tmpdir,
             env={
                 "RHIZO_SERVICE_URL": mock_laya_server,
-                "RHIZO_API_KEY": "env-token-xyz",
+                "LAYA_API_KEY": "env-token-xyz",
                 "RHIZO_MODEL": "decider-4b"
             }
         )
@@ -495,4 +495,58 @@ routes:
         assert "global-infra-rule" in out2
         assert " -> " in out2
         assert "rhizo-routes.yaml" in out2
+
+
+def test_route_laya_api_key_resolution(mock_laya_server):
+    """Verify service.apiKey exclusively resolves LAYA_API_KEY and RHIZO_LAYA_API_KEY, dropping legacy keys."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        routes_file = Path(tmpdir) / "rhizo-routes.yaml"
+        routes_file.write_text(f"""
+version: "1.0"
+service:
+  url: "{mock_laya_server}"
+questions:
+  domain:
+    type: choice
+    instructions: "Which domain?"
+    options: ["database", "api"]
+routes:
+  - name: "db-route"
+    match:
+      domain.choice: "database"
+    target:
+      queue: "queue:swarm:database"
+""")
+
+        # 1. LAYA_API_KEY is resolved
+        MockLayaHandler.last_auth = None
+        code, out, err = run_rhizo(
+            "route", "optimize slow database query",
+            cwd=tmpdir,
+            env={"LAYA_API_KEY": "laya-secret-token-1"}
+        )
+        assert code == 0, f"Error: {err}"
+        assert MockLayaHandler.last_auth == "Bearer laya-secret-token-1"
+
+        # 2. RHIZO_LAYA_API_KEY is resolved
+        MockLayaHandler.last_auth = None
+        code, out, err = run_rhizo(
+            "route", "optimize slow database query",
+            cwd=tmpdir,
+            env={"RHIZO_LAYA_API_KEY": "rhizo-laya-secret-token-2"}
+        )
+        assert code == 0, f"Error: {err}"
+        assert MockLayaHandler.last_auth == "Bearer rhizo-laya-secret-token-2"
+
+        # 3. Legacy aliases are dropped and NOT resolved
+        for legacy_key in ["RHIZO_API_KEY", "SYSTEMONE_API_KEY", "JEV_API_KEY"]:
+            MockLayaHandler.last_auth = None
+            code, out, err = run_rhizo(
+                "route", "optimize slow database query",
+                cwd=tmpdir,
+                env={legacy_key: "legacy-token-should-be-ignored"}
+            )
+            assert code == 0, f"Error: {err}"
+            assert MockLayaHandler.last_auth is None, f"Legacy key '{legacy_key}' was unexpectedly resolved!"
+
 

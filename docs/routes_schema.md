@@ -45,7 +45,7 @@ service:                # Optional: Inference endpoint configuration
   url: "http://127.0.0.1:8100"
   timeout_seconds: 5.0
   model: "default"
-  api_key: "${RHIZO_API_KEY}" # Supports environment variable expansion
+  api_key: "${LAYA_API_KEY}" # Supports environment variable expansion
 
 limits:                 # Optional: Chunking and payload size safeguards
   overflow_strategy: "split_aggregate" # "split_aggregate" | "truncate"

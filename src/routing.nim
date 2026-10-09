@@ -42,7 +42,7 @@ type
     url*: string                # default "http://127.0.0.1:8100"
     timeoutSeconds*: float      # default 5.0
     model*: string              # optional model identifier (e.g. "kev-4b", "decider-4b")
-    apiKey*: string             # optional API key for hosted endpoints (e.g. TypeSafe Jev)
+    apiKey*: string             # optional API key for hosted endpoints (e.g. Laya / TypeSafe Jev)
 
   QuestionConfig* = object
     id*: string
@@ -547,7 +547,7 @@ proc lintYamlContent*(content: string, checkService: bool = false, isOverlay: bo
       apiKey = root["service"].getOrDefault("api_key").getStr("")
     let envUrl = getEnvFirst("RHIZO_SERVICE_URL", "RHIZO_SYSTEMONE_URL", "RHIZO_LAYA_URL", "SYSTEMONE_URL", "LAYA_URL")
     if envUrl.len > 0: serviceUrl = envUrl
-    let envKey = getEnvFirst("RHIZO_API_KEY", "RHIZO_SYSTEMONE_API_KEY", "SYSTEMONE_API_KEY", "JEV_API_KEY")
+    let envKey = getEnvFirst("LAYA_API_KEY", "RHIZO_LAYA_API_KEY")
     if envKey.len > 0: apiKey = envKey
 
     var client = newHttpClient(timeout = 3000)
@@ -622,7 +622,7 @@ proc parseRoutesConfig*(yamlContent: string, configPath: string = ""): RoutingCo
   if envUrl.len > 0: result.service.url = envUrl
   let envModel = getEnvFirst("RHIZO_MODEL", "RHIZO_SYSTEMONE_MODEL", "SYSTEMONE_MODEL", "LAYA_MODEL")
   if envModel.len > 0: result.service.model = envModel
-  let envKey = getEnvFirst("RHIZO_API_KEY", "RHIZO_SYSTEMONE_API_KEY", "SYSTEMONE_API_KEY", "JEV_API_KEY")
+  let envKey = getEnvFirst("LAYA_API_KEY", "RHIZO_LAYA_API_KEY")
   if envKey.len > 0: result.service.apiKey = envKey
   let envTimeout = getEnvFirst("RHIZO_ROUTE_TIMEOUT", "RHIZO_SYSTEMONE_TIMEOUT", "SYSTEMONE_TIMEOUT")
   if envTimeout.len > 0:

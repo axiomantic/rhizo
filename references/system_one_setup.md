@@ -90,7 +90,7 @@ curl http://127.0.0.1:8100/healthz
 - **Best for:** Teams with no local GPU/neural runtime setup or centralized enterprise routing.
 - **Provider:** TypeSafe AI (Jev API)
 - **Endpoint:** `https://api.typesafe.ai`
-- **Authentication:** Bearer token (`JEV_API_KEY` or `RHIZO_API_KEY`)
+- **Authentication:** Bearer token (`LAYA_API_KEY` or `RHIZO_LAYA_API_KEY`)
 - **Model:** e.g. `jev-1` or `jev-fast`
 
 ---
@@ -101,7 +101,7 @@ Rhizo uses a strict, uncommitted layering model so secrets and developer-specifi
 
 ### Precedence Hierarchy:
 1. **CLI Flags**: `--service-url`, `--model`, `--api-key`, `--route-timeout`
-2. **Process Environment Variables**: Shell environment (`RHIZO_API_KEY`, `RHIZO_SERVICE_URL`)
+2. **Process Environment Variables**: Shell environment (`LAYA_API_KEY`, `RHIZO_LAYA_API_KEY`, `RHIZO_SERVICE_URL`)
 3. **Local Uncommitted Env (`.env.local`)**: Machine-local secrets (git-ignored)
 4. **Project Env Defaults (`.env`)**: Shared, non-sensitive environment settings
 5. **Local Uncommitted Routes (`rhizo-routes.local.yaml`)**: Developer endpoint and rule overrides (git-ignored)
@@ -113,7 +113,7 @@ Create `.env.local` in your workspace root (automatically git-ignored):
 ```bash
 # .env.local
 RHIZO_SERVICE_URL="https://api.typesafe.ai"
-RHIZO_API_KEY="jev_live_sec_abcdef123456"
+LAYA_API_KEY="laya_live_sec_abcdef123456"
 RHIZO_MODEL="jev-1"
 ```
 
@@ -279,7 +279,7 @@ rhizo enqueue --route "Deadlock on postgres users table when running migrations"
 | Error | Root Cause | Solution |
 | :--- | :--- | :--- |
 | `System 1 service is unreachable at ...` | Local service is stopped or port is blocked | Start local engine (`local-systemone` / `laya-serve` / `uvicorn`) or check `curl http://127.0.0.1:8100/healthz`. |
-| `HTTP 401 Unauthorized` | Missing or invalid API key | Configure `RHIZO_API_KEY` in `.env.local` or `--api-key <key>`. |
+| `HTTP 401 Unauthorized` | Missing or invalid API key | Configure `LAYA_API_KEY` in `.env.local` or `--api-key <key>`. |
 | `Route configuration not found` | No `rhizo-routes.yaml` in workspace or parents | Create `rhizo-routes.yaml` or specify `--routes-file <path>`. |
 | `No route rule matched classification results` | Missing default fallback route | Add a catch-all route at the bottom of `routes` with wildcard options. |
 | `Input requires more chunks than configured` | Directive exceeds `chunk_size * max_chunks` | Increase `limits.max_chunks` or change `overflow_strategy: lead_tail`. |
