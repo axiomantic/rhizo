@@ -1358,6 +1358,17 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
+proc isCompletionSubject*(subject: string): bool
+proc findVineManifestPath*(startDir: string = ""): string
+proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string]
+proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
+             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
+             rearmListen: bool = false, listenTimeoutSec: int = -1,
+             urgency: string = "soon", format: string = "text", listenAgent: string = "",
+             skipGate: bool = false): string
+proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken: var string,
+                     strandPath: string = "", weave: bool = false, skipGate: bool = false): string
+
 
 proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 600): tuple[name, prefix, codename: string] =
   randomize()
@@ -1473,6 +1484,132 @@ proc resetWatchdogStreak*(cfg: RhizoConfig, agentName: string) =
     defer: (try: client.close() except CatchableError: discard)
     discard client.hSet(cfg.prefix & "watchdog:" & normName, "streak", "0")
   except CatchableError: discard
+
+proc findVineManifestPath*(startDir: string = ""): string =
+  var cur = if startDir.len > 0:
+              try: expandFilename(startDir) except CatchableError: startDir
+            else: getCurrentDir()
+  while cur.len > 0:
+    let candidate = cur / ".vine.json"
+    if fileExists(candidate):
+      return candidate
+    let parent = cur.parentDir()
+    if parent == cur or parent.len == 0:
+      break
+    cur = parent
+  return ""
+
+proc isCompletionSubject*(subject: string): bool =
+  let s = subject.toLowerAscii().strip()
+  if s.len == 0: return false
+  if "two-key gate pass" in s or "ready to weave" in s or "ready_to_weave" in s or "ready for weave" in s or "gate pass" in s:
+    return true
+  if s in ["done", "complete", "completed", "finished"]:
+    return true
+  if s.endsWith("done") or s.endsWith("complete") or s.endsWith("completed") or s.endsWith("finished"):
+    if "task" in s or "work" in s or "stage" in s or "track" in s or "strand" in s or "step" in s or s.startsWith("re:"):
+      return true
+  if "task done" in s or "task complete" in s or "task completed" in s or "task finished" in s or
+     "work done" in s or "work complete" in s or "work completed" in s or
+     "weave complete" in s or "weave done" in s or
+     "stage complete" in s or "stage done" in s or
+     "track complete" in s or "track done" in s:
+    return true
+  if ("stage" in s or "track" in s or "wave" in s) and ("done" in s or "complete" in s or "completed" in s):
+    return true
+  if (s.startsWith("done") or s.startsWith("complete") or s.startsWith("finished")) and ("task" in s or "work" in s):
+    return true
+  return false
+
+proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string] =
+  var manifestPath = ""
+  if strandPath.len > 0:
+    manifestPath = findVineManifestPath(strandPath)
+
+  if manifestPath.len == 0:
+    let localManifest = findVineManifestPath(startDir)
+    if localManifest.len > 0 and fileExists(localManifest):
+      var vjLocal: JsonNode = nil
+      try: vjLocal = parseFile(localManifest) except CatchableError: discard
+      if vjLocal != nil:
+        let mTaskId = vjLocal.getOrDefault("task_id").getStr("")
+        var isRelevant = false
+        if taskId.len > 0:
+          isRelevant = (mTaskId.len == 0 or mTaskId == taskId)
+        elif mTaskId.len == 0:
+          isRelevant = true
+        else:
+          # taskId was not passed explicitly (e.g. in reply or send)
+          # Check whether this agent/context is associated with mTaskId
+          if subject.len > 0 and mTaskId.toLowerAscii() in subject.toLowerAscii():
+            isRelevant = true
+          elif worker.len > 0:
+            let wClean = sanitizeIdentifier(worker)
+            let vjOwner = vjLocal.getOrDefault("owner").getStr(vjLocal.getOrDefault("assignee").getStr(vjLocal.getOrDefault("worker").getStr("")))
+            if vjOwner.len > 0 and sanitizeIdentifier(vjOwner) == wClean:
+              isRelevant = true
+            else:
+              # Check local current_task file
+              let curTaskFile = currentTaskFilePath(wClean)
+              if fileExists(curTaskFile):
+                try:
+                  let curJson = parseFile(curTaskFile)
+                  if curJson.getOrDefault("id").getStr("") == mTaskId:
+                    isRelevant = true
+                except CatchableError: discard
+              # Check Redis for worker's current task or task owner
+              if not isRelevant and cfg.redisUrl.len > 0:
+                try:
+                  var client = connectRedis(cfg.redisUrl)
+                  defer: (try: client.close() except CatchableError: discard)
+                  let rCur = client.get(cfg.prefix & "current_task:" & wClean)
+                  if rCur != redisNil and rCur == mTaskId:
+                    isRelevant = true
+                  if not isRelevant:
+                    let rOwner = client.hGet(cfg.prefix & "task:" & mTaskId, "owner")
+                    if rOwner != redisNil and sanitizeIdentifier(rOwner) == wClean:
+                      isRelevant = true
+                except CatchableError: discard
+          else:
+            isRelevant = true
+
+        if isRelevant:
+          manifestPath = localManifest
+
+  # Not in a vine strand -> no gate check required
+  if manifestPath.len == 0 or not fileExists(manifestPath):
+    return (true, explicitGateToken, "")
+
+  var vj: JsonNode = nil
+  try:
+    vj = parseFile(manifestPath)
+  except CatchableError as e:
+    return (false, "", "[VINE GATE ERROR] Failed to parse Vine strand manifest at " & manifestPath & ": " & e.msg)
+
+  let status = vj.getOrDefault("status").getStr("").toUpperAscii()
+  let lifecycle = vj.getOrDefault("lifecycle_state").getStr("").toUpperAscii()
+  let gatePassedBool = vj.getOrDefault("gate_passed").getBool(false)
+
+  let statusOk = (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE"]) or
+                 (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE"]) or
+                 gatePassedBool
+
+  var token = explicitGateToken
+  if token.len == 0:
+    token = vj.getOrDefault("gate_token").getStr("")
+  if token.len == 0:
+    token = vj.getOrDefault("merge_tree_sha").getStr("")
+
+  let tokenOk = (token.len > 0)
+
+  if not (statusOk and tokenOk):
+    let currentStatus = if status.len > 0: status elif lifecycle.len > 0: lifecycle else: "UNVERIFIED"
+    let msg = "[VINE GATE ERROR] Task cannot be marked complete.\n" &
+              "The Two-Key Gate has not been passed in this strand (manifest status: " & currentStatus & ").\n" &
+              "Run `vine gate` and resolve all test/merge failures first."
+    return (false, "", msg)
+
+  return (true, token, "")
 
 proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: string,
             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", isBroadcast: bool = false,
@@ -1662,6 +1799,19 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
 
   return res
 
+proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
+             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
+             rearmListen: bool = false, listenTimeoutSec: int = -1,
+             urgency: string = "soon", format: string = "text", listenAgent: string = "",
+             skipGate: bool = false): string =
+  if isCompletionSubject(subject) and not skipGate:
+    let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
+    if not passed:
+      stderr.writeLine(err)
+      quit(1)
+  return doSend(cfg, toAgent, "reply", fromAgent, subject, body, tags, replyTo, msgId, false, customTs,
+                echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeoutSec,
+                urgency = urgency, format = format, listenAgent = listenAgent)
 
 proc sendDesktopNotification*(msgNode: JsonNode) =
   try:
@@ -3324,6 +3474,41 @@ proc formatTasksTable*(jsonStr: string): string =
   except CatchableError:
     return jsonStr
 
+proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken: var string,
+                     strandPath: string = "", weave: bool = false, skipGate: bool = false): string =
+  if not skipGate:
+    let (passed, verifiedToken, err) = checkVineGateInterlock(taskId, "", strandPath, gateToken, worker, cfg)
+    if not passed:
+      stderr.writeLine(err)
+      quit(1)
+    if gateToken.len == 0 and verifiedToken.len > 0:
+      gateToken = verifiedToken
+
+    if weave:
+      stderr.writeLine("[VINE] Fast-forward weaving strand into trunk...")
+      let weaveCmd = if strandPath.len > 0: "vine weave --dir " & quoteShell(strandPath) else: "vine weave"
+      let (wOut, wCode) = execCmdEx(weaveCmd)
+      if wCode != 0:
+        stderr.writeLine("Error: Vine weave failed: " & wOut)
+        quit(1)
+      stderr.writeLine("[VINE] Trunk weave complete.")
+
+  let res = doTask(cfg, "complete", [taskId, worker, gateToken])
+  if res.startsWith("ERR"):
+    stderr.writeLine(res)
+    quit(1)
+
+  # Clear local mirror
+  let curTaskFile = currentTaskFilePath(worker)
+  if fileExists(curTaskFile):
+    try: removeFile(curTaskFile) except CatchableError: discard
+  let legacyTaskFile = currentTaskFilePath("")
+  if fileExists(legacyTaskFile):
+    try: removeFile(legacyTaskFile) except CatchableError: discard
+
+  doAuditLog(cfg, worker, "task.complete", taskId & (if gateToken.len > 0: " (" & gateToken & ")" else: ""))
+  return res
+
 proc doDecision*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
   var evalArgs: seq[string] = @[cfg.prefix, action]
   for a in args: evalArgs.add(a)
@@ -4755,6 +4940,7 @@ proc main() =
     var listenAgent = ""
     var urgency = "soon"
     var format = "text"
+    var skipGate = false
 
     var i = 1
     while i < args.len:
@@ -4773,6 +4959,7 @@ proc main() =
       elif a == "--soon": urgency = "soon"
       elif a == "--json": format = "json"
       elif a == "--raw": format = "raw"
+      elif a == "--skip-gate": skipGate = true
       elif a.startsWith("--urgency="): urgency = a[10..^1]
       elif a == "--urgency" and i + 1 < args.len: urgency = args[i+1]; inc i
       elif a.startsWith("--delivery="): urgency = a[11..^1]
@@ -4847,15 +5034,15 @@ proc main() =
       if not isBroadcast and toAgent.len == 0:
         stderr.writeLine("Error: Missing required argument '--to <recipient>'.")
         if isReply:
-          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--immediate|--soon]")
+          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--immediate|--soon] [--skip-gate]")
         else:
-          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--listen/-l] [--immediate|--soon]")
+          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--listen/-l] [--immediate|--soon] [--skip-gate]")
       else:
         stderr.writeLine("Error: Missing required arguments. --subject and --body are required.")
         if isReply:
-          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--immediate|--soon]")
+          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--immediate|--soon] [--skip-gate]")
         elif not isBroadcast:
-          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--listen/-l] [--immediate|--soon]")
+          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--listen/-l] [--immediate|--soon] [--skip-gate]")
         else:
           stderr.writeLine("Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body> [--immediate|--soon]")
       quit(1)
@@ -4865,7 +5052,15 @@ proc main() =
     if listenAgent.len > 0:
       listenAgent = ensureProjectScopedName(cfg, listenAgent)
 
-    discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent)
+    if isReply:
+      discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate)
+    else:
+      if subcmd == "send" and isCompletionSubject(subject) and not skipGate:
+        let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
+        if not passed:
+          stderr.writeLine(err)
+          quit(1)
+      discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent)
 
   of "who":
     var filterTag = cfg.project
@@ -6537,51 +6732,7 @@ proc main() =
       except CatchableError:
         discard
 
-      var isTaskStrand = false
-      if strandPath.len > 0:
-        isTaskStrand = true
-      elif fileExists(".vine.json"):
-        try:
-          let vj = parseFile(".vine.json")
-          if vj.getOrDefault("task_id").getStr("") == taskId:
-            isTaskStrand = true
-        except CatchableError:
-          discard
-
-      if not skipGate and isTaskStrand and findExe("vine").len > 0:
-        stderr.writeLine("[VINE] Verifying Two-Key integration gate...")
-        let gateCmd = if strandPath.len > 0: "vine gate --dir " & quoteShell(strandPath) else: "vine gate"
-        let (gateOut, gateCode) = execCmdEx(gateCmd)
-        if gateCode != 0:
-          stderr.writeLine("Error: Vine Two-Key gate failed! Refusing to complete task.")
-          stderr.writeLine(gateOut)
-          quit(1)
-        gateToken = "VINE_GATE_PASSED"
-        stderr.writeLine("[VINE] Two-Key Gate verification PASSED (100% green)")
-
-        if weave:
-          stderr.writeLine("[VINE] Fast-forward weaving strand into trunk...")
-          let weaveCmd = if strandPath.len > 0: "vine weave --dir " & quoteShell(strandPath) else: "vine weave"
-          let (wOut, wCode) = execCmdEx(weaveCmd)
-          if wCode != 0:
-            stderr.writeLine("Error: Vine weave failed: " & wOut)
-            quit(1)
-          stderr.writeLine("[VINE] Trunk weave complete.")
-
-      let res = doTask(cfg, "complete", [taskId, worker, gateToken])
-      if res.startsWith("ERR"):
-        stderr.writeLine(res)
-        quit(1)
-
-      # Clear local mirror
-      let curTaskFile = currentTaskFilePath(worker)
-      if fileExists(curTaskFile):
-        try: removeFile(curTaskFile) except CatchableError: discard
-      let legacyTaskFile = currentTaskFilePath("")
-      if fileExists(legacyTaskFile):
-        try: removeFile(legacyTaskFile) except CatchableError: discard
-
-      doAuditLog(cfg, worker, "task.complete", taskId & (if gateToken.len > 0: " (" & gateToken & ")" else: ""))
+      let res = doTaskComplete(cfg, taskId, worker, gateToken, strandPath, weave, skipGate)
       try:
         let cNode = parseJson(res)
         let unblockedCount = cNode.getOrDefault("unblocked_count").getInt(0)

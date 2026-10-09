@@ -1121,6 +1121,146 @@ class TestCoordinationInvariants(unittest.TestCase):
         # Clean up
         self.run_cmd(["close", target_agent])
 
+    # -------------------------------------------------------------------------
+    # Problem 24: Two-Key Gate Command Interlock (rhizo task complete & rhizo reply)
+    # -------------------------------------------------------------------------
+    def test_24_two_key_gate_command_interlock(self):
+        """Verify the Two-Key Gate Command Interlock in rhizo task complete and rhizo reply."""
+        strand_dir = os.path.join(self.test_home, "test_strand_gate")
+        os.makedirs(strand_dir, exist_ok=True)
+        worker = "gate-worker-1"
+        orchestrator = "gate-orchestrator-1"
+        self.run_cmd(["open", worker, "worker"])
+        self.run_cmd(["open", orchestrator, "orchestrator"])
+
+        task_id = "task-gate-interlock-test"
+        res_create = self.run_cmd(["task", "create", task_id, "--title", "Gate Interlock Test", "--assignee", worker])
+        self.assertEqual(res_create.returncode, 0)
+
+        # Claim with strand directory
+        res_claim = self.run_cmd(["task", "claim", task_id, "--worker", worker, "--strand", strand_dir, "--lease", "120"])
+        self.assertEqual(res_claim.returncode, 0)
+
+        # 1. Unverified Strand Interlock (status: PROVISIONED)
+        manifest_path = os.path.join(strand_dir, ".vine.json")
+        manifest = {
+            "task_id": task_id,
+            "project": "coord_test",
+            "strand_path": strand_dir,
+            "status": "PROVISIONED",
+            "lifecycle_state": "PROVISIONED",
+        }
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        # 1a: rhizo task complete inside strand MUST fail
+        res_comp_fail = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
+        self.assertNotEqual(res_comp_fail.returncode, 0)
+        self.assertIn("[VINE GATE ERROR]", res_comp_fail.stderr)
+        self.assertIn("Run `vine gate`", res_comp_fail.stderr)
+
+        # 1b: rhizo task complete from outside strand (with recorded strand_path) MUST also fail
+        res_comp_out_fail = self.run_cmd(["task", "complete", task_id, "--worker", worker])
+        self.assertNotEqual(res_comp_out_fail.returncode, 0)
+        self.assertIn("[VINE GATE ERROR]", res_comp_out_fail.stderr)
+
+        # 1c: rhizo reply with completion subject inside strand MUST fail
+        completion_subjects = [
+            "Task Done",
+            "Task Complete",
+            f"Task {task_id} Done",
+            f"Task {task_id} Complete",
+            "[Two-Key Gate PASS] Task Finished",
+        ]
+        for subj in completion_subjects:
+            res_rep_fail = self.run_cmd(
+                ["reply", "--to", orchestrator, "--from", worker, "--subject", subj, "--body", "Work done"],
+                cwd=strand_dir
+            )
+            self.assertNotEqual(res_rep_fail.returncode, 0, f"Expected reply with subject '{subj}' to fail in unverified strand")
+            self.assertIn("[VINE GATE ERROR]", res_rep_fail.stderr)
+            self.assertIn("Run `vine gate`", res_rep_fail.stderr)
+
+        # 1d: rhizo send with completion subject inside strand MUST also fail
+        res_send_fail = self.run_cmd(
+            ["send", "--to", orchestrator, "--from", worker, "--subject", f"Task {task_id} Done", "--body", "Done"],
+            cwd=strand_dir
+        )
+        self.assertNotEqual(res_send_fail.returncode, 0)
+        self.assertIn("[VINE GATE ERROR]", res_send_fail.stderr)
+
+        # 2. Non-Completion Subjects Must Pass (Normal Coordination Unimpeded)
+        res_chat = self.run_cmd(
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Claimed", "--body", "Claiming task"],
+            cwd=strand_dir
+        )
+        self.assertEqual(res_chat.returncode, 0)
+
+        res_clarify = self.run_cmd(
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Clarification on test requirements", "--body", "Need info"],
+            cwd=strand_dir
+        )
+        self.assertEqual(res_clarify.returncode, 0)
+
+        # 3. Subdirectory Manifest Discovery
+        sub_dir = os.path.join(strand_dir, "src", "nested")
+        os.makedirs(sub_dir, exist_ok=True)
+        res_sub_fail = self.run_cmd(
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Done", "--body", "Finished from subdir"],
+            cwd=sub_dir
+        )
+        self.assertNotEqual(res_sub_fail.returncode, 0)
+        self.assertIn("[VINE GATE ERROR]", res_sub_fail.stderr)
+
+        # 4. Manual Bypass via --skip-gate
+        res_skip_reply = self.run_cmd(
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Done", "--body", "Forced", "--skip-gate"],
+            cwd=strand_dir
+        )
+        self.assertEqual(res_skip_reply.returncode, 0)
+
+        # 5. Missing Gate Token in READY_TO_WEAVE Strand (Gate token required)
+        manifest["status"] = "READY_TO_WEAVE"
+        manifest["lifecycle_state"] = "GATE_PASSED"
+        manifest.pop("gate_token", None)
+        manifest.pop("merge_tree_sha", None)
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        res_no_token_comp = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
+        self.assertNotEqual(res_no_token_comp.returncode, 0)
+        self.assertIn("[VINE GATE ERROR]", res_no_token_comp.stderr)
+
+        # 6. Verified Strand with Valid Gate Token -> MUST SUCCEED
+        gate_token = "tree_sha_f659be1e05748b639273cec79364a03b516f0f5f"
+        manifest["gate_token"] = gate_token
+        manifest["merge_tree_sha"] = gate_token
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        # 6a: rhizo reply with completion subject now succeeds
+        res_rep_ok = self.run_cmd(
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", f"Task {task_id} Done", "--body", "100% Green"],
+            cwd=strand_dir
+        )
+        self.assertEqual(res_rep_ok.returncode, 0)
+
+        # 6b: rhizo task complete succeeds and records gate token in Redis
+        res_comp_ok = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
+        self.assertEqual(res_comp_ok.returncode, 0)
+        self.assertIn(f"COMPLETED task '{task_id}'", res_comp_ok.stdout)
+
+        # 6c: Verify Redis task contract contains COMPLETED state and the gate token
+        res_get = self.run_cmd(["task", "get", task_id, "--json"])
+        self.assertEqual(res_get.returncode, 0)
+        task_data = json.loads(res_get.stdout.strip())
+        self.assertEqual(task_data["state"], "COMPLETED")
+        self.assertEqual(task_data["gate_token"], gate_token)
+
+        # Clean up
+        self.run_cmd(["close", worker])
+        self.run_cmd(["close", orchestrator])
+
 
 if __name__ == "__main__":
     unittest.main()
