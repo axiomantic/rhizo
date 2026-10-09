@@ -163,7 +163,7 @@ describe("opencode-ear plugin", () => {
       }
     }
 
-    await Ear.deliverPrompt(modernClient, "ses_1", "Hello from Rhizo")
+    await Ear.deliverPrompt(modernClient, "ses_1", "Hello from Rhizo", [])
     expect(promptAsyncCalled).toEqual({
       path: { id: "ses_1" },
       body: { parts: [{ type: "text", text: "Hello from Rhizo" }] }
@@ -176,7 +176,7 @@ describe("opencode-ear plugin", () => {
         prompt: async (payload) => { promptCalled = payload }
       }
     }
-    await Ear.deliverPrompt(legacyClient, "ses_2", "Fallback turn")
+    await Ear.deliverPrompt(legacyClient, "ses_2", "Fallback turn", [])
     expect(promptCalled).toEqual({
       path: { id: "ses_2" },
       body: { parts: [{ type: "text", text: "Fallback turn" }] }
@@ -281,6 +281,120 @@ describe("opencode-ear plugin", () => {
 
     // Verify isListenerAlive
     expect(Ear.isListenerAlive("refactor-work")).toBe(true)
+  })
+
+  it("injects high-priority advisories when reminders are present", async () => {
+    let deliveredText = null
+    const mockClient = {
+      session: {
+        promptAsync: async (payload) => {
+          deliveredText = payload.body.parts[0].text
+        }
+      }
+    }
+
+    const testReminders = [
+      {
+        id: "rem-gate-1",
+        priority: "CRITICAL",
+        text: "Enforce Two-Key Gate before weaving"
+      },
+      {
+        id: "rem-audit-2",
+        priority: "HIGH",
+        text: "Run memory ordering verification"
+      },
+      {
+        id: "rem-info-3",
+        priority: "INFO",
+        text: "Low priority info note"
+      }
+    ]
+
+    await Ear.deliverPrompt(mockClient, "ses_adv", "Please implement task", testReminders)
+    expect(deliveredText).toContain("[ACTIVE ADVISORY - PRIORITY: CRITICAL (rem-gate-1)]:")
+    expect(deliveredText).toContain("Enforce Two-Key Gate before weaving")
+    expect(deliveredText).toContain("[ACTIVE ADVISORY - PRIORITY: HIGH (rem-audit-2)]:")
+    expect(deliveredText).toContain("Run memory ordering verification")
+    // INFO priority should NOT be in the advisory block
+    expect(deliveredText).not.toContain("rem-info-3")
+    expect(deliveredText).toContain("Please implement task")
+  })
+
+  it("manages active tasks and keeps lease alive with throttling", async () => {
+    // 1. Task mapping
+    Ear.setActiveTask("worker-test", "task-999")
+    expect(Ear.getActiveTask("worker-test")).toBe("task-999")
+    expect(Ear.resolveActiveTaskId("worker-test")).toBe("task-999")
+
+    // 2. pingTaskProgress with throttling
+    const res1 = await Ear.pingTaskProgress(Ear.getRhizoBin(), "task-999", "worker-test", "Test progress 1", 180, true)
+    expect(typeof res1).toBe("boolean")
+
+    // Immediate second ping without force should be throttled
+    const res2 = await Ear.pingTaskProgress(Ear.getRhizoBin(), "task-999", "worker-test", "Test progress 2", 180, false)
+    expect(res2).toBe(false)
+
+    // With force = true, ping proceeds
+    const res3 = await Ear.pingTaskProgress(Ear.getRhizoBin(), "task-999", "worker-test", "Test progress 3", 180, true)
+    expect(typeof res3).toBe("boolean")
+  })
+
+  it("triggers lease keep-alive on tool execution and file edit hooks and events", async () => {
+    const mockClient = {
+      session: {
+        list: async () => [{ id: "ses_tool_test", title: "Tool Session" }]
+      }
+    }
+
+    const hooks = await Ear({ client: mockClient, directory: tempHome })
+    expect(typeof hooks["tool.execute.before"]).toBe("function")
+    expect(typeof hooks["tool.execute.after"]).toBe("function")
+    expect(typeof hooks["fs.write"]).toBe("function")
+    expect(typeof hooks["file.edited"]).toBe("function")
+
+    Ear.setActiveTask("lead-worker", "task-tool-1")
+    process.env.RHIZO_AGENT_NAME = "lead-worker"
+
+    // Call tool hook
+    await hooks["tool.execute.before"]({ name: "bash", sessionID: "ses_tool_test" })
+    await hooks["tool.execute.after"]({ name: "bash", sessionID: "ses_tool_test" })
+    await hooks["fs.write"]({ path: "/tmp/foo.txt", sessionID: "ses_tool_test" })
+    await hooks["file.edited"]({ path: "/tmp/bar.txt", sessionID: "ses_tool_test" })
+
+    // Call event hook with tool event
+    await hooks.event({
+      event: {
+        type: "tool.execute",
+        properties: { info: { id: "ses_tool_test" } }
+      }
+    })
+
+    // Call event hook with file event
+    await hooks.event({
+      event: {
+        type: "file.edited",
+        properties: { info: { id: "ses_tool_test" } }
+      }
+    })
+  })
+
+  it("pubsub preemption starts and cleans up properly", () => {
+    const mockClient = {
+      session: {
+        list: async () => [],
+        status: async () => ({}),
+        abort: async () => {}
+      }
+    }
+
+    const pubsub = Ear.startPubSubPreemption(mockClient, "test-preempt-worker", "ses_preempt")
+    expect(pubsub).toBeDefined()
+    expect(typeof pubsub.kill).toBe("function")
+    expect(Array.isArray(pubsub.procs)).toBe(true)
+
+    // Cleanup
+    pubsub.kill()
   })
 })
 

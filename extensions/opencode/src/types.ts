@@ -32,9 +32,29 @@ export interface OpenCodeEvent {
   }
 }
 
+export interface Reminder {
+  id: string
+  priority: "CRITICAL" | "HIGH" | "MED" | "LOW" | "INFO" | string
+  scope?: string
+  text?: string
+  directive?: string
+  target?: string
+  author?: string
+  created_at?: string
+  expires_at?: string
+  cadence_sec?: string
+  ack_count?: number
+}
+
+export interface PubSubHandle {
+  kill: () => void
+  procs?: SubprocessHandle[]
+}
+
 export interface ActiveListener {
   state: ListenerState
   targetSessionId: string | null
+  pubsub?: PubSubHandle | null
 }
 
 export interface OpenCodeSessionInfo {

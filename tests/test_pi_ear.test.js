@@ -13,6 +13,14 @@ import RhizoPiExtension, {
   removeLocalSessionMapping,
   deliverPiPrompt,
   interruptPiIfBusy,
+  getRhizoBin,
+  setActiveTask,
+  getActiveTask,
+  resolveActiveTaskId,
+  pingTaskProgress,
+  queryActiveReminders,
+  formatAdvisoryBlock,
+  startPubSubPreemption,
 } from "../skills/rhizo/pi-ear.ts"
 
 const PiExtension = RhizoPiExtension
@@ -115,14 +123,14 @@ describe("Pi Coding Agent Extension (pi-ear.ts)", () => {
     const clientA = {
       sendMessage: async (msg) => { sentMessage = msg }
     }
-    await deliverPiPrompt(clientA, "Hello from Rhizo")
+    await deliverPiPrompt(clientA, "Hello from Rhizo", [])
     expect(sentMessage).toBe("Hello from Rhizo")
 
     let sentPrompt = null
     const clientB = {
       sendPrompt: async (msg) => { sentPrompt = msg }
     }
-    await deliverPiPrompt(clientB, "Prompt turn")
+    await deliverPiPrompt(clientB, "Prompt turn", [])
     expect(sentPrompt).toBe("Prompt turn")
 
     let promptPayload = null
@@ -131,7 +139,7 @@ describe("Pi Coding Agent Extension (pi-ear.ts)", () => {
         promptAsync: async (p) => { promptPayload = p }
       }
     }
-    await deliverPiPrompt(clientC, "Session payload")
+    await deliverPiPrompt(clientC, "Session payload", [])
     expect(promptPayload).toEqual({ body: { parts: [{ type: "text", text: "Session payload" }] } })
   })
 
@@ -155,5 +163,96 @@ describe("Pi Coding Agent Extension (pi-ear.ts)", () => {
       if (prev === undefined) delete process.env.RHIZO_INTERRUPT
       else process.env.RHIZO_INTERRUPT = prev
     }
+  })
+
+  it("injects high-priority advisories into Pi prompts when reminders are present", async () => {
+    let delivered = null
+    const mockPi = {
+      sendMessage: async (msg) => { delivered = msg }
+    }
+
+    const testReminders = [
+      {
+        id: "rem-101",
+        priority: "CRITICAL",
+        text: "Zero green mirage: live verification required"
+      },
+      {
+        id: "rem-102",
+        priority: "HIGH",
+        text: "Audit integer underflow"
+      },
+      {
+        id: "rem-103",
+        priority: "LOW",
+        text: "Optional style hint"
+      }
+    ]
+
+    await deliverPiPrompt(mockPi, "Execute work", testReminders)
+    expect(delivered).toContain("[ACTIVE ADVISORY - PRIORITY: CRITICAL (rem-101)]:")
+    expect(delivered).toContain("Zero green mirage: live verification required")
+    expect(delivered).toContain("[ACTIVE ADVISORY - PRIORITY: HIGH (rem-102)]:")
+    expect(delivered).toContain("Audit integer underflow")
+    expect(delivered).not.toContain("rem-103")
+    expect(delivered).toContain("Execute work")
+  })
+
+  it("manages active tasks and keeps lease alive with throttling in Pi ear", async () => {
+    setActiveTask("pi-worker-1", "task-pi-55")
+    expect(getActiveTask("pi-worker-1")).toBe("task-pi-55")
+    expect(resolveActiveTaskId("pi-worker-1")).toBe("task-pi-55")
+
+    const bin = getRhizoBin()
+    const p1 = await pingTaskProgress(bin, "task-pi-55", "pi-worker-1", "Tool execution", 180, true)
+    expect(typeof p1).toBe("boolean")
+
+    // Immediate second ping without force should be throttled
+    const p2 = await pingTaskProgress(bin, "task-pi-55", "pi-worker-1", "Tool execution", 180, false)
+    expect(p2).toBe(false)
+
+    // With force = true, ping proceeds
+    const p3 = await pingTaskProgress(bin, "task-pi-55", "pi-worker-1", "Tool execution", 180, true)
+    expect(typeof p3).toBe("boolean")
+  })
+
+  it("triggers lease keep-alive when Pi runs tools or edits files", () => {
+    const handlers = {}
+    const mockPi = {
+      on: (evt, fn) => { handlers[evt] = fn },
+      session: { id: "ses_pi_events", title: "Tool Runner" }
+    }
+
+    const ext = PiExtension(mockPi)
+    expect(typeof handlers["tool_call"]).toBe("function")
+    expect(typeof handlers["file_edit"]).toBe("function")
+    expect(typeof handlers["file_write"]).toBe("function")
+
+    setActiveTask("pi-tool-agent", "task-pi-tools")
+    process.env.RHIZO_AGENT_NAME = "pi-tool-agent"
+
+    // Trigger tool and file events
+    handlers["tool_call"]({ name: "bash" })
+    handlers["file_edit"]({ path: "src/main.ts" })
+    handlers["file_write"]({ path: "src/main.ts" })
+
+    // Cleanup extension
+    if (ext && typeof ext.cleanup === "function") {
+      ext.cleanup()
+    }
+  })
+
+  it("pubsub preemption for Pi starts and cleans up properly", () => {
+    const mockPi = {
+      abort: async () => {},
+      sendMessage: async () => {}
+    }
+
+    const pubsub = startPubSubPreemption(mockPi, "test-pi-preempt")
+    expect(pubsub).toBeDefined()
+    expect(typeof pubsub.kill).toBe("function")
+    expect(Array.isArray(pubsub.procs)).toBe(true)
+
+    pubsub.kill()
   })
 })

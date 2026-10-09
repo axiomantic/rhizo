@@ -19,12 +19,31 @@ import {
   startAgentListener,
   syncSessions,
   isListenerAlive,
-  sessionToAgent
+  sessionToAgent,
+  pingTaskProgress,
+  queryActiveReminders,
+  formatAdvisoryBlock,
+  startPubSubPreemption,
+  setActiveTask,
+  getActiveTask,
+  resolveActiveTaskId
 } from "./supervisor"
 import { getOrientationReminder } from "./orientation"
 import type { PluginContext, OpenCodeEvent } from "./types"
 
 const armedDirectories = new Set<string>()
+
+export async function handleKeepAlive(sessionId?: string, reason?: string): Promise<boolean> {
+  const agent = sessionId
+    ? (sessionToAgent.get(sessionId) || isSessionSupposedToListen(sessionId))
+    : process.env.RHIZO_AGENT_NAME
+  const effectiveAgent = agent || process.env.RHIZO_AGENT_NAME || ""
+  const taskId = resolveActiveTaskId(effectiveAgent, sessionId)
+  if (taskId) {
+    return await pingTaskProgress(getRhizoBin(), taskId, effectiveAgent, reason || "Tool/file activity")
+  }
+  return false
+}
 
 export const RhizoEar = async (ctx: PluginContext) => {
   if (process.env.RHIZO_EAR_DISABLED === "1") return {}
@@ -59,8 +78,40 @@ export const RhizoEar = async (ctx: PluginContext) => {
         }
       }
     },
+    "tool.execute.before": async (data: any) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id
+      const toolName = data?.name || data?.tool || "tool"
+      await handleKeepAlive(sid, `tool.execute.before:${toolName}`)
+    },
+    "tool.execute.after": async (data: any) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id
+      const toolName = data?.name || data?.tool || "tool"
+      await handleKeepAlive(sid, `tool.execute.after:${toolName}`)
+    },
+    "fs.write": async (data: any) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id
+      const path = data?.path || data?.file || "file"
+      await handleKeepAlive(sid, `fs.write:${path}`)
+    },
+    "file.edited": async (data: any) => {
+      const sid = data?.sessionID || data?.sessionId || data?.session?.id
+      const path = data?.path || data?.file || "file"
+      await handleKeepAlive(sid, `file.edited:${path}`)
+    },
     event: async ({ event }: { event?: OpenCodeEvent }) => {
       if (!event) return
+      // Automated lease keep-alive on tool execution or file edits
+      if (
+        event.type &&
+        (event.type.startsWith("tool.") ||
+          event.type === "tool_call" ||
+          event.type === "tool_execution" ||
+          event.type.startsWith("file.") ||
+          event.type.startsWith("fs."))
+      ) {
+        const sid = event.properties?.info?.id || (event.properties as any)?.sessionID
+        await handleKeepAlive(sid, `event:${event.type}`)
+      }
       if (event.type === "session.created" && event.properties?.info?.id) {
         const s = event.properties.info
         let name = isSessionSupposedToListen(s.id)
@@ -109,6 +160,14 @@ const attachHelpers = (fn: any) => {
   fn.isListenerAlive = isListenerAlive;
   fn.setMappedAgent = setMappedAgent;
   fn.getOrientationReminder = getOrientationReminder;
+  fn.pingTaskProgress = pingTaskProgress;
+  fn.queryActiveReminders = queryActiveReminders;
+  fn.formatAdvisoryBlock = formatAdvisoryBlock;
+  fn.startPubSubPreemption = startPubSubPreemption;
+  fn.setActiveTask = setActiveTask;
+  fn.getActiveTask = getActiveTask;
+  fn.resolveActiveTaskId = resolveActiveTaskId;
+  fn.handleKeepAlive = handleKeepAlive;
   return fn;
 };
 
