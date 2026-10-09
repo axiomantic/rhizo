@@ -5640,8 +5640,8 @@ secret = "my_inline_secret_test_555"
             ])
             _, stderr_codex = proc_codex.communicate(timeout=5)
             self.assertEqual(proc_codex.returncode, 0)
-            self.assertIn("Detected harness: codex", stderr_codex)
-            self.assertIn("Subagent ear discipline", stderr_codex)
+            self.assertIn("Autonomous Stop Hook", stderr_codex)
+            self.assertNotIn("Subagent", stderr_codex)
 
             # 4. Antigravity harness detection
             proc_agy = subprocess.Popen(
