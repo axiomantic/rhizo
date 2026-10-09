@@ -263,7 +263,7 @@ command -v rift >/dev/null 2>&1 && rift prune >/dev/null 2>&1 || true
 ```
 <!-- END VINE GUIDE -->
 
-<!-- BEGIN GARDEN GUIDE [v1.7] -->
+<!-- BEGIN GARDEN GUIDE [v1.8] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `garden guide install` -->
 
 ## Garden Multi-Agent Swarm & Ceremony Guide
@@ -287,8 +287,10 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
 ### 2. Fleet Lifecycle & Session Coordination
 * **Sovereign Sessions & Subagent Prohibition**:
   Swarm workers operate strictly in dedicated, independent interactive coding sessions (separate terminal tabs or IDE windows for Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`) wrapped in 10 backticks. Harness-internal subagents (e.g. Antigravity's `invoke_subagent`, Claude Code's `Task`, OpenCode subtasks, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster workers across all harnesses. Subagents are ephemeral single-turn jobs; they cannot maintain continuous background listeners, survive across task boundaries, or preserve clean workspace isolation, and they cause severe context poisoning by dumping full execution traces into the orchestrator prompt.
-* **Interactive Intake & Persona Calibration**:
-  Before dispatching work, the orchestrator conducts an intake interview (`garden` / `choose-personas`) to calibrate personas, harnesses, and foundation models, then generates `garden-swarm.json`. The orchestrator must NEVER offer or present internal subagents as an option for workers.
+* **Active Swarm Fast-Path & Intake Protocol**:
+  Before asking ANY intake questions or configuring new personas, the orchestrator MUST inspect the cluster via `rhizo who --json`. If active workers are already registered and healthy on the Rhizo cluster, the orchestrator MUST skip swarm setup, latch directly onto the existing workers, and proceed immediately to task planning and dispatch.
+  Only during cold starts (zero active cluster workers) does the orchestrator conduct intake (`garden` / `choose-personas`). Intake consists of at most TWO concise questions: (1) Execution mode (Multi-Agent Swarm vs Single-Agent Inline), and (2) Swarm shape & harness environment (combining team size with target harness, e.g. "Balanced Triad in Antigravity IDE", "Balanced Triad in Claude Code CLI").
+  Standalone "foundation model pairing" questions are STRICTLY PROHIBITED: swarm workers are sovereign interactive sessions and inherit whatever foundation model is active in that harness session (e.g., Gemini in Antigravity, Claude in Claude Code). Prompt cards specify `Model: Session Default (active in this window)`. The orchestrator must NEVER offer or present internal subagents as an option for workers.
 * **Prompt-Bootstrapped Sessions**:
   Swarm workers operate in dedicated interactive coding sessions (Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`) wrapped in 10 backticks. Never detach unmanaged background processes with `&` or redirect output.
 * **Listener Discipline**:
@@ -308,6 +310,7 @@ Never weave a strand into the canonical trunk without passing both keys:
 * **Key 2 (Semantic)**: Automated compiler and test suite run inside the strand.
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 <!-- END GARDEN GUIDE -->
+
 
 
 

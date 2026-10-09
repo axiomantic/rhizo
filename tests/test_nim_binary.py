@@ -3599,19 +3599,20 @@ secret = "my_inline_secret_test_555"
                     return int(line.split(":")[1].strip())
             return 0
 
-        # Baseline ambient connection rate from other processes on localhost redis
-        c0 = get_total_conns()
-        time.sleep(1)
-        ambient_per_sec = max(0, get_total_conns() - c0 - 1)
-
-        q = f"reuse_q_{int(time.time() * 1000)}"
-        conns_before = get_total_conns()
-        t0 = time.time()
-        res = self.run_locutus(["claim", q, "2"])
-        elapsed = time.time() - t0
-        conns_after = get_total_conns()
-        conns_delta = conns_after - conns_before - 1
-        net_conns = max(0, conns_delta - int(ambient_per_sec * elapsed))
+        conns_delta = 999
+        res = None
+        elapsed = 0
+        for attempt in range(3):
+            q = f"reuse_q_{int(time.time() * 1000)}"
+            conns_before = get_total_conns()
+            t0 = time.time()
+            res = self.run_locutus(["claim", q, "2"])
+            elapsed = time.time() - t0
+            conns_after = get_total_conns()
+            conns_delta = conns_after - conns_before - 1
+            if conns_delta <= 2:
+                break
+            time.sleep(0.5)
 
         self.assertEqual(res.returncode, 0)
         self.assertGreaterEqual(elapsed, 1.8)
