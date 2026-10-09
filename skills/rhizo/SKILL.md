@@ -84,7 +84,7 @@ Never execute 'rhizo listen &' or redirect output ('> /dev/null'). Detaching sev
 </FORBIDDEN>
 
 <INVARIANT>
-Inside background subagents, 'rhizo listen' must execute as a synchronous, blocking foreground command. Subagents notify parents only on process exit. Never launch background daemons inside subagents (no double-daemons).
+Ad-Hoc Subagents & No Double-Daemons: Subagents are tools for sessions to run ad-hoc tasks, never cluster swarm workers or listener relays. If an ad-hoc subagent is explicitly requested by the operator for a one-off inspection, 'rhizo listen' inside that subagent must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents.
 </INVARIANT>
 
 <INVARIANT>
@@ -219,8 +219,8 @@ Inspect your available runtime tools and execute the highest matching tier:
 | Tier | Capability | Action | Rationale |
 | :--- | :--- | :--- | :--- |
 | **Tier 1** | In-Process Extension (e.g. OpenCode `opencode-ear.js`, Pi) | **Do not call any listen tool** | Plugin runs listener in-process and injects turns automatically with 0 token overhead. |
-| **Tier 2** | Shell tool with daemon support (e.g. Antigravity `run_command(IsDaemon=true)`) | Run `rhizo listen <agent>` as managed daemon | Maintains direct line of communication in main chat with 0 subagent token overhead. |
-| **Tier 3** | Subagent tool with background support (e.g. Claude Code `Task(background=true)`) | Dispatch subagent running single-shot `rhizo listen <agent>` | Subagent blocks until one message arrives, prints JSON, and exits 0 to wake parent. **Never wrap in a `while` loop**; loops prevent exit and trap output. |
+| **Tier 2** | Shell tool with daemon support (e.g. Antigravity `run_command(IsDaemon=true)`) | Run `rhizo listen <agent>` as managed daemon | Maintains direct line of communication in main chat with 0 token overhead. |
+| **Tier 3** | Autonomous Turn-End Hooks (e.g. Claude Code Stop Hook, OpenAI Codex Stop Hook) | Install hook via `rhizo hook install [--claude|--codex]` | Native stop hook inspects inbox and interlocks turn completion if work is pending; ensures continuous listening discipline without token waste. |
 | **Tier 4** | Synchronous foreground shell only | **Do not run `rhizo listen`**. Call `rhizo check-inbox` | Blocking foreground shell freezes the turn. Poll explicitly during user turns. |
 
 *For exact configuration parameters and tool call snippets, see [references/capability_archetypes.md](references/capability_archetypes.md).*
@@ -552,14 +552,14 @@ To continue listening, relaunch this EXACT command using your capability tier (N
   Exact command: rhizo listen claude-worker-1
 Capability-Tier Invocations (SKILL.md Section 3):
   - Tier 1 (In-Process Extension): In-process fiber handles listening automatically; DO NOT call listen.
-  - Tier 2 (Shell Daemon): run_command(CommandLine="rhizo listen claude-worker-1", IsDaemon=true)
-  - Tier 3 (Subagent Task): Task(prompt="Execute 'rhizo listen claude-worker-1'. Block until 1 message arrives and exit immediately.", background=true)
+  - Tier 2 (Shell Daemon): run_command(CommandLine="rhizo listen claude-worker-1", IsDaemon=true, WaitMsBeforeAsync=500)
+  - Tier 3 (Autonomous Stop Hook): rhizo hook install [--claude|--codex] (or run 'rhizo listen claude-worker-1' directly)
   - Tier 4 (Synchronous Shell): Run 'rhizo listen claude-worker-1' directly in foreground (or 'rhizo check-inbox')
 ```
 Select the invocation matching your runtime environment's capability tier (defined in [Section 3: Capability-Based Listener Execution](#3-capability-based-listener-execution)):
 - **Tier 1 (In-Process Extension e.g. OpenCode, Pi)**: Native extension fiber is active in-process; never call any listen tool.
-- **Tier 2 (Shell Daemon e.g. Antigravity)**: Launch via `run_command(CommandLine="...", IsDaemon=true)` to maintain direct unblocked conversation flow.
-- **Tier 3 (Subagent Task e.g. Claude Code)**: Launch via `Task(prompt="Execute '...'. Block until 1 message arrives and exit immediately.", background=true)` as a single-shot execution.
+- **Tier 2 (Shell Daemon e.g. Antigravity)**: Launch via `run_command(CommandLine="...", IsDaemon=true, WaitMsBeforeAsync=500)` to maintain direct unblocked conversation flow.
+- **Tier 3 (Autonomous Turn-End Hooks e.g. Claude Code, Codex)**: Install lifecycle stop hook via `rhizo hook install [--claude|--codex]`, or execute single-shot `rhizo listen <agent>` in a dedicated terminal. Subagents are tools for sessions to run ad-hoc tasks, never cluster swarm workers or listener relays.
 - **Tier 4 (Synchronous Foreground Shell)**: Run single-shot in foreground or poll non-blocking via `rhizo check-inbox`.
 
 ### K. Health Probing & Watchdog Checks (`rhizo probe`, `rhizo watchdog`)

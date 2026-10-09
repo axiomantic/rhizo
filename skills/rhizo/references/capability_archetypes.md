@@ -25,7 +25,7 @@ This document maps runtime tool capabilities to their exact invocation patterns.
 - **Mechanism**: Runs the infinite listener in the background of the primary conversation turn. Standard output from the listener reactively resumes the assistant's turn when a message arrives.
 - **Rule**:
   <INVARIANT>
-  Prefer Archetype 2 over subagents. It consumes 0 subagent inference tokens and provides an immediate line of interruption into the main chat.
+  Prefer Archetype 2 in native daemon harnesses (e.g. Antigravity). It maintains direct, immediate execution in the primary session with 0 overhead.
   </INVARIANT>
 - **Tool Action**:
   ```json
@@ -38,23 +38,23 @@ This document maps runtime tool capabilities to their exact invocation patterns.
 
 ---
 
-## Archetype 3: One-and-Done Background Subagent Ear
-- **Profile**: Shell tools cannot run in the background, but the harness provides a subagent or task tool with a background parameter (e.g. Claude Code `Task(background=true)`, OpenAI Codex `spawn_agent`).
-- **Mechanism**: Spawns an isolated background subagent container. Inside the subagent, the command executes as a blocking foreground process. When a message arrives, `rhizo listen` prints the payload and exits 0, which terminates the subagent and delivers the notification back to the parent session.
+## Archetype 3: Autonomous Turn-End Continuation Hooks
+- **Profile**: Harness supports lifecycle event hooks invoked at the end of each assistant turn (e.g. Claude Code Stop Hook, OpenAI Codex Stop Hook).
+- **Mechanism**: Harness automatically runs a native hook (`claude_stop_hook.py`, `codex_stop_hook.py`, or `rhizo hook codex-stop`) whenever the turn ends. If a message or pending work item exists in the inbox, the hook returns `{"decision": "block", "reason": ...}` to immediately trigger a continuation turn, seamlessly resuming execution without human intervention.
 - **Rule**:
-  <CRITICAL>
-  NO DOUBLE-DAEMONS: Inside the subagent, 'rhizo listen' must be SYNCHRONOUS AND BLOCKING. Do not run with '&' or as a daemon inside the subagent. Subagents only notify parent chats upon exit.
-  </CRITICAL>
-  <FORBIDDEN>
-  NEVER WRAP IN A WHILE LOOP: Never run 'while true; do rhizo listen <name>; done' or 'until rhizo listen'. Coding harnesses and task tools ONLY notify the parent agent when the subagent or command finishes. Wrapping in a shell loop traps execution indefinitely, preventing the tool from ever returning its output to the parent orchestrator. The listener MUST be single-shot: execute once, exit on delivery, return output to parent. Re-arming must be initiated as a separate turn or subsequent task.
-  </FORBIDDEN>
+  <INVARIANT>
+  Subagents are tools for sessions to run ad-hoc tasks, NEVER cluster swarm workers or listener relays. Cluster swarm workers operate as sovereign sessions coordinated via Rhizo, utilizing autonomous turn-end hooks or native listeners.
+  </INVARIANT>
+  <INVARIANT>
+  Zero Token Waste: Autonomous turn-end hooks operate outside the LLM context window with 0 prompt token overhead, eliminating subagent initialization costs.
+  </INVARIANT>
 - **Tool Action**:
-  ```json
-  Task({
-    "prompt": "Execute 'rhizo listen <name> --quiet'. Block until a message arrives, output the complete JSON payload, and terminate immediately.",
-    "background": true
-  })
+  Install the appropriate hook once during session setup:
+  ```bash
+  rhizo hook install --claude   # For Claude Code
+  rhizo hook install --codex    # For OpenAI Codex
   ```
+  *(Or execute single-shot `rhizo listen <name>` in dedicated worker terminals).*
 
 ---
 

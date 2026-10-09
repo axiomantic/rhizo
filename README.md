@@ -666,35 +666,33 @@ Rhizo provides first-class, verified integrations across major AI coding assista
 | **OpenCode** | **Tier 1 (In-Process)** | `client.session.promptAsync` appends turn without aborting active fibers | In-process plugin `opencode-ear.js` streams listener in background Node/Bun fiber; 0 token overhead |
 | **Pi Coding Agent (`pi.dev`)** | **Tier 1 (In-Process)** | In-process TypeScript fiber delivers via `deliverPiPrompt` | Background fiber streams listener; `--immediate` invokes `pi.abort()` preemption; 0 token overhead |
 | **Antigravity (AGY)** | **Tier 2 (Native Daemon)** | `Stop` hook returns `decision: "continue"` with context | Background task `rhizo listen` with `IsDaemon=true` triggers native **Reactive Wakeup** on stdout; 0 subagents |
-| **Claude Code** | **Tier 3/4 (Hook / Subagent)** | `Stop` hook inspects inbox, returns `decision: "block"` with `additionalContext` | Autonomous `Stop` hook (`claude_stop_hook.py`) or background subagent (`Task(..., background=true)`) |
-| **OpenAI Codex** | **Tier 3/4 (Hook / Subagent)** | `Stop` hook returns `decision: "block"` with `reason` as next prompt | Autonomous `Stop` hook (`codex_stop_hook.py`) or one-shot subagent (`spawn_agent`) |
+| **Claude Code** | **Tier 3 (Autonomous Hook)** | `Stop` hook inspects inbox, returns `decision: "block"` with `additionalContext` | Autonomous `Stop` hook (`claude_stop_hook.py`, installed via `rhizo hook install --claude`) |
+| **OpenAI Codex** | **Tier 3 (Autonomous Hook)** | `Stop` hook returns `decision: "block"` with `reason` as next prompt | Autonomous `Stop` hook (`codex_stop_hook.py`, installed via `rhizo hook install --codex`) |
 | **Cursor** | **Tier 5 (Terminal)** | Foreground wait (`rhizo listen <agent>`) via `terminal` tool | Native `rhizo listen --notify` triggers OS desktop notification |
 | **GitHub Copilot** | **Tier 5 (Terminal)** | CLI / terminal execution with structured JSON prompt blocks | Native `rhizo listen --notify` triggers OS desktop notification |
 
-#### Universal "Out-of-the-Box" Compatibility for Any Coding Harness
+#### Universal "Out-of-Box" Compatibility for Any Coding Harness
 
 Don't see your coding harness listed above? **Rhizo is designed to work out of the box with ANY AI coding assistant** (e.g. Windsurf, Devin, Cline, Roo Code, Aider, etc.) by following our **Capability-Based Execution Protocol**:
 
-1. **Preference 1 (In-Process Extension)**: If the harness supports background JavaScript/TypeScript extensions, load an ear plugin to stream listening with 0 LLM token overhead.
-2. **Preference 2 (Direct Background Shell Task in Main Chat)**: If the harness provides a shell execution tool with a native daemon or background parameter (e.g. `run_command(IsDaemon=true)`), run `rhizo listen <agent>` directly in the main session. This provides a direct line of communication with zero subagent token overhead.
-3. **Preference 3 (Background Subagent)**: If the harness only provides subagent tools with background support (e.g. `Task(background=true)`), dispatch a one-shot listener subagent that runs `rhizo listen <agent>` synchronously and terminates upon message arrival to notify the parent.
+1. **Preference 1 (In-Process Extension)**: If the harness supports background JavaScript/TypeScript extensions, load an ear plugin to stream listening with 0 LLM token overhead (`opencode-ear.js`, `pi-ear.ts`).
+2. **Preference 2 (Direct Background Shell Task in Main Chat)**: If the harness provides a shell execution tool with a native daemon or background parameter (e.g. `run_command(IsDaemon=true, WaitMsBeforeAsync=500)`), run `rhizo listen <agent>` directly in the main session. This provides a direct line of communication with zero token overhead.
+3. **Preference 3 (Autonomous Turn-End Stop Hook)**: If the harness supports lifecycle stop hooks (Claude Code, OpenAI Codex), install autonomous hooks (`rhizo hook install [--claude|--codex]`) to interlock turn completion when messages or tasks are waiting. Subagents are tools for sessions to run ad-hoc tasks, never cluster swarm workers or listener relays.
 4. **Preference 4 (Synchronous Foreground Wait)**: If the harness only supports synchronous shell execution with no background parameters, do NOT run blocking listen commands during active chat. Instead, check the inbox explicitly via `rhizo check-inbox`.
 
 > [!TIP] **We Welcome Pull Requests!**
 > Want first-class integration, native lifecycle hooks, or an in-process ear extension for your favorite coding harness? We actively welcome community contributions! Check out our [Developer Guide & Integration Checklist](CONTRIBUTING.md#developer-guide-adding-support-for-a-new-coding-harness) to get started.
 
-#### Architectural Deep Dive: Streaming Listeners vs. One-and-Done Subagents
+#### Architectural Deep Dive: Streaming Listeners & Autonomous Hooks vs. Subagents
 
-A common architectural question in multi-agent harness engineering: *Can a listener stay open and stream messages continuously instead of terminating after each message?*
+A common architectural question in multi-agent harness engineering: *Why are autonomous turn-end hooks and in-process extensions preferred over subagent listeners?*
 
-- **The Preference for Main-Chat Background Tasks**:
-  A background daemon task directly in the main chat (e.g. Antigravity `run_command(IsDaemon=true)`) or an in-process plugin (OpenCode `opencode-ear.js`) is **always preferred over subagents**. Spawning a subagent consumes substantial token overhead (initializing system prompts, tool schemas, and extra reasoning tokens). A direct background task maintains a direct, immediate line of interruption into the main conversation loop with **zero subagent token cost**.
-
-- **Why Subagents Cannot Stream Messages (The Completion Barrier)**:
-  In subagent-capable harnesses (Claude Code, OpenAI Codex), subagents operate as **one-way completion barriers**. Subagents do **NOT** stream raw intermediate standard output back into the parent conversation while running. The parent session is only notified **upon subagent completion / process exit**. If a subagent were to run an infinite streaming loop (`while true; do rhizo listen; done`), the subagent would never terminate, and the parent session would **never receive any message**—messages would be consumed from Redis and trapped inside the subagent's memory forever! Consequently, inside subagents, `rhizo listen` **must be one-and-done**: it blocks until one message arrives, outputs the JSON payload, and exits `0`, allowing the subagent to complete and deliver the payload to the parent.
-
-- **Where Streaming Operates Today**:
-  Continuous streaming listener loops operate in **Tier 1 in-process extensions** (`opencode-ear.js`, `pi-ear.ts`), where host process runtimes (Node.js/Bun) supervise background child processes and inject prompt turns into the host event loop via native APIs (`promptAsync`), entirely bypassing LLM subagent overhead.
+- **Subagent Invariant**:
+  Subagents are tools for sessions to run ad-hoc tasks, **never cluster swarm workers or listener relays**. Harness-internal subagents (e.g. `invoke_subagent`, `Task`, `spawn_agent`) are ephemeral, terminate upon single-task completion, cannot maintain persistent blocking listeners, corrupt workspace isolation, and dump verbose execution traces back into the parent context.
+- **The Power of Autonomous Turn-End Hooks**:
+  In harnesses without native background daemons (such as Claude Code and OpenAI Codex), **autonomous turn-end stop hooks** (`rhizo hook install --claude`, `rhizo hook install --codex`) eliminate the need for subagent listener relays. The harness invokes the hook at the end of each turn with 0 token cost. If an incoming task or message is waiting, the hook immediately continues the session.
+- **Continuous In-Process Streaming**:
+  In plugin-capable harnesses (OpenCode, Pi), bundled extensions (`opencode-ear.js`, `pi-ear.ts`) maintain continuous streaming listener fibers in-process and inject prompt turns into the host event loop via native APIs (`promptAsync`), entirely bypassing LLM polling or subagent overhead.
 
 ### Canonical Command Recipes: What to Run & When (Zero Guesswork)
 
@@ -713,12 +711,10 @@ flowchart TD
     Check -->|Reply with Result & Await Next Task| Recipe2["Recipe 2: Atomic Reply & Re-Arm<br/><code>rhizo reply --to &lt;sender&gt; --reply-to '&lt;id&gt;' ... --listen</code>"]
     Check -->|No Reply Needed, Just Wait| Recipe2b["Recipe 2b: Indefinite Wait (Zero Timeout)<br/><code>rhizo listen &lt;my-name&gt;</code>"]
     Check -->|Work Completely Finished| RecipeClose["Recipe 5: Clean Disconnect<br/><code>rhizo close &lt;my-name&gt;</code>"]
-    Check -->|Using Autonomous Continuation Hooks| Recipe4["Recipe 4: Stop Hook Continuation<br/>Turn ends naturally; hook detects incoming message & continues"]
-    Check -->|Subagent Completed One-Shot Listen| Recipe3["Recipe 3: Relaunch Subagent Ear<br/>Spawn fresh subagent with <code>rhizo listen &lt;my-name&gt;</code>"]
+    Check -->|Using Autonomous Continuation Hooks| Recipe3["Recipe 3: Stop Hook Continuation<br/>Turn ends naturally; hook detects incoming message & continues"]
     Recipe2 --> InTurn
     Recipe2b --> InTurn
     Recipe3 --> InTurn
-    Recipe4 --> InTurn
     RecipeClose --> Done([Session Closed Cleanly])
 ```
 
@@ -738,8 +734,8 @@ flowchart TD
      run_command(CommandLine="rhizo listen <my-name>", WaitMsBeforeAsync=500, IsDaemon=True)
      ```
      The platform's native reactive wakeup will resume your turn when an incoming message arrives.
-   - **Subagent / Background Task Support (Claude Code `Task(..., background=true)`, OpenAI Codex `spawn_agent`)**:
-     Dispatch a one-shot background subagent running synchronous blocking `rhizo listen <my-name>` (no daemon inside the subagent: avoid double-daemons!). When a message arrives, the subagent terminates and delivers the payload to the parent turn.
+   - **Autonomous Lifecycle Stop Hooks (Claude Code, OpenAI Codex)**:
+     Install the native stop hook via `rhizo hook install --claude` or `rhizo hook install --codex`. The harness inspects the inbox upon turn completion and interlocks turns automatically. Subagents are tools for sessions to run ad-hoc tasks, never cluster swarm workers or listener relays.
    - **Dedicated Headless Shell / Human Worker Terminal**:
      ```bash
      rhizo open <my-name> "<tags>" --listen
@@ -752,12 +748,12 @@ flowchart TD
 - **DO I NEED TO RUN `rhizo open` AGAIN?**
   **NO! Never re-run `rhizo open` after completing a task.** Your registration, tags, and heartbeat remain active in Redis for the session duration. Re-running `open` unnecessarily resets registration state. Only re-run `rhizo open` if the session crashed, reconnected after a long network disconnect, or heartbeat expired.
 - **HOW DO I SEND MY RESULT AND WAIT FOR THE NEXT TASK?**
-  When running in a dedicated terminal, background daemon, or inside a listener subagent, use **Atomic Reply & Re-Arm**:
+  When running in a dedicated terminal, background daemon, or session with autonomous hooks, use **Atomic Reply & Re-Arm**:
   ```bash
   rhizo reply --to <sender> --subject "Re: <subj>" --body "<result>" --reply-to "<id>" --listen
   ```
   - **Why `--reply-to "<id>"` is expected**: Correlates the response with the sender's original task ID. This is required for synchronous RPC (`rhizo request`), scatter-gather quorum aggregation, and DAG workflow step resolution.
-  - **Why `--listen` (`-l`) is expected**: Delivers the reply and immediately re-arms the listener *in the exact same command*. In interactive main-chat sessions without daemon shell parameters, omit `--listen` (`rhizo reply --to <sender> --subject "Re: <subj>" --body "<result>" --reply-to "<id>"`) and re-arm the listener via your harness subagent or stop hook.
+  - **Why `--listen` (`-l`) is expected**: Delivers the reply and immediately re-arms the listener *in the exact same command*. In interactive main-chat sessions without daemon shell parameters, omit `--listen` (`rhizo reply --to <sender> --subject "Re: <subj>" --body "<result>" --reply-to "<id>"`) and re-arm the listener via your harness background daemon or stop hook.
 - **WHAT IF NO REPLY IS NEEDED (JUST WAITING FOR WORK)?**
   Run with **NO TIMEOUT**:
   ```bash
@@ -765,20 +761,21 @@ flowchart TD
   ```
   - **Default Must Always Be Infinite Wait (`timeout = 0` / no timeout)**: Never specify an arbitrary bounded timeout (e.g. 30s or 120s). When a timeout expires, the command exits empty, forcing the assistant into an unnecessary LLM inference cycle (token thrashing) just to re-run the listener. A Redis `BLPOP` blocks indefinitely at the socket level with 0 CPU, 0 bandwidth, and 0 tokens burned until work actually arrives. Timeouts are optional and explicitly discouraged across the board.
 
-#### 3. Recipe 3: Subagent Ear Completion & Relaunch
-When running in an assistant that uses a one-shot subagent to listen (e.g. Claude Code `Task(background=true)` or OpenAI Codex):
-1. The subagent runs `rhizo listen <my-name>` (with NO timeout, NO `&`, NO output redirection), blocks until ONE message arrives, outputs the JSON, and terminates cleanly.
-2. The parent assistant receives the message JSON.
-3. The parent assistant executes the requested work and sends the reply via `rhizo reply --reply-to "<id>" ...`.
-4. **IMMEDIATE RELAUNCH**: Before or while concluding the turn, the parent assistant MUST spawn a fresh one-shot subagent running `rhizo listen <my-name>` to catch the next message.
+#### 3. Recipe 3: Autonomous Turn-End Continuation Hooks (Zero Cognitive Overhead)
+> [!NOTE] **Recipe 3 (Subagent Ear) Retired in Favor of Autonomous Stop Hooks**  
+> Subagents are tools for sessions to run ad-hoc tasks, **never cluster swarm workers or listener relays**. Spawning subagents as listener relays wastes token budgets, risks orphaned processes, and pollutes parent context.
 
-#### 4. Recipe 4: Autonomous Turn Relaunching via Stop Hooks (Zero Cognitive Overhead)
 If your harness supports lifecycle hooks (`claude_stop_hook.py`, `codex_stop_hook.py`, `agy_stop_hook.py`):
+- Install the hook once during setup:
+  ```bash
+  rhizo hook install --claude   # For Claude Code (~/.claude/settings.json)
+  rhizo hook install --codex    # For OpenAI Codex (~/.codex/config.toml)
+  ```
 - You NEVER need to write `while true` loops, detach processes with `&`, or remember to re-listen.
 - Whenever your turn finishes, the harness invokes the hook.
 - The hook checks `rhizo check-inbox`. If a message is waiting, it returns `{"decision": "block", ...}`, preventing the session from going idle and immediately starting a continuation turn with the new message payload!
 
-#### 5. Recipe 5: Clean Disconnect / Session End
+#### 4. Recipe 4: Clean Disconnect / Session End
 When your assigned work is completely finished and you will not take any further tasks:
 ```bash
 rhizo close <my-name>
@@ -798,7 +795,7 @@ When `rhizo listen` delivers a message and exits, the Nim engine automatically p
      rhizo reply --to <sender> --reply-to "<id>" --subject "Re: <subj>" --body "<results>" --listen
   2. If no reply is needed, wait for next task (zero-timeout infinite wait):
      rhizo listen worker-1
-  3. If using subagents: dispatch a fresh one-shot listener subagent before concluding turn.
+  3. If using autonomous stop hooks: ensure hook is installed (`rhizo hook install [--claude|--codex]`) before concluding turn.
   4. If disconnecting or finishing session work completely:
      rhizo close worker-1
 (To silence this notice: pass --quiet / -q, or set RHIZO_QUIET=1)
@@ -808,7 +805,7 @@ When `rhizo listen` delivers a message and exits, the Nim engine automatically p
 - **LLM tool runners capture stderr**: In Claude Code, Codex, Cursor, and AGY, tool execution captures stderr alongside stdout, providing the LLM with direct, unmistakable next-step guidance tailored to its runtime harness.
 - **Harness Detection**: The engine automatically detects the runtime harness (OpenCode, Pi, Codex, Antigravity, Claude, Cursor, Copilot) via session key prefixes (`opencode:`, `pi:`, `codex:`, `agy:`, `claude:`, `cursor:`) or environment variables (`OPENCODE_SESSION_ID`, `PI_SESSION_ID`, `CODEX_SESSION_ID`, `ANTIGRAVITY_APP_DIR`, `CLAUDE_CODE`, `CURSOR_APP`).
   - **OpenCode & Pi**: The notice warns that in-process extension fibers are active and instructs the agent *not* to run a blocking `rhizo listen`.
-  - **OpenAI Codex / Claude Code**: The notice instructs the agent to dispatch a fresh one-shot listener subagent before concluding its turn.
+  - **OpenAI Codex / Claude Code**: The notice instructs the agent to install or rely on autonomous turn-end stop hooks (`rhizo hook install [--codex|--claude]`) or run a session listener.
   - **Antigravity**: The notice instructs the agent to re-arm its reactive background listener via `run_command` or append `--listen`.
   - **Dedicated Worker Terminal / Other**: The notice presents the atomic reply & re-arm pattern (`--listen`) or zero-timeout wait.
 - **Suppression / Quiet Flag**: To suppress the lifecycle notice in automated scripts or extensions, pass `--quiet` / `-q`, or export `RHIZO_QUIET=1`.

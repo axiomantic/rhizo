@@ -1110,10 +1110,10 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       else:
         lines.add("- If you must immediately await the next task, append --listen:")
         lines.add("  rhizo reply ... --listen")
-        if harness == "codex":
-          lines.add("- Codex subagents (SKILL.md Step 2b): Re-spawn one-shot listener subagent before concluding turn.")
+        if harness in ["codex", "claude", "cursor", "copilot"]:
+          lines.add("- Autonomous Stop Hooks: Ensure stop hook is installed via 'rhizo hook install --" & (if harness == "codex": "codex" else: "claude") & "' or append --listen.")
         elif harness == "antigravity":
-          lines.add("- Antigravity (SKILL.md Step 2d): Re-arm reactive listener via run_command or append --listen.")
+          lines.add("- Antigravity: Re-arm reactive listener via run_command(..., IsDaemon=true) or append --listen.")
       lines.add("- If disconnecting or shutting down, unregister cleanly:")
       lines.add("  rhizo close " & name)
       lines.add("- See SKILL.md Step 2 for complete harness-specific integration playbooks.")
@@ -2092,14 +2092,16 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         of "opencode", "pi":
           stderr.writeLine("  - Tier 1 (In-Process Extension): In-process extension fiber is active. DO NOT run a blocking 'rhizo listen'.")
         of "antigravity":
-          stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
+          stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
         of "codex":
-          stderr.writeLine("  - Tier 3 (Subagent Task): Subagent ear discipline: spawn a background listener subagent to run '" & exactCmd & "'.")
+          stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --codex")
+          stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
         of "claude", "cursor", "copilot":
-          stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
+          stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --claude")
+          stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
         else:
-          stderr.writeLine("  - Tier 2 (Daemon Shell): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true)")
-          stderr.writeLine("  - Tier 3 (Subagent Task): Task(prompt=\"Execute '" & exactCmd & "'. Block until 1 message arrives and exit immediately.\", background=true)")
+          stderr.writeLine("  - Tier 2 (Daemon Shell): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
+          stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): rhizo hook install [--codex|--claude]")
           stderr.writeLine("  - Tier 4 (Synchronous Shell): Run '" & exactCmd & "' directly in foreground (or 'rhizo check-inbox')")
         stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
         stderr.writeLine("================================================================================\n")
@@ -3850,32 +3852,7 @@ proc doPoke*(cfg: RhizoConfig, targetAgent: string, optCmd: string = "", force: 
   var windowName = ""
   var pokeDetails = ""
 
-  # 1. Check tmux if running
-  try:
-    let (tmuxCheck, code) = execCmdEx("command -v tmux")
-    if code == 0:
-      let (panesOut, pCode) = execCmdEx("tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}:#{window_name}:#{pane_title}'")
-      if pCode == 0 and panesOut.len > 0:
-        for line in panesOut.splitLines:
-          let parts = line.split(":")
-          if parts.len >= 3:
-            let targetPane = parts[0] & ":" & parts[1]
-            let winName = parts[2]
-            let paneTitle = if parts.len >= 4: parts[3] else: ""
-            if scopedTarget.toLowerAscii in winName.toLowerAscii or
-               targetAgent.toLowerAscii in winName.toLowerAscii or
-               scopedTarget.toLowerAscii in paneTitle.toLowerAscii or
-               targetAgent.toLowerAscii in paneTitle.toLowerAscii:
-              methodFound = "tmux"
-              windowName = winName
-              if not dryRun:
-                discard execCmdEx("tmux send-keys -t " & quoteShell(targetPane) & " " & quoteShell(cmd) & " C-m")
-              pokeDetails = "tmux pane " & targetPane & " (" & winName & ")"
-              break
-  except CatchableError:
-    discard
-
-  # 2. On macOS, check Ghostty, Terminal, iTerm2, and System Events
+  # On macOS, check Ghostty, Terminal, iTerm2, and System Events
   when defined(macosx) or defined(darwin):
     if methodFound == "NOT_FOUND":
       let appleScript = """
@@ -4482,7 +4459,7 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
       reason.add("If you yield without a listener, you will become deaf to peer updates and incoming task dispatches.\n\n")
       reason.add("ACTION REQUIRED RIGHT NOW: Launch a background listener before concluding your turn:\n")
       reason.add("  Command: rhizo listen " & normName & "\n")
-      reason.add("  Capability Tier: In Codex/Claude, spawn a background subagent to run 'rhizo listen " & normName & "'. In Antigravity, use run_command(..., IsDaemon=true).")
+      reason.add("  Capability Tier: In Codex/Claude, install autonomous turn-end stop hooks ('rhizo hook install --codex' or '--claude') or arm a session listener. In Antigravity, use run_command(..., IsDaemon=true, WaitMsBeforeAsync=500).")
 
       var jOut = newJObject()
       jOut["decision"] = %"block"

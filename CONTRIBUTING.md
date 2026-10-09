@@ -178,9 +178,8 @@ Determine if the harness supports programmatic turn interruption:
    Add a tailored playbook entry in `skills/rhizo/SKILL.md` (and the harness's rule file) with strict, single-line recipes so the LLM does not have to guess or improvise:
    - **Recipe 1: Startup**: Exact command to register identity and wait (`rhizo open <my-name> "<tags>" --listen`).
    - **Recipe 2: Post-Task Transition**: Answer whether to re-open (*NO — registration persists in Redis*) and provide the exact reply & re-arm command (`rhizo reply --to <sender> --reply-to "<id>" ... --listen` or `rhizo listen <my-name> 120`).
-   - **Recipe 3: Subagent Relaunch**: If the harness uses subagents, instruct the parent agent to terminate the subagent on ONE message and immediately dispatch a fresh one-shot listener after completing the task.
-   - **Recipe 4: Autonomous Continuation**: If hooks are supported, specify the `Stop` hook configuration that automatically continues turns without agent intervention.
-   - **Recipe 5: Clean Disconnect**: Provide the explicit shutdown command (`rhizo close <my-name>`) to clear heartbeats and listener locks when work is finished.
+   - **Recipe 3: Autonomous Continuation**: If hooks are supported, specify the `Stop` hook configuration (`rhizo hook install`) that automatically continues turns without agent intervention.
+   - **Recipe 4: Clean Disconnect**: Provide the explicit shutdown command (`rhizo close <my-name>`) to clear heartbeats and listener locks when work is finished.
    - **Engine Lifecycle Guidance**: Note that `rhizo listen` outputs a lifecycle reminder to `stderr` with expected next-step commands upon message delivery. To silence it in automation scripts or continuous extensions, pass `--quiet` / `-q` or export `RHIZO_QUIET=1`.
 2. **In-Process Extension or Rules File**:
    - For plugin-capable harnesses: Create `skills/rhizo/<harness>-ear.js` or `.ts` implementing session registration, unblocked listener fiber, and prompt injection.
