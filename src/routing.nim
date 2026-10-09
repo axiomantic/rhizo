@@ -376,6 +376,10 @@ proc findRoutesConfig*(customPath: string = ""): string =
   if localFallback.len > 0: return localFallback
   return ""
 
+proc isLocalEndpoint*(url: string): bool =
+  let u = url.toLowerAscii
+  u.contains("127.0.0.1") or u.contains("localhost") or u.contains("::1") or u.contains("0.0.0.0")
+
 # Lint YAML / JSON route configuration
 proc lintYamlContent*(content: string, checkService: bool = false, isOverlay: bool = false,
                       inheritedQuestionIds: seq[string] = @[],
@@ -563,7 +567,10 @@ proc lintYamlContent*(content: string, checkService: bool = false, isOverlay: bo
           if resp.code != Http200 and resp.code != Http404 and resp.code != Http405:
             errors.add("System 1 service at " & serviceUrl & " returned HTTP " & $resp.code)
     except CatchableError as e:
-      errors.add("Cannot connect to System 1 service at " & serviceUrl & ": " & e.msg)
+      var errMsg = "Cannot connect to System 1 service at " & serviceUrl & ": " & e.msg
+      if isLocalEndpoint(serviceUrl):
+        errMsg.add("\n  Tip: Run rhizo route setup to install and launch the local Laya daemon.")
+      errors.add(errMsg)
     finally:
       client.close()
 
@@ -919,7 +926,10 @@ proc lintEffectiveRoutesConfig*(customPath: string = "", checkService: bool = fa
             if resp.code != Http200 and resp.code != Http404 and resp.code != Http405:
               allErrors.add("System 1 service at " & effective.service.url & " returned HTTP " & $resp.code)
       except CatchableError as e:
-        allErrors.add("Cannot connect to System 1 service at " & effective.service.url & ": " & e.msg)
+        var errMsg = "Cannot connect to System 1 service at " & effective.service.url & ": " & e.msg
+        if isLocalEndpoint(effective.service.url):
+          errMsg.add("\n  Tip: Run rhizo route setup to install and launch the local Laya daemon.")
+        allErrors.add(errMsg)
       finally:
         client.close()
     except CatchableError as e:
@@ -1326,6 +1336,8 @@ proc callSystemOne*(
     quit(1)
   except CatchableError as e:
     stderr.writeLine("Error: System 1 service is unreachable at " & endpoint & " (" & e.msg & ").")
+    if isLocalEndpoint(endpoint) or isLocalEndpoint(service.url):
+      stderr.writeLine("Tip: Run rhizo route setup to install and launch the local Laya daemon.")
     stderr.writeLine("Start your System 1 service (Laya, Kev, Decider, Jev, or Ollama) before routing tasks.")
     quit(1)
   finally:

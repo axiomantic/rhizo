@@ -8,7 +8,7 @@ import std/[
 ]
 when defined(posix):
   import posix
-import config, redis, guide, routing, lexicon, std/[net, asyncdispatch]
+import config, redis, guide, routing, lexicon, std/[net, asyncdispatch, httpclient]
 
 proc isPidAlive*(pid: int): bool =
   if pid <= 0: return false
@@ -4655,6 +4655,128 @@ proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentName
   else:
     return "Error: Unknown harness '" & targetHarness & "'. Supported: codex, claude, opencode, pi"
 
+# Local Laya System 1 Daemon Setup
+proc checkLayaHealth(endpoint: string, timeoutMs: int = 1000): bool =
+  var client = newHttpClient(timeout = timeoutMs)
+  try:
+    let resp = client.get(endpoint)
+    return resp.code == Http200
+  except CatchableError:
+    return false
+  finally:
+    client.close()
+
+proc doRouteSetup*(daemonMode: bool, customServiceUrl: string = "", timeoutSec: float = 10.0): int =
+  let baseUrl = if customServiceUrl.len > 0:
+    customServiceUrl.strip(chars = {'/'})
+  else:
+    let envUrl = getEnvFirst("RHIZO_SERVICE_URL", "RHIZO_LAYA_URL", "SYSTEMONE_URL", "LAYA_URL")
+    if envUrl.len > 0: envUrl.strip(chars = {'/'}) else: "http://127.0.0.1:8100"
+
+  let healthUrl = baseUrl & "/healthz"
+
+  # Fast-path: Check if local Laya daemon is already running and healthy
+  if not daemonMode and checkLayaHealth(healthUrl):
+    echo "✓ Local Laya System 1 daemon is already running and healthy at " & baseUrl
+    echo "  Health endpoint: " & healthUrl & " [HTTP 200 OK]"
+    return 0
+
+  # Check if local-systemone exists in PATH or common user locations
+  var exePath = findExe("local-systemone")
+  if exePath.len == 0:
+    let candidates = [
+      getHomeDir() / ".local" / "bin" / "local-systemone",
+      getCurrentDir() / ".venv" / "bin" / "local-systemone",
+      if getEnv("VIRTUAL_ENV").len > 0: getEnv("VIRTUAL_ENV") / "bin" / "local-systemone" else: ""
+    ]
+    for c in candidates:
+      if c.len > 0 and fileExists(c):
+        exePath = c
+        break
+
+  if exePath.len == 0:
+    echo "local-systemone not found in PATH. Attempting automatic installation from GitHub..."
+    let gitPkg = "git+https://github.com/axiomantic/local-systemone.git#egg=local-systemone[full]"
+    var installed = false
+
+    if findExe("uv").len > 0:
+      echo "→ Running: uv pip install \"" & gitPkg & "\""
+      var res = execCmd("uv pip install \"" & gitPkg & "\"")
+      if res == 0:
+        installed = true
+      else:
+        echo "→ Retrying with --system: uv pip install --system \"" & gitPkg & "\""
+        res = execCmd("uv pip install --system \"" & gitPkg & "\"")
+        if res == 0:
+          installed = true
+
+    if not installed:
+      let pipExe = if findExe("pip").len > 0: "pip" elif findExe("pip3").len > 0: "pip3" else: ""
+      if pipExe.len > 0:
+        echo "→ Running: " & pipExe & " install \"" & gitPkg & "\""
+        let res = execCmd(pipExe & " install \"" & gitPkg & "\"")
+        if res == 0:
+          installed = true
+      else:
+        stderr.writeLine("Error: Neither 'uv' nor 'pip' found in PATH to install local-systemone.")
+        return 1
+
+    if not installed:
+      stderr.writeLine("Error: Failed to install local-systemone automatically via uv/pip.")
+      stderr.writeLine("Install manually with: pip install \"git+https://github.com/axiomantic/local-systemone.git#egg=local-systemone[full]\"")
+      return 1
+
+    # Re-discover after install
+    exePath = findExe("local-systemone")
+    if exePath.len == 0:
+      let candidates = [
+        getHomeDir() / ".local" / "bin" / "local-systemone",
+        getCurrentDir() / ".venv" / "bin" / "local-systemone",
+        if getEnv("VIRTUAL_ENV").len > 0: getEnv("VIRTUAL_ENV") / "bin" / "local-systemone" else: ""
+      ]
+      for c in candidates:
+        if c.len > 0 and fileExists(c):
+          exePath = c
+          break
+    if exePath.len == 0:
+      exePath = "local-systemone"
+
+  echo "Found local-systemone at: " & exePath
+
+  # Launch daemon
+  if daemonMode:
+    echo "Configuring and launching permanent local-systemone background service..."
+    let code = execCmd(quoteShell(exePath) & " --install-daemon")
+    if code != 0:
+      stderr.writeLine("Warning: 'local-systemone --install-daemon' returned exit code " & $code)
+  else:
+    echo "Launching local-systemone daemon in background..."
+    when defined(windows):
+      discard execCmd("start /B \"\" " & quoteShell(exePath))
+    else:
+      discard execCmd("nohup " & quoteShell(exePath) & " > /dev/null 2>&1 &")
+
+  # Poll healthz up to timeoutSec
+  echo "Polling " & healthUrl & " for readiness (up to " & $int(timeoutSec) & "s)..."
+  let startEpoch = epochTime()
+  var ready = false
+  while (epochTime() - startEpoch) <= timeoutSec:
+    if checkLayaHealth(healthUrl):
+      ready = true
+      break
+    sleep(250)
+
+  if ready:
+    let elapsed = int((epochTime() - startEpoch) * 1000)
+    echo "✓ Local Laya System 1 daemon is ready at " & baseUrl & " (" & $elapsed & "ms)"
+    echo "  Health check passed: " & healthUrl
+    echo "  Verify routing: rhizo route lint --check-service"
+    return 0
+  else:
+    stderr.writeLine("Error: Timed out waiting for " & healthUrl & " after " & $int(timeoutSec) & "s.")
+    stderr.writeLine("Check daemon output or launch 'local-systemone' in foreground to debug.")
+    return 1
+
 # Main Entrypoint / CLI Router
 proc main() =
   installSignalHandlers()
@@ -4751,6 +4873,7 @@ proc main() =
     echo "  rhizo route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
     echo "  rhizo route <lint|check> [--routes-file <file>] [--check-service]"
     echo "  rhizo route init [--global] [--force]"
+    echo "  rhizo route setup [--daemon]"
     echo "  rhizo work <queue_name> [--timeout <sec>] [--run-id <id>] (default timeout: 0 / infinite)"
     echo "  rhizo claim <queue_name> [--timeout <sec>] [--lease 120] [--run-id <id>] [--raw]"
     echo "  rhizo ack <queue_name> <task_id>"
@@ -5704,11 +5827,12 @@ proc main() =
 
   of "route":
     if args.len < 2:
-      stderr.writeLine("Error: Missing task text or sub-command (init / lint / check).")
+      stderr.writeLine("Error: Missing task text or sub-command (init / lint / check / setup).")
       stderr.writeLine("Usage:")
       stderr.writeLine("  rhizo route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]")
       stderr.writeLine("  rhizo route lint [--routes-file <file>] [--check-service]")
       stderr.writeLine("  rhizo route init [--global] [--force]")
+      stderr.writeLine("  rhizo route setup [--daemon]")
       quit(1)
 
     var routesFilePath = ""
@@ -5719,6 +5843,9 @@ proc main() =
     var checkService = false
     var isLint = false
     var isInit = false
+    var isSetup = false
+    var daemonMode = false
+    var setupTimeout = if cli.timeout.isSome: float(cli.timeout.get) else: 10.0
     var isGlobal = false
     var forceOverwrite = false
     var taskText = ""
@@ -5730,12 +5857,36 @@ proc main() =
         isLint = true
       elif a in ["init", "scaffold"]:
         isInit = true
+      elif a in ["setup", "bootstrap"]:
+        isSetup = true
+      elif a in ["--daemon", "-d"]:
+        daemonMode = true
       elif a in ["--global", "-g"]:
         isGlobal = true
       elif a in ["--force", "-f"]:
         forceOverwrite = true
       elif a in ["--check-service", "--check_service", "--ping"]:
         checkService = true
+      elif a in ["--help", "-h"]:
+        if isSetup or (i + 1 < args.len and args[i+1] in ["setup", "bootstrap"]) or (i > 1 and args[i-1] in ["setup", "bootstrap"]):
+          echo "Usage: rhizo route setup [--daemon] [--service-url <url>] [--timeout <sec>]"
+          echo ""
+          echo "Install and bootstrap the local System 1 (Laya) daemon."
+          echo "Checks for 'local-systemone' in PATH; if missing, installs via uv/pip from GitHub."
+          echo "Launches daemon (background or '--install-daemon') and verifies healthz up to 10s."
+          echo ""
+          echo "Options:"
+          echo "  --daemon, -d         Install permanent background daemon (launchd/systemd)"
+          echo "  --service-url <url>  Override health check endpoint (default: http://127.0.0.1:8100)"
+          echo "  --timeout <sec>      Maximum seconds to poll health endpoint (default: 10s)"
+          quit(0)
+        else:
+          echo "Usage:"
+          echo "  rhizo route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
+          echo "  rhizo route lint [--routes-file <file>] [--check-service]"
+          echo "  rhizo route init [--global] [--force]"
+          echo "  rhizo route setup [--daemon]"
+          quit(0)
       elif a.startsWith("--routes-file="): routesFilePath = a[14..^1]
       elif a.startsWith("--routes_file="): routesFilePath = a[14..^1]
       elif (a == "--routes-file" or a == "--routes_file") and i + 1 < args.len:
@@ -5755,15 +5906,31 @@ proc main() =
       elif a.startsWith("--api-key=") or a.startsWith("--api_key="): apiKeyOverride = a[10..^1]
       elif (a == "--api-key" or a == "--api_key" or a == "-k") and i + 1 < args.len:
         apiKeyOverride = args[i+1]; inc i
-      elif a.startsWith("--route-timeout="): routeTimeout = a[16..^1]
-      elif a.startsWith("--route_timeout="): routeTimeout = a[16..^1]
-      elif a.startsWith("--timeout="): routeTimeout = a[10..^1]
+      elif a.startsWith("--route-timeout="):
+        routeTimeout = a[16..^1]
+        try: setupTimeout = parseFloat(a[16..^1])
+        except ValueError: discard
+      elif a.startsWith("--route_timeout="):
+        routeTimeout = a[16..^1]
+        try: setupTimeout = parseFloat(a[16..^1])
+        except ValueError: discard
+      elif a.startsWith("--timeout="):
+        routeTimeout = a[10..^1]
+        try: setupTimeout = parseFloat(a[10..^1])
+        except ValueError: discard
       elif (a == "--route-timeout" or a == "--route_timeout" or a == "--timeout" or a == "-t") and i + 1 < args.len:
-        routeTimeout = args[i+1]; inc i
+        routeTimeout = args[i+1]
+        try: setupTimeout = parseFloat(args[i+1])
+        except ValueError: discard
+        inc i
       elif not a.startsWith("-"):
         if taskText.len == 0: taskText = a
         else: taskText.add(" " & a)
       inc i
+
+    if isSetup:
+      let code = doRouteSetup(daemonMode, serviceUrl, setupTimeout)
+      quit(code)
 
     if isInit:
       let targetFile = if isGlobal:
@@ -7545,6 +7712,8 @@ proc main() =
       suggestion = "reroute"
     elif lowCmd in ["poke", "wake", "nudge", "bell", "doorbell"]:
       suggestion = "poke"
+    elif lowCmd in ["setup", "bootstrap"]:
+      suggestion = "route setup"
 
     if suggestion.len > 0:
       stderr.writeLine("Error: Unknown subcommand '" & subcmd & "'. Did you mean 'rhizo " & suggestion & "'?")

@@ -207,6 +207,7 @@ routes:
         code, out, err = run_rhizo("route", "Fix database deadlock", cwd=tmpdir)
         assert code == 1
         assert "unreachable" in err.lower() or "connection" in err.lower()
+        assert "Tip: Run rhizo route setup to install and launch the local Laya daemon." in err
 
 def test_route_dry_run_and_enqueue_with_mock(mock_laya_server):
     """Test full routing triage and Redis enqueuing without skipping in CI."""
@@ -548,5 +549,73 @@ routes:
             )
             assert code == 0, f"Error: {err}"
             assert MockLayaHandler.last_auth is None, f"Legacy key '{legacy_key}' was unexpectedly resolved!"
+
+def test_route_setup_help():
+    code, out, err = run_rhizo("route", "setup", "--help")
+    assert code == 0
+    assert "rhizo route setup" in out
+    assert "--daemon" in out
+    assert "--service-url" in out
+    assert "--timeout" in out
+
+def test_route_setup_already_healthy(mock_laya_server):
+    code, out, err = run_rhizo("route", "setup", f"--service-url={mock_laya_server}")
+    assert code == 0
+    assert "already running and healthy" in out
+
+def test_route_setup_timeout_failure():
+    code, out, err = run_rhizo("route", "setup", "--service-url=http://127.0.0.1:59998", "--timeout=1")
+    assert code == 1
+    assert "timed out" in err.lower()
+
+def test_route_typo_suggestion_setup():
+    code, out, err = run_rhizo("setup")
+    assert code == 1
+    assert "Did you mean 'rhizo route setup'?" in err
+
+def test_route_setup_with_mock_daemon():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bin_dir = Path(tmpdir) / "bin"
+        bin_dir.mkdir()
+        log_file = Path(tmpdir) / "daemon.log"
+
+        class HealthHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_GET(self):
+                if self.path == "/healthz":
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'{"status":"ok"}')
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), HealthHandler)
+        port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+
+        try:
+            mock_exe = bin_dir / ("local-systemone.bat" if sys.platform == "win32" else "local-systemone")
+            if sys.platform == "win32":
+                mock_exe.write_text(f'@echo off\necho %* >> "{log_file}"\n')
+            else:
+                mock_exe.write_text(f'#!/bin/sh\necho "$@" >> "{log_file}"\n')
+                mock_exe.chmod(0o755)
+
+            new_env = {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+            code, out, err = run_rhizo(
+                "route", "setup", "--daemon",
+                f"--service-url=http://127.0.0.1:{port}",
+                "--timeout=2",
+                env=new_env
+            )
+            assert code == 0, f"Setup failed: {err}"
+            assert "ready" in out.lower()
+            assert log_file.exists()
+            assert "--install-daemon" in log_file.read_text()
+        finally:
+            server.shutdown()
+
 
 
