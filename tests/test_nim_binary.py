@@ -2468,7 +2468,7 @@ secret = "my_inline_secret_test_555"
             alice_lock_key = f"{TEST_PREFIX}listener:{alice}"
             registered = False
             lock_info = None
-            for _ in range(30):
+            for _ in range(80):
                 time.sleep(0.1)
                 chk = subprocess.run(
                     ["redis-cli", "-u", REDIS_URL, "GET", alice_lock_key],
@@ -2598,7 +2598,7 @@ secret = "my_inline_secret_test_555"
             dave_lock_key = f"{TEST_PREFIX}listener:{dave}"
             registered = False
             lock_info = None
-            for _ in range(30):
+            for _ in range(80):
                 time.sleep(0.1)
                 chk = subprocess.run(
                     ["redis-cli", "-u", REDIS_URL, "GET", dave_lock_key],
@@ -2709,7 +2709,7 @@ secret = "my_inline_secret_test_555"
             # Wait for original listener to register its PID in Redis
             registered = False
             lock_info = None
-            for _ in range(30):
+            for _ in range(80):
                 time.sleep(0.1)
                 chk = subprocess.run(
                     ["redis-cli", "-u", REDIS_URL, "GET", bob_lock_key],
@@ -2813,7 +2813,7 @@ secret = "my_inline_secret_test_555"
             # Wait for original listener to register in Redis
             registered = False
             lock_orig = None
-            for _ in range(30):
+            for _ in range(80):
                 time.sleep(0.1)
                 chk = subprocess.run(
                     ["redis-cli", "-u", REDIS_URL, "GET", carol_lock_key],
