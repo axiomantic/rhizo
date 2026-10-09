@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-10-09
+
+### Added
+- **Sovereign Session Invariant & Universal Subagent Prohibition (Rhizo Guide v1.5)**:
+  - Formally established the Sovereign Session Invariant: cluster swarm workers are strictly independent interactive sessions (separate terminal tabs or IDE windows) bootstrapped via Garden prompt cards.
+  - Harness-internal subagents (e.g. Antigravity's `invoke_subagent`, Claude Code's `Task`, OpenCode subtasks, Cursor sub-composers) are strictly prohibited from acting as cluster swarm workers across all harnesses.
+  - Eliminated the fallback clause in Delegation Precedence that previously allowed subagent fallback during swarm intake; subagents are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when explicitly requested by name.
+  - Bumped `GuideVersion` to `v1.5` and updated `tests/test_guide.py`.
+
 ## [0.2.11] - 2026-10-07
 
 ### Changed

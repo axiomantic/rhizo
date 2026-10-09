@@ -2,7 +2,7 @@
 
 This repository guide establishes the runtime invariants, directory hygiene, and coordination protocols for AI coding agents operating across projects.
 
-<!-- BEGIN RHIZO GUIDE [v1.4] -->
+<!-- BEGIN RHIZO GUIDE [v1.5] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -21,6 +21,10 @@ npm install -g @axiomantic/rhizo rift-snapshot
 Identity Allocation: Agent identity must be unique and collision-free. Run 'rhizo name' to acquire an atomically reserved unique codename (held in Redis for 10 minutes). Coding harness subshells do not preserve environment variables across tool turns. Record the literal name output from 'rhizo name' (e.g. 'rhizo-sequoia') in your reasoning context and pass it explicitly in all subsequent commands: 'rhizo open <name>', 'rhizo listen <name>'.
 </INVARIANT>
 
+<INVARIANT>
+Sovereign Session & Subagent Prohibition: Swarm workers are ALWAYS sovereign, independent interactive sessions (dedicated terminal tabs, CLI windows, or IDE sessions) bootstrapped via Garden 10-backtick prompt cards. Harness-internal subagents (e.g., Antigravity's 'invoke_subagent', Claude Code's 'Task', OpenCode subagents, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster swarm workers across all harnesses. Internal subagents are ephemeral, terminate upon single-task completion, cannot maintain persistent blocking listeners ('rhizo listen'), corrupt workspace isolation, and cause severe context poisoning by dumping execution traces back into the parent prompt. When orchestrating or bootstrapping a swarm, an orchestrator must NEVER spawn internal subagents and must NEVER offer "subagents" as a worker execution option during intake.
+</INVARIANT>
+
 <FORBIDDEN>
 Zero Dirty Commits: Never stage or commit coordination metadata (*.lock, .rhizo.*) into Git. Keep all agent state in ~/.gitignore_global.
 </FORBIDDEN>
@@ -31,7 +35,7 @@ Always run 'rhizo listen <agent>' with zero timeout (infinite wait). Bounded tim
 </CRITICAL>
 
 <INVARIANT>
-No Double-Daemons: Inside background subagents, 'rhizo listen' must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents.
+No Double-Daemons: If an ad-hoc subagent is explicitly requested by the operator for a one-off inspection, 'rhizo listen' inside that subagent must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents.
 </INVARIANT>
 
 <FORBIDDEN>
@@ -55,7 +59,7 @@ Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicas
 
 ### 6. Delegation Precedence
 <INVARIANT>
-Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must ONLY be used if the operator explicitly requests a "subagent" by name, or if no cluster workers exist.
+Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when the operator explicitly requests a "subagent" by name.
 </INVARIANT>
 
 ### 7. Post-Compaction Ceremony Restoration
@@ -82,7 +86,7 @@ Worker Autonomous Execution Invariant: When an incoming task or directive is del
 </CRITICAL>
 <!-- END RHIZO GUIDE -->
 
-<!-- BEGIN VINE GUIDE [v1.1] -->
+<!-- BEGIN VINE GUIDE [v1.2] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `vine guide install` -->
 
 ## Vine Workspace & Strand Coordination Guide
@@ -96,6 +100,8 @@ npm install -g @axiomantic/rhizo @axiomantic/vine
 ```
 
 ### 1. Invariants & Strand Identity
+* **Sovereign Worker Allocation**:
+  Workspaces (Strands) are allocated strictly 1:1 to sovereign, dedicated worker sessions. Never assign harness-internal subagents to strand directories to prevent git index contention and lifecycle premature termination.
 * **No Workspace-Scoped Identity Files**:
   Agent identity is strictly decoupled from directory paths. Never create or read `.rhizo.agent` or `.vine.agent` in any project or strand directory.
 * **Zero Dirty Commits**:
@@ -115,7 +121,7 @@ npm install -g @axiomantic/rhizo @axiomantic/vine
 * **Spin an Isolated Strand when**:
   - The repository contains Git submodules (e.g., PebbleOS).
   - The task requires complex, multi-file refactoring or high risk of breaking `main`.
-  - Parallel subagents or assistants are operating simultaneously on different tasks.
+  - Parallel workers or assistants are operating simultaneously on different tasks.
 * **Work Directly in Trunk when**:
   - The task is a trivial 1-file documentation fix, typo correction, or minor configuration tweak.
 
@@ -257,7 +263,7 @@ command -v rift >/dev/null 2>&1 && rift prune >/dev/null 2>&1 || true
 ```
 <!-- END VINE GUIDE -->
 
-<!-- BEGIN GARDEN GUIDE [v1.6] -->
+<!-- BEGIN GARDEN GUIDE [v1.7] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `garden guide install` -->
 
 ## Garden Multi-Agent Swarm & Ceremony Guide
@@ -279,14 +285,16 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
   Workers discovering architectural discrepancies cannot unilaterally deviate from `design.md`. They must submit a formal `addendum_<topic>.md` with rationale, await Orchestrator ratification, update `design.md`, and refresh `implementation_plan.md`.
 
 ### 2. Fleet Lifecycle & Session Coordination
+* **Sovereign Sessions & Subagent Prohibition**:
+  Swarm workers operate strictly in dedicated, independent interactive coding sessions (separate terminal tabs or IDE windows for Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`) wrapped in 10 backticks. Harness-internal subagents (e.g. Antigravity's `invoke_subagent`, Claude Code's `Task`, OpenCode subtasks, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster workers across all harnesses. Subagents are ephemeral single-turn jobs; they cannot maintain continuous background listeners, survive across task boundaries, or preserve clean workspace isolation, and they cause severe context poisoning by dumping full execution traces into the orchestrator prompt.
 * **Interactive Intake & Persona Calibration**:
-  Before dispatching work, the orchestrator conducts an intake interview (`garden` / `choose-personas`) to calibrate personas, harnesses, and foundation models, then generates `garden-swarm.json`.
+  Before dispatching work, the orchestrator conducts an intake interview (`garden` / `choose-personas`) to calibrate personas, harnesses, and foundation models, then generates `garden-swarm.json`. The orchestrator must NEVER offer or present internal subagents as an option for workers.
 * **Prompt-Bootstrapped Sessions**:
   Swarm workers operate in dedicated interactive coding sessions (Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`) wrapped in 10 backticks. Never detach unmanaged background processes with `&` or redirect output.
 * **Listener Discipline**:
   Workers arm their single-shot Rhizo listener (`rhizo listen <agent>`) with zero-timeout infinite wait to prevent token thrashing. Never wrap `rhizo listen` in a shell while-loop.
 * **Delegation Precedence**:
-  When instructed to "delegate", "assign", or "dispatch" work, the orchestrator MUST route tasks to active cluster workers via Rhizo (`rhizo send`, `rhizo enqueue`, `rhizo task assign/claim`). Harness-internal subagents (e.g. `invoke_subagent`, `Task`, `Agent`) must ONLY be used if the operator explicitly specifies the word "subagent", or if no cluster workers exist in the roster (`rhizo who`).
+  When instructed to "delegate", "assign", or "dispatch" work, the orchestrator MUST route tasks to active cluster workers via Rhizo (`rhizo send`, `rhizo enqueue`, `rhizo task assign/claim`). Harness-internal subagents (e.g. `invoke_subagent`, `Task`, `Agent`) must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when the operator explicitly specifies the word "subagent".
 * **Orchestrator Non-Implementation Invariant**:
   When acting as an Orchestrator (or in any session with active cluster workers), the session is a conductor, not a coder. When the operator presents a task, feature request, bugfix, or asks to work on something, the orchestrator MUST NEVER directly write code or edit files. It MUST STOP and prompt the operator to choose routing (Enqueue to cluster queue, Dispatch to worker, or Execute inline).
 * **Post-Compaction Ceremony Restoration**:
@@ -300,6 +308,9 @@ Never weave a strand into the canonical trunk without passing both keys:
 * **Key 2 (Semantic)**: Automated compiler and test suite run inside the strand.
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 <!-- END GARDEN GUIDE -->
+
+
+
 
 
 

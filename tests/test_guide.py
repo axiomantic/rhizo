@@ -24,7 +24,7 @@ def test_guide_install_new_file():
         assert target.exists()
 
         content = target.read_text()
-        assert "<!-- BEGIN RHIZO GUIDE [v1.4] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v1.5] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
         assert "Rhizo Multi-Agent Coordination Guide" in content
 
@@ -40,7 +40,7 @@ def test_guide_install_preserves_custom_content():
 
         content = target.read_text()
         assert custom_header.strip() in content
-        assert "<!-- BEGIN RHIZO GUIDE [v1.4] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v1.5] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
 
 def test_guide_install_updates_in_place():
@@ -63,7 +63,7 @@ def test_guide_install_updates_in_place():
         assert "Keep this text intact!" in content
         assert "Keep this footer intact too!" in content
         assert "Old outdated guide body" not in content
-        assert "<!-- BEGIN RHIZO GUIDE [v1.4] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v1.5] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
 
 def test_guide_uninstall_cleans_block():
