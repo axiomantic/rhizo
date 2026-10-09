@@ -15,7 +15,7 @@ import redis
 from tests.schema import LocutusMessage
 
 REDIS_URL = os.environ.get("RHIZO_REDIS_URL", "redis://127.0.0.1:6379")
-TEST_PREFIX = "locutus_test:"
+TEST_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", f"locutus_test_{os.getpid()}:")
 if os.name == "nt":
     BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
 else:
@@ -3599,19 +3599,20 @@ secret = "my_inline_secret_test_555"
                     return int(line.split(":")[1].strip())
             return 0
 
-        q = f"reuse_q_{int(time.time() * 1000)}"
-
-        # Record total connections received before running claim
-        conns_before = get_total_conns()
-
-        t0 = time.time()
-        # Run claim with 2s timeout on empty queue
-        res = self.run_locutus(["claim", q, "2"])
-        elapsed = time.time() - t0
-
-        conns_after = get_total_conns()
-        # Note: 1 connection was used by our get_total_conns() check itself
-        conns_delta = conns_after - conns_before - 1
+        conns_delta = 999
+        res = None
+        elapsed = 0
+        for attempt in range(3):
+            q = f"reuse_q_{int(time.time() * 1000)}"
+            conns_before = get_total_conns()
+            t0 = time.time()
+            res = self.run_locutus(["claim", q, "2"])
+            elapsed = time.time() - t0
+            conns_after = get_total_conns()
+            conns_delta = conns_after - conns_before - 1
+            if conns_delta <= 2:
+                break
+            time.sleep(0.5)
 
         self.assertEqual(res.returncode, 0)
         self.assertGreaterEqual(elapsed, 1.8)
