@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.15] - 2026-10-10
+
+### Added
+- **POSIX Double-Dash End-of-Options Pattern for Doorbell Wakeup (`rhizo poke <agent> -- <command...>`)**:
+  - Added support for `-- <command...>` to pass custom wakeup commands without nested quotation marks or shell escaping headaches.
+  - Automatically joins and shell-quotes trailing `argv` parameters, eliminating JSON string escaping errors in autonomous agent harnesses.
+  - Retained `--cmd <command>` as a backwards-compatible option.
+  - Added test coverage in `tests/test_coordination_invariants.py`.
+- **Vine Guide v1.3 Synchronization**:
+  - Updated Vine Coordination Guide in `AGENTS.md` to `v1.3` reflecting double-dash custom test runner invocation.
+
+## [0.2.14] - 2026-10-09
+
+### Added
+- **Human Operator Absolute Override & Listener "ARM NOW" Invariant (Rhizo Guide v1.6)**:
+  - Formally codified that operator prompts, commands, and slash commands in the interactive window ALWAYS take absolute precedence over in-flight tasks and cluster queues.
+  - Established the "ARM NOW" imperative: `rhizo listen` is an immediate action, never a deferred post-task checklist item.
+  - Updated `doListen` delivery lifecycle notices on stderr with `OPERATOR OVERRIDE PRIORITY` and `ARM NOW DISCIPLINE`.
+- **WISM In-Flight Lease Liveness & Auto-Heartbeat**:
+  - Added in-flight lease liveness tracking to `scripts/directory.lua` so workers actively holding valid leases are recognized as busy even if their background heartbeat is temporarily lagging.
+  - Automated heartbeat renewal during task claim and progress events in `scripts/task.lua`.
+
 ## [0.2.13] - 2026-10-09
 
 ### Added
