@@ -95,7 +95,7 @@ Furthermore, the Rhizo listener is an ARM NOW primitive, NEVER an "ARM WHEN I'M 
 </CRITICAL>
 <!-- END RHIZO GUIDE -->
 
-<!-- BEGIN VINE GUIDE [v1.2] -->
+<!-- BEGIN VINE GUIDE [v1.3] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `vine guide install` -->
 
 ## Vine Workspace & Strand Coordination Guide
@@ -250,8 +250,10 @@ git merge-tree --write-tree "$BASE_BRANCH" HEAD
 #### Key 2: Live Compiler & Test Suite Gate (Zero Green Mirage)
 Execute the project's actual build and test suite inside the Strand:
 ```bash
-# Inferred or from vine.toml [verification] test_command:
-$BUILD_AND_TEST_COMMAND
+# Inferred from project or configured in vine.toml:
+vine gate
+# Or with explicit custom test runner using POSIX double-dash:
+vine gate -- <custom-test-command>
 ```
 *Never bypass this gate. `git merge-tree` only verifies text mergeability, not compilation or semantic correctness.*
 
@@ -319,6 +321,7 @@ Never weave a strand into the canonical trunk without passing both keys:
 * **Key 2 (Semantic)**: Automated compiler and test suite run inside the strand.
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 <!-- END GARDEN GUIDE -->
+
 
 
 
