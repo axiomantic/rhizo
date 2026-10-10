@@ -4,7 +4,7 @@
 
 import std/[
   os, osproc, strutils, json, openssl, sha1, terminal,
-  times, random, options, base64, tables, sets, nativesockets
+  times, random, options, base64, tables, sets, nativesockets, sequtils
 ]
 when defined(posix):
   import posix
@@ -4894,7 +4894,7 @@ proc main() =
     echo "  rhizo sub <channel> [timeout_sec]"
     echo "  rhizo who [-a|--all] [--json] [filter_tag]"
     echo "  rhizo probe <agent> [--json]"
-    echo "  rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json]"
+    echo "  rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json] [-- <command...>]"
     echo "  rhizo title [name]"
     echo "  rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
     echo "  rhizo sweep [--dry-run] [--raw]"
@@ -7670,7 +7670,11 @@ proc main() =
     var i = 1
     while i < args.len:
       let a = args[i]
-      if a in ["--force", "-f"]:
+      if a == "--":
+        if i + 1 < args.len:
+          optCmd = args[i+1..^1].map(quoteShell).join(" ")
+        break
+      elif a in ["--force", "-f"]:
         force = true
       elif a in ["--dry-run", "-n"]:
         dryRun = true
@@ -7685,7 +7689,7 @@ proc main() =
         targetAgent = a
       inc i
     if targetAgent.len == 0:
-      stderr.writeLine("Usage: rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json]")
+      stderr.writeLine("Usage: rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json] [-- <command...>]")
       quit(1)
     echo doPoke(cfg, targetAgent, optCmd, force, dryRun, jsonOut)
 

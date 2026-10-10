@@ -267,7 +267,7 @@ Inspect your available runtime tools and execute the highest matching tier:
 | **Turn-End Hook** | `rhizo hook codex-stop [--agent <name>]` | Evaluates turn-end Stop event: blocks if unread messages wait or listener is dead. |
 | **Install Hook** | `rhizo hook install [--codex\|--claude] [--agent <name>]` | Scaffolds `.codex/hooks.json` or updates `settings.json` with turn-end interlock. |
 | **Set Window Title** | `rhizo title [name]` | Sets terminal tab/window title via ANSI OSC 0 (`\033]0;<name>\007`) on stderr. |
-| **Doorbell Wakeup**  | `rhizo poke <agent> [--cmd <cmd>] [--force] [--dry-run] [--json]` | Injects wakeup keystroke into worker's window (Ghostty, tmux, Terminal, iTerm2, GUI). |
+| **Doorbell Wakeup**  | `rhizo poke <agent> [--cmd <cmd>] [--force] [--dry-run] [--json] [-- <cmd...>]` | Injects wakeup keystroke into worker's window (Ghostty, tmux, Terminal, iTerm2, GUI). Supports `-- <cmd...>`. |
 
 ---
 
@@ -593,6 +593,8 @@ Exit Codes & Verdicts:
    When an agent has stalled, gone deaf, or when external tools (ChatGPT, macOS Accessibility, AppleScript) need to reach an agent window directly by name:
    ```bash
    rhizo poke claude-worker-1
+   # Or inject a custom command via -- (or --cmd):
+   rhizo poke claude-worker-1 -- rhizo listen claude-worker-1
    ```
    - **Cascading Target Resolution**:
      1. `tmux`: checks `tmux list-panes` matching pane title or window name and dispatches `tmux send-keys -t <pane> <cmd> C-m`.

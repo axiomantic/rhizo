@@ -1084,6 +1084,12 @@ class TestCoordinationInvariants(unittest.TestCase):
         data_poke_cmd = json.loads(res_poke_cmd.stdout.strip())
         self.assertEqual(data_poke_cmd["command"], "echo wakeup")
 
+        # 4b. rhizo poke custom command via '--' delimiter
+        res_poke_dash = self.run_cmd(["poke", "ghost-agent", "--dry-run", "--json", "--", "echo", "wakeup via double dash"])
+        self.assertEqual(res_poke_dash.returncode, 0)
+        data_poke_dash = json.loads(res_poke_dash.stdout.strip())
+        self.assertEqual(data_poke_dash["command"], "echo 'wakeup via double dash'")
+
         # 5. rhizo poke safety check: when an agent is actively listening with 0 unread messages, poke is SKIPPED
         target_agent = "healthy-worker"
         self.run_cmd(["open", target_agent, "worker"])
