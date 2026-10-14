@@ -7,13 +7,13 @@
 import std/[os, strutils]
 
 const
-  GuideVersion* = "v1.6"
+  GuideVersion* = "v1.7"
   BeginMarker* = "<!-- BEGIN RHIZO GUIDE [" & GuideVersion & "] -->"
   EndMarker* = "<!-- END RHIZO GUIDE -->"
   MarkerPrefix* = "<!-- BEGIN RHIZO GUIDE"
 
 const CanonicalGuideContent* = """
-<!-- BEGIN RHIZO GUIDE [v1.6] -->
+<!-- BEGIN RHIZO GUIDE [v1.7] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -103,6 +103,13 @@ Furthermore, the Rhizo listener is an ARM NOW primitive, NEVER an "ARM WHEN I'M 
 1. Operator Listen Mandate: When the human operator issues any listen instruction ('/rhizo listen', 'arm listener', 'listen now', 'make sure you listen', 'bro arm it now'), it is an IMMEDIATE TOOL CALL MANDATE in the current turn. You are STRICTLY FORBIDDEN from deferring it ("I will arm it after tests" or "I will do that later"). You MUST invoke 'rhizo listen <agent>' immediately.
 2. First-Turn Quiescence: Upon receiving a bootstrap prompt card, your very first action in Turn 1 MUST be to execute 'rhizo open <name>' and 'rhizo listen <name>'. You MUST NOT output conversational greetings or ask "How can I help?" before arming.
 3. Default Quiescent State: A cluster worker's natural state is LISTENING. If you are waiting on background verification or have concluded active tasks, your listener must be armed immediately.
+</CRITICAL>
+
+### 11. Closed-Circuit Two-Point Diff & Holistic Integration
+<CRITICAL>
+Two-Point Diff Mandate: Every task deliverable must exhibit a Two-Point Diff: the Provider (new capability) and the Consumer (live production call-site, router, UI canvas, or CLI entrypoint). Code tested only by its own unit tests is strictly prohibited as incomplete shelfware.
+Holistic Integration: The producer and consumer must actually holistically integrate with the system. It must NOT be a toy, stub, mock, or heuristic approximation of the feature.
+Aggressive Replacement Purge: Any existing code, configurations, or fallbacks that the feature is intended to replace or upgrade MUST BE DELETED in the same strand. Never keep obsolete logic as a fallback or dead shim.
 </CRITICAL>
 <!-- END RHIZO GUIDE -->"""
 

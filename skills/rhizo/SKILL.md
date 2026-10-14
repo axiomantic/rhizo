@@ -136,6 +136,13 @@ Upon message delivery, the worker MUST IMMEDIATELY:
 </CRITICAL>
 
 <CRITICAL>
+Closed-Circuit Two-Point Diff & Holistic Integration Invariant:
+1. Two-Point Diff Mandate: Every deliverable must contain both a Provider and an active Consumer call-site (live router, CLI entrypoint, UI, or orchestration loop). Hermetic shelfware that is tested only by its own unit tests is strictly prohibited.
+2. Holistic Integration (Anti-Stub / Anti-Toy): The producer and consumer must actually holistically integrate with the system. It must NOT be a toy, stub, mock, or heuristic approximation of the feature. It must handle real application state, live events, and production errors.
+3. Aggressive Replacement Purge (Zero Dead Code): Any existing code, configurations, or fallbacks that your feature is intended to replace or upgrade MUST BE DELETED in the same strand. Do not preserve obsolete logic as a fallback, and do not leave commented-out shims in the codebase.
+</CRITICAL>
+
+<CRITICAL>
 Compaction Preservation Rider & Post-Compact Invariant (GVR-010):
 Context compaction purges detailed operational invariants, ceremony rules, and protocol mechanics from working memory.
 

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.17] - 2026-10-14
+
+### Added
+- **Closed-Circuit Two-Point Diff Mandate (Rhizo Guide v1.7)**:
+  - Formally codified Section 11 in `guide.nim` (`v1.7`) and Section 2 in `SKILL.md`: every task deliverable must exhibit a Two-Point Diff: the Provider (new capability) and an active Consumer call-site in live entrypoints, routers, CLI dispatchers, or UI. Hermetic modules tested solely by their own unit tests are strictly prohibited as incomplete shelfware.
+- **Holistic Production Integration (Anti-Stub / Anti-Toy)**:
+  - Deliverables must actually holistically integrate with real application state and production error paths rather than mock heuristics or dummy stubs.
+- **Aggressive Replacement Purge (Zero Dead Code)**:
+  - Obsolete code, deprecated functions, and vestigial fallbacks targeted for replacement MUST be deleted in the same strand diff.
+
+## [0.2.16] - 2026-10-13
+
+### Added
+- **Cross-Project Isolation & Dual-Onboarding Docs**:
+  - Added prefix-isolated namespace routing, drift guards, and comprehensive dual-onboarding documentation suite.
+
 ## [0.2.15] - 2026-10-10
 
 ### Added
