@@ -18,8 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.16] - 2026-10-13
 
 ### Added
-- **Cross-Project Isolation & Dual-Onboarding Docs**:
-  - Added prefix-isolated namespace routing, drift guards, and comprehensive dual-onboarding documentation suite.
+- **Cross-Project Identity & Registration Protection (`scripts/register.lua`, `scripts/drain.lua`, `scripts/directory.lua`, `scripts/status.lua`)**:
+  - Enforced strict project namespace isolation during agent registration (`rhizo open`) and inbox draining (`rhizo drain` / `rhizo listen`).
+  - Rejects cross-project identity hijacking (`ERR_CROSS_PROJECT_HIJACK`) when an agent attempts to claim or drain an active codename belonging to a different project namespace, unless `--force` is passed or the registration has expired.
+- **Directory vs. Environment Drift Guard (`src/config.nim`, `src/rhizo.nim`)**:
+  - Implemented `checkProjectDrift` to detect mismatches between `RHIZO_PROJECT` / `RHIZO_PREFIX` environment variables and the current git repository root (`PWD`).
+  - Prevents accidental cross-project message pollution when subshells or terminal tabs change directories without updating environment variables; added `--allow-drift` escape hatch.
+- **Automated Multi-Harness Session ID Detection (`src/config.nim`)**:
+  - Added `detectSessionId` to automatically identify and bind the calling coding harness session (`agy:<id>` via `ANTIGRAVITY_CONVERSATION_ID`/`ANTIGRAVITY_APP_DIR`, `claude:<id>` via `CLAUDE_SESSION_ID`/`CLAUDE_CODE`, `opencode:<id>` via `OPENCODE_SESSION_ID`, `codex:<id>` via `CODEX_SESSION_ID`, `pi:<id>` via `PI_SESSION_ID`, and terminal fallback `term:<tty>`).
+- **Enhanced Cluster Sweep & Stale Lock Garbage Collection (`scripts/sweep.lua`, `src/rhizo.nim`)**:
+  - Upgraded `rhizo sweep` to cross-verify process liveness, clean orphaned listener registrations, and prune expired project locks.
+- **Comprehensive Dual-Onboarding Documentation Suite (`AGENTS.md`, `README.md`, `docs/`)**:
+  - Authored `docs/architecture.md` (system topology, Redis keyspace, Lua atomicity), `docs/cli_reference.md` (complete command & flag taxonomy), `docs/wire_protocol.md` (JSON envelope schema & HMAC-SHA256 Air-Gap Prompt Firewall specification), `docs/wism_state_machine.md` (10-state WISM transitions & leases), and `docs/system_one_routing.md` (cascading ModernBERT/Laya routing rules).
+  - Updated `AGENTS.md` and `README.md` with structured onboarding maps for both human developers and LLM agents.
+- **Dependencies & Testing (`rhizo.nimble`, `tests/test_coordination_invariants.py`)**:
+  - Updated `typestates` dependency requirement to `>= 0.13.0`.
+  - Added 325 lines of cross-project isolation, session binding, and drift guard negative control tests.
 
 ## [0.2.15] - 2026-10-10
 
