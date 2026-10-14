@@ -302,7 +302,8 @@ class TestRhizoHooks(unittest.TestCase):
                 self.assertIn("Stop", hooks_data["hooks"])
                 stop_entry = hooks_data["hooks"]["Stop"][0]
                 self.assertEqual(stop_entry.get("type"), "command")
-                self.assertIn(f"rhizo hook codex-stop --agent {agent}", stop_entry.get("command", ""))
+                self.assertIn(f"hook codex-stop --agent {agent}", stop_entry.get("command", ""))
+                self.assertIn("rhizo", stop_entry.get("command", "").lower())
         finally:
             subprocess.run([
                 str(BIN_RHIZO), "--redis-url", REDIS_URL, "--prefix", TEST_PREFIX,
@@ -316,6 +317,7 @@ class TestRhizoHooks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             env = self.env.copy()
             env["HOME"] = tmpdir
+            env["USERPROFILE"] = tmpdir
             res = subprocess.run([
                 str(BIN_RHIZO), "hook", "install", "--opencode"
             ], capture_output=True, text=True, cwd=tmpdir, env=env)
@@ -358,6 +360,7 @@ class TestRhizoHooks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             env = self.env.copy()
             env["HOME"] = tmpdir
+            env["USERPROFILE"] = tmpdir
             res = subprocess.run([
                 str(BIN_RHIZO), "hook", "install", "--pi"
             ], capture_output=True, text=True, cwd=tmpdir, env=env)

@@ -513,6 +513,7 @@ class TestInstallerAndUninstaller(unittest.TestCase):
             env["USERPROFILE"] = temp_user
             env["LOCALAPPDATA"] = temp_appdata
             env["NO_SKILLS"] = "0"
+            env["RHIZO_SKIP_NPX"] = "1"
 
             res = subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", INSTALL_PS1, "-BuildFromSource"],

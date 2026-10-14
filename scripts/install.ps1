@@ -138,11 +138,13 @@ function Build-FromSource {
         if (-not (Test-Path $InstallDir)) {
             New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         }
-        if (Get-Command nimble -ErrorAction SilentlyContinue) {
+        if (Test-Path "bin\rhizo.exe") {
+            Copy-Item -Path "bin\rhizo.exe" -Destination "$InstallDir\rhizo.exe" -Force
+        } elseif (Get-Command nimble -ErrorAction SilentlyContinue) {
             nimble build -y -d:release
             Copy-Item -Path "bin\rhizo.exe" -Destination "$InstallDir\rhizo.exe" -Force
         } else {
-            nim c -d:release --opt:speed -o:"$InstallDir\rhizo.exe" src\rhizo.nim
+            nim c -d:release -d:ssl --threads:on --opt:speed -o:"$InstallDir\rhizo.exe" src\rhizo.nim
         }
         return
     }
@@ -193,7 +195,7 @@ function Install-Skills {
     $skillInstalled = $false
 
     # Option A: skills.sh via npx
-    if (Get-Command npx -ErrorAction SilentlyContinue) {
+    if ((-not $env:RHIZO_SKIP_NPX) -and (Get-Command npx -ErrorAction SilentlyContinue)) {
         Write-Host "Attempting global skill installation via skills.sh (npx)..." -ForegroundColor Yellow
         try {
             & npx -y skills add axiomantic/rhizo -g -a '*' -y

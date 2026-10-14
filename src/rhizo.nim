@@ -4963,7 +4963,10 @@ proc doRouteSetup*(daemonMode: bool, customServiceUrl: string = "", timeoutSec: 
   else:
     echo "Launching local-systemone daemon in background..."
     when defined(windows):
-      discard execCmd("start /B \"\" " & quoteShell(exePath))
+      try:
+        discard execCmd("cmd /c start /B \"\" " & quoteShell(exePath))
+      except CatchableError:
+        discard
     else:
       discard execCmd("nohup " & quoteShell(exePath) & " > /dev/null 2>&1 &")
 

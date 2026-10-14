@@ -5707,7 +5707,7 @@ secret = "my_inline_secret_test_555"
 
     def test_72_inflight_lease_liveness_and_task_heartbeat(self):
         """Verify WISM in-flight lease prevents STALE status in rhizo who and claim/progress auto-refreshes heartbeat."""
-        r = redis.from_url(REDIS_URL)
+        r = redis.from_url(REDIS_URL, protocol=2)
 
         # Part 1: Auto-Heartbeat Refresh on claim and progress
         worker = f"worker_liveness_{os.getpid()}"
