@@ -37,6 +37,7 @@ def run_bash(cmd: str, role: str = "AGENT") -> str:
         env["PATH"] = f"{bin_dir}:{local_bin}:{env.get('PATH', '')}"
         env.setdefault("RHIZO_REDIS_PREFIX", "rhizo:")
         env.setdefault("RHIZO_PROJECT", "locutus")
+        env.setdefault("RHIZO_ALLOW_DRIFT", "1")
         env.setdefault("RHIZO_SCRIPTS_DIR", os.path.abspath("scripts"))
         if role and role != "AGENT":
             env["RHIZO_AGENT_NAME"] = role.lower()

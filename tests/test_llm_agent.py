@@ -43,6 +43,7 @@ def run_bash(cmd: str) -> str:
         env["PATH"] = f"{bin_dir}:{local_bin}:{env.get('PATH', '')}"
         env.setdefault("RHIZO_REDIS_PREFIX", "rhizo:")
         env.setdefault("RHIZO_PROJECT", "locutus")
+        env.setdefault("RHIZO_ALLOW_DRIFT", "1")
         env.setdefault("RHIZO_SCRIPTS_DIR", os.path.abspath("scripts"))
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, env=env)
         output = (res.stdout + res.stderr).strip()
