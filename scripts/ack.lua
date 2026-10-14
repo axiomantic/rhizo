@@ -1,6 +1,6 @@
 -- scripts/ack.lua
 -- Acknowledges task completion, removing it from active leases and attempts tracking.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: queue name
 -- ARGV[3]: task_id
 

@@ -4,7 +4,7 @@ __pycache__/
 .pytest_cache/
 bin/*
 !bin/run.js
-.locutus.agent
+.rhizo.agent
 *.egg-info/
 uv.lock
 

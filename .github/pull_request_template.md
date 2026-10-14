@@ -6,7 +6,7 @@
 
 ## Verification & Testing
 - [ ] All 32 unit tests pass (`python -m unittest discover tests`)
-- [ ] Native binary compiles cleanly (`nim c -d:release -o:bin/locutus src/locutus.nim`)
+- [ ] Native binary compiles cleanly (`nim c -d:release -o:bin/rhizo src/rhizo.nim`)
 - [ ] No background daemon processes or heavy dependencies introduced
 - [ ] HMAC signature and wire protocol invariants preserved
 

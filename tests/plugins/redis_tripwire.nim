@@ -1,5 +1,5 @@
-# locutus/tests/plugins/redis_tripwire.nim
-# Project-level Tripwire plugin for Locutus Redis & Lua script execution.
+# rhizo/tests/plugins/redis_tripwire.nim
+# Project-level Tripwire plugin for Rhizo Redis & Lua script execution.
 
 import tripwire
 import tripwire/[types, registry, timeline, sandbox, intercept, errors]

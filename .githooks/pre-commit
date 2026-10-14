@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Git pre-commit hook: Compile Cursor and Copilot rule files from AGENTS.md
-echo "Running Locutus rule compiler (scripts/compile_rules.py)..."
+echo "Running Rhizo rule compiler (scripts/compile_rules.py)..."
 python3 scripts/compile_rules.py
 
 # Stage any freshly updated rule files if git is staging

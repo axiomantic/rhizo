@@ -55,10 +55,10 @@ def extract_control_info(deb_path):
     # Fallback to minimal control based on filename
     basename = os.path.basename(deb_path)
     parts = basename.replace(".deb", "").split("_")
-    pkg = parts[0] if len(parts) > 0 else "locutus"
+    pkg = parts[0] if len(parts) > 0 else "rhizo"
     ver = parts[1] if len(parts) > 1 else "0.1.2"
     arch = parts[2] if len(parts) > 2 else "amd64"
-    return f"Package: {pkg}\nVersion: {ver}\nArchitecture: {arch}\nMaintainer: Axiomantic <info@axiomantic.org>\nDescription: Locutus Inter-Assistant Redis Bus"
+    return f"Package: {pkg}\nVersion: {ver}\nArchitecture: {arch}\nMaintainer: Axiomantic <info@axiomantic.org>\nDescription: Rhizo Inter-Assistant Redis Bus"
 
 
 def main():
@@ -103,12 +103,12 @@ def main():
     # Generate Release file
     release_lines = [
         "Origin: Axiomantic",
-        "Label: Locutus",
+        "Label: Rhizo",
         "Suite: stable",
         "Codename: stable",
         "Architectures: amd64 arm64",
         "Components: main",
-        "Description: Axiomantic Locutus Debian/Ubuntu APT Repository",
+        "Description: Axiomantic Rhizo Debian/Ubuntu APT Repository",
         "MD5Sum:",
     ]
 
@@ -134,7 +134,7 @@ def main():
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Axiomantic Locutus APT Repository</title>
+  <title>Axiomantic Rhizo APT Repository</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #24292e; }
     pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; border: 1px solid #e1e4e8; }
@@ -143,24 +143,24 @@ def main():
   </style>
 </head>
 <body>
-  <h1>Axiomantic Locutus APT Repository</h1>
-  <p>Official Debian/Ubuntu package repository for <strong>Locutus</strong> (amd64 & arm64).</p>
+  <h1>Axiomantic Rhizo APT Repository</h1>
+  <p>Official Debian/Ubuntu package repository for <strong>Rhizo</strong> (amd64 & arm64).</p>
 
   <h2>Installation via APT</h2>
   <pre><code># 1. Add repository to sources
-echo "deb [trusted=yes] https://axiomantic.github.io/locu/apt/ ./" | sudo tee /etc/apt/sources.list.d/locutus.list
+echo "deb [trusted=yes] https://axiomantic.github.io/rhizo/apt/ ./" | sudo tee /etc/apt/sources.list.d/rhizo.list
 
 # 2. Update and install
 sudo apt-get update
-sudo apt-get install -y locutus</code></pre>
+sudo apt-get install -y rhizo</code></pre>
 
   <h2>Homebrew Installation (macOS & Linux)</h2>
-  <pre><code>brew install axiomantic/tap/locutus</code></pre>
+  <pre><code>brew install axiomantic/tap/rhizo</code></pre>
 
   <h2>Universal One-Line Installer</h2>
   <pre><code>curl -fsSL https://raw.githubusercontent.com/axiomantic/locu/main/scripts/install.sh | bash</code></pre>
 
-  <p>For documentation, source code, and release downloads, visit the <a href="https://github.com/axiomantic/locu">Locu GitHub Repository</a>.</p>
+  <p>For documentation, source code, and release downloads, visit the <a href="https://github.com/axiomantic/rhizo">Rhizo GitHub Repository</a>.</p>
 </body>
 </html>
 """

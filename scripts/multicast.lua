@@ -2,8 +2,8 @@
 -- Fans out a message to agents matching ALL specified tags (AND filter via SINTER).
 -- If target is "*" or "@all", broadcasts to all active agents across all projects.
 -- Automatically checks heartbeats and prunes expired dead agents.
--- ARGV[1]: prefix (e.g. "locutus:")
--- ARGV[2]: comma-separated target tags (e.g. "locutus,backend" or "*")
+-- ARGV[1]: prefix (e.g. "rhizo:")
+-- ARGV[2]: comma-separated target tags (e.g. "rhizo,backend" or "*")
 -- Dual Mode:
 -- Mode A (Raw JSON string):
 --   ARGV[3]: message JSON string

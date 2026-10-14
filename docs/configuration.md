@@ -95,7 +95,7 @@ Rhizo supports configuration files at both the project root (`.rhizo.toml` or `r
 # .rhizo.toml - Project Configuration
 redis_url = "redis://127.0.0.1:6379"
 prefix = "myproject:"
-project = "locutus"
+project = "rhizo"
 encrypt = false
 heartbeat_ttl = 150
 listen_timeout = 0

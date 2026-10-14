@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Multi-Agent Autonomous Ping-Pong Integration Test.
-Simulates two cooperating assistants communicating over Redis via Locutus:
+Simulates two cooperating assistants communicating over Redis via Rhizo:
 1. Agent 'alice' (Requester) registers in project 'rhizo' and sends a task to 'bob' requesting '15 * 15'.
 2. Agent 'bob' (Worker, running via local Ollama LLM) registers with tag 'calc', retrieves the task
    from his inbox, solves the math problem, and sends a threaded reply to 'alice' with reply_to = task_id.
 3. 'alice' receives the reply from her inbox.
-4. Strict validation via Pydantic LocutusMessage (id, reply_to, timestamp, subject, body == 225).
+4. Strict validation via Pydantic RhizoMessage (id, reply_to, timestamp, subject, body == 225).
 """
 
 import json
@@ -17,10 +17,10 @@ import time
 import unittest
 import pytest
 import tripwire
-from tests.tripwire_locutus import LocutusPlugin, LocutusSchemaError
+from tests.tripwire_rhizo import RhizoPlugin, RhizoSchemaError
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from tests.schema import LocutusMessage
+from tests.schema import RhizoMessage
 from tests.llm_client import call_llm, is_llm_available, MODEL_NAME
 
 SKILL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "skills", "rhizo", "SKILL.md"))
@@ -36,7 +36,7 @@ def run_bash(cmd: str, role: str = "AGENT") -> str:
         local_bin = os.path.expanduser("~/.local/bin")
         env["PATH"] = f"{bin_dir}:{local_bin}:{env.get('PATH', '')}"
         env.setdefault("RHIZO_REDIS_PREFIX", "rhizo:")
-        env.setdefault("RHIZO_PROJECT", "locutus")
+        env.setdefault("RHIZO_PROJECT", "rhizo")
         env.setdefault("RHIZO_ALLOW_DRIFT", "1")
         env.setdefault("RHIZO_SCRIPTS_DIR", os.path.abspath("scripts"))
         if role and role != "AGENT":
@@ -57,7 +57,7 @@ def redis_cmd(*args):
 
 @pytest.mark.llm
 @pytest.mark.e2e
-class TestLocutusMultiAgentPingPong(unittest.TestCase):
+class TestRhizoMultiAgentPingPong(unittest.TestCase):
     def test_multi_agent_pingpong_e2e(self):
         # 1. Negative control on unknown tool rejection
         unknown_name = "malicious_eval"
@@ -65,11 +65,11 @@ class TestLocutusMultiAgentPingPong(unittest.TestCase):
         self.assertIn("Error: unknown tool", unknown_resp)
 
         # 2. Negative controls on wire envelope validator
-        with self.assertRaises(LocutusSchemaError):
-            LocutusPlugin.validate_wire_envelope({"id": "msg_err", "from": "alice"})
+        with self.assertRaises(RhizoSchemaError):
+            RhizoPlugin.validate_wire_envelope({"id": "msg_err", "from": "alice"})
 
-        with self.assertRaises(LocutusSchemaError):
-            LocutusPlugin.validate_wire_envelope("invalid_raw_json")
+        with self.assertRaises(RhizoSchemaError):
+            RhizoPlugin.validate_wire_envelope("invalid_raw_json")
 
         # 3. Reset Redis state for alice and bob
         redis_cmd(
@@ -114,7 +114,7 @@ class TestLocutusMultiAgentPingPong(unittest.TestCase):
         self.assertTrue(bool(raw_task), "Failed to read queued task from Bob inbox")
 
         # Validate task wire envelope and schema
-        task_env = LocutusPlugin.validate_wire_envelope(raw_task)
+        task_env = RhizoPlugin.validate_wire_envelope(raw_task)
         self.assertEqual(task_env["id"], task_id)
         self.assertEqual(task_env["from"], "alice")
         self.assertEqual(task_env["to"], "bob")
@@ -231,14 +231,14 @@ PROTOCOL SPECIFICATION:
         self.assertTrue(bool(raw_reply), "Failed to retrieve raw reply from Alice inbox")
 
         # Wire envelope validation
-        reply_env = LocutusPlugin.validate_wire_envelope(raw_reply)
+        reply_env = RhizoPlugin.validate_wire_envelope(raw_reply)
         self.assertEqual(reply_env["from"], "bob")
         self.assertEqual(reply_env["to"], "alice")
         self.assertEqual(reply_env["type"], "reply")
         self.assertIn("225", reply_env["body"])
 
         # Pydantic schema validation
-        reply = LocutusMessage.model_validate_json(raw_reply)
+        reply = RhizoMessage.model_validate_json(raw_reply)
         self.assertEqual(reply.from_agent, "bob")
         self.assertEqual(reply.to_agent, "alice")
         self.assertEqual(reply.type, "reply")
@@ -250,8 +250,8 @@ PROTOCOL SPECIFICATION:
         if "sig" in reply_env and reply_env["sig"]:
             tampered = dict(reply_env)
             tampered["body"] = "999_tampered_payload"
-            with self.assertRaises(LocutusSchemaError):
-                LocutusPlugin.validate_wire_envelope(tampered, secret=os.environ.get("RHIZO_SECRET", "test_secret"))
+            with self.assertRaises(RhizoSchemaError):
+                RhizoPlugin.validate_wire_envelope(tampered, secret=os.environ.get("RHIZO_SECRET", "test_secret"))
 
         # Verify Bob's registration and heartbeat in Redis
         bob_hb = redis_cmd("GET", "rhizo:heartbeat:bob")

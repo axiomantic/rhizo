@@ -1,4 +1,4 @@
-# Locutus Test & Development Dependencies
+# Rhizo Test & Development Dependencies
 # Canonical dependencies are declared in pyproject.toml.
 # Install with: pip install -r requirements.txt (or: pip install -e .)
 

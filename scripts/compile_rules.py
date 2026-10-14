@@ -2,7 +2,7 @@
 """
 scripts/compile_rules.py
 Compiles Cursor rules (.mdc) and GitHub Copilot instructions (.md)
-directly from the canonical Locutus Guide in AGENTS.md.
+directly from the canonical Rhizo Guide in AGENTS.md.
 
 Usage:
     python3 scripts/compile_rules.py          # Compile and update rule files

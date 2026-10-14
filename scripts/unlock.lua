@@ -1,6 +1,6 @@
 -- scripts/unlock.lua
 -- Atomically releases a distributed lock only if held by the requesting owner.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: lock name (e.g. "git_rebase")
 -- ARGV[3]: owner agent name (e.g. "alice")
 

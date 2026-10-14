@@ -20,12 +20,12 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from tests.schema import LocutusMessage, A2AMessage
-from tests.tripwire_locutus import LocutusPlugin
+from tests.schema import RhizoMessage, A2AMessage
+from tests.tripwire_rhizo import RhizoPlugin
 
-LOCUTUS_REDIS_URL = os.environ.get("LOCUTUS_REDIS_URL", os.environ.get("A2A_REDIS_URL", os.environ.get("REDIS_URL", "redis://127.0.0.1:6379")))
-LOCUTUS_REDIS_PREFIX = os.environ.get("LOCUTUS_REDIS_PREFIX", os.environ.get("A2A_REDIS_PREFIX", "locutus_test:"))
-PREFIX = LOCUTUS_REDIS_PREFIX
+RHIZO_REDIS_URL = os.environ.get("RHIZO_REDIS_URL", os.environ.get("A2A_REDIS_URL", os.environ.get("REDIS_URL", "redis://127.0.0.1:6379")))
+RHIZO_REDIS_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", os.environ.get("A2A_REDIS_PREFIX", "rhizo_test:"))
+PREFIX = RHIZO_REDIS_PREFIX
 
 # Load Lua Scripts directly from scripts/ directory (Single Source of Truth)
 SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
@@ -73,7 +73,7 @@ _protocol_redis_client = None
 def get_protocol_redis():
     global _protocol_redis_client
     if _protocol_redis_client is None:
-        _protocol_redis_client = redis.Redis.from_url(LOCUTUS_REDIS_URL, decode_responses=True, protocol=2)
+        _protocol_redis_client = redis.Redis.from_url(RHIZO_REDIS_URL, decode_responses=True, protocol=2)
     return _protocol_redis_client
 
 def run_redis(*args):
@@ -93,7 +93,7 @@ def run_redis(*args):
         if isinstance(res, (list, tuple, set)):
             return "\n".join(str(item) for item in res)
         return str(res).strip()
-    cmd = ["redis-cli", "-u", LOCUTUS_REDIS_URL] + list(args)
+    cmd = ["redis-cli", "-u", RHIZO_REDIS_URL] + list(args)
     res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", check=True, stdin=subprocess.DEVNULL, timeout=15)
     return res.stdout.strip()
 
@@ -114,7 +114,7 @@ def run_eval(script, numkeys, *args):
         if isinstance(res, (list, tuple)):
             return "\n".join(str(item) for item in res)
         return str(res).strip()
-    cmd = ["redis-cli", "-u", LOCUTUS_REDIS_URL, "EVAL", script, str(numkeys)] + list(args)
+    cmd = ["redis-cli", "-u", RHIZO_REDIS_URL, "EVAL", script, str(numkeys)] + list(args)
     res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", check=True, stdin=subprocess.DEVNULL, timeout=15)
     return res.stdout.strip()
 
@@ -261,14 +261,14 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(alice_raw, bob_raw, "Alice and Bob must receive identical raw payloads")
 
         # Wire envelope schema validation
-        alice_wire = LocutusPlugin.validate_wire_envelope(alice_raw)
-        bob_wire = LocutusPlugin.validate_wire_envelope(bob_raw)
+        alice_wire = RhizoPlugin.validate_wire_envelope(alice_raw)
+        bob_wire = RhizoPlugin.validate_wire_envelope(bob_raw)
         self.assertEqual(alice_wire["id"], "msg_mcast_qa_100")
         self.assertEqual(bob_wire["id"], "msg_mcast_qa_100")
 
-        # Pydantic schema validation (LocutusMessage and A2AMessage)
-        alice_loc = LocutusMessage.model_validate_json(alice_raw)
-        bob_loc = LocutusMessage.model_validate_json(bob_raw)
+        # Pydantic schema validation (RhizoMessage and A2AMessage)
+        alice_loc = RhizoMessage.model_validate_json(alice_raw)
+        bob_loc = RhizoMessage.model_validate_json(bob_raw)
         self.assertEqual(alice_loc.id, "msg_mcast_qa_100")
         self.assertEqual(bob_loc.id, "msg_mcast_qa_100")
         self.assertEqual(alice_loc.from_agent, "lead")
@@ -323,11 +323,11 @@ class TestRedisA2AProtocol(unittest.TestCase):
             self.assertEqual(raw, broadcast_msg, f"Inbox payload for {agent} must match broadcast JSON byte-for-byte")
 
             # Schema and wire envelope validations
-            wire = LocutusPlugin.validate_wire_envelope(raw)
+            wire = RhizoPlugin.validate_wire_envelope(raw)
             self.assertEqual(wire["id"], "bcast_001")
             self.assertEqual(wire["to"], "*")
 
-            parsed_loc = LocutusMessage.model_validate_json(raw)
+            parsed_loc = RhizoMessage.model_validate_json(raw)
             self.assertEqual(parsed_loc.id, "bcast_001")
             self.assertEqual(parsed_loc.subject, "System Announcement")
 
@@ -417,13 +417,13 @@ class TestRedisA2AProtocol(unittest.TestCase):
 
         # Validate wire envelope, Pydantic schema, and exact FIFO ordering for batch 1
         for idx, line in enumerate(lines_1):
-            wire = LocutusPlugin.validate_wire_envelope(line)
+            wire = RhizoPlugin.validate_wire_envelope(line)
             expected = expected_msgs[idx]
             self.assertEqual(wire["id"], expected["id"])
             self.assertEqual(wire["subject"], expected["subject"])
             self.assertEqual(wire["body"], expected["body"])
 
-            loc_msg = LocutusMessage.model_validate_json(line)
+            loc_msg = RhizoMessage.model_validate_json(line)
             self.assertEqual(loc_msg.id, expected["id"])
             a2a_msg = A2AMessage.model_validate_json(line)
             self.assertEqual(a2a_msg.id, expected["id"])
@@ -437,7 +437,7 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(len(lines_2), 10, f"Expected remaining 10 messages, got {len(lines_2)}")
 
         for idx, line in enumerate(lines_2):
-            wire = LocutusPlugin.validate_wire_envelope(line)
+            wire = RhizoPlugin.validate_wire_envelope(line)
             expected = expected_msgs[10 + idx]
             self.assertEqual(wire["id"], expected["id"])
             self.assertEqual(wire["subject"], expected["subject"])
@@ -492,7 +492,7 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(run_redis("LLEN", f"{PREFIX}inbox:alice"), "0")
         raw_bob1 = run_redis("RPOP", f"{PREFIX}inbox:bob")
         self.assertEqual(raw_bob1, msg1)
-        LocutusPlugin.validate_wire_envelope(raw_bob1)
+        RhizoPlugin.validate_wire_envelope(raw_bob1)
 
         # 4. Alice reconnects and recovers state
         res_reconnect = run_eval(LUA_REGISTER, 0, PREFIX, "alice", "qa,automation", "120")
@@ -531,10 +531,10 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(bob_raw2, msg2)
 
         # Wire and schema validations
-        LocutusPlugin.validate_wire_envelope(alice_raw2)
-        LocutusPlugin.validate_wire_envelope(bob_raw2)
-        alice_msg2 = LocutusMessage.model_validate_json(alice_raw2)
-        bob_msg2 = LocutusMessage.model_validate_json(bob_raw2)
+        RhizoPlugin.validate_wire_envelope(alice_raw2)
+        RhizoPlugin.validate_wire_envelope(bob_raw2)
+        alice_msg2 = RhizoMessage.model_validate_json(alice_raw2)
+        bob_msg2 = RhizoMessage.model_validate_json(bob_raw2)
         self.assertEqual(alice_msg2.id, "qa_round_2")
         self.assertEqual(bob_msg2.id, "qa_round_2")
 
@@ -567,8 +567,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         # Bob receives task 1
         raw_task_1 = run_redis("RPOP", f"{PREFIX}inbox:bob")
         self.assertEqual(raw_task_1, json.dumps(task_1_payload))
-        LocutusPlugin.validate_wire_envelope(raw_task_1)
-        inc_task_1 = LocutusMessage.model_validate_json(raw_task_1)
+        RhizoPlugin.validate_wire_envelope(raw_task_1)
+        inc_task_1 = RhizoMessage.model_validate_json(raw_task_1)
         self.assertEqual(inc_task_1.id, task_1_id)
         self.assertIsNone(inc_task_1.reply_to)
         self.assertEqual(inc_task_1.body, "2^8")
@@ -594,8 +594,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
 
         # Alice receives reply 1 and verifies thread correlation
         raw_rep_1 = run_redis("RPOP", f"{PREFIX}inbox:alice")
-        LocutusPlugin.validate_wire_envelope(raw_rep_1)
-        inc_rep_1 = LocutusMessage.model_validate_json(raw_rep_1)
+        RhizoPlugin.validate_wire_envelope(raw_rep_1)
+        inc_rep_1 = RhizoMessage.model_validate_json(raw_rep_1)
         self.assertEqual(inc_rep_1.id, reply_1_id)
         self.assertEqual(inc_rep_1.reply_to, task_1_id, "Hop 2 reply_to must correlate with Hop 1 task ID")
         self.assertEqual(inc_rep_1.body, "256")
@@ -616,8 +616,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(res_send2, "OK")
 
         raw_task_2 = run_redis("RPOP", f"{PREFIX}inbox:bob")
-        LocutusPlugin.validate_wire_envelope(raw_task_2)
-        inc_task_2 = LocutusMessage.model_validate_json(raw_task_2)
+        RhizoPlugin.validate_wire_envelope(raw_task_2)
+        inc_task_2 = RhizoMessage.model_validate_json(raw_task_2)
         self.assertEqual(inc_task_2.id, task_2_id)
         self.assertEqual(inc_task_2.reply_to, reply_1_id, "Hop 3 task reply_to must correlate with Hop 2 reply ID")
         self.assertEqual(inc_task_2.body, "sqrt(256)")
@@ -638,8 +638,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(res_rep2, "OK")
 
         raw_rep_2 = run_redis("RPOP", f"{PREFIX}inbox:alice")
-        LocutusPlugin.validate_wire_envelope(raw_rep_2)
-        inc_rep_2 = LocutusMessage.model_validate_json(raw_rep_2)
+        RhizoPlugin.validate_wire_envelope(raw_rep_2)
+        inc_rep_2 = RhizoMessage.model_validate_json(raw_rep_2)
         self.assertEqual(inc_rep_2.id, reply_2_id)
         self.assertEqual(inc_rep_2.reply_to, task_2_id, "Hop 4 reply_to must correlate with Hop 3 task ID")
         self.assertEqual(inc_rep_2.body, "16")
@@ -776,8 +776,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         raw_charlie = run_redis("RPOP", f"{PREFIX}inbox:charlie")
         self.assertEqual(raw_alice, task_alpha_msg)
         self.assertEqual(raw_charlie, task_alpha_msg)
-        LocutusPlugin.validate_wire_envelope(raw_alice)
-        LocutusPlugin.validate_wire_envelope(raw_charlie)
+        RhizoPlugin.validate_wire_envelope(raw_alice)
+        RhizoPlugin.validate_wire_envelope(raw_charlie)
 
         # 2. Multicast within project 'beta' to 'backend' (target: "beta,backend")
         # Must reach dave and frank, but NOT alice/charlie (project alpha backend)
@@ -818,7 +818,7 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertIn(delivered3, ["1", "(integer) 1"])
         self.assertEqual(run_redis("LLEN", f"{PREFIX}inbox:charlie"), "0")
         self.assertEqual(run_redis("LLEN", f"{PREFIX}inbox:dave"), "0")
-        alice_py = LocutusMessage.model_validate_json(run_redis("RPOP", f"{PREFIX}inbox:alice"))
+        alice_py = RhizoMessage.model_validate_json(run_redis("RPOP", f"{PREFIX}inbox:alice"))
         self.assertEqual(alice_py.id, "msg_alpha_py_001")
         self.assertEqual(alice_py.body, "Refactor async handler.")
 
@@ -913,8 +913,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(run_redis("LLEN", f"{PREFIX}inbox:alice"), "1")
         raw_preserved = run_redis("RPOP", f"{PREFIX}inbox:alice")
         self.assertEqual(raw_preserved, pending_msg)
-        LocutusPlugin.validate_wire_envelope(raw_preserved)
-        preserved = LocutusMessage.model_validate_json(raw_preserved)
+        RhizoPlugin.validate_wire_envelope(raw_preserved)
+        preserved = RhizoMessage.model_validate_json(raw_preserved)
         self.assertEqual(preserved.id, "pending_001")
         self.assertEqual(preserved.body, "Do not lose me during re-tagging!")
 
@@ -978,27 +978,27 @@ class TestRedisA2AProtocol(unittest.TestCase):
 
     def test_12_structured_field_invocation_and_cjson_encoding(self):
         """Test sending messages via individual field arguments with server-side cjson encoding across complex Unicode and escaped strings."""
-        run_eval(LUA_REGISTER, 0, PREFIX, "alice", "locutus,worker", "120")
-        run_eval(LUA_REGISTER, 0, PREFIX, "bob", "locutus,qa", "120")
+        run_eval(LUA_REGISTER, 0, PREFIX, "alice", "rhizo,worker", "120")
+        run_eval(LUA_REGISTER, 0, PREFIX, "bob", "rhizo,qa", "120")
 
         # 1. Send O2O with field arguments (no JSON quoting in shell!)
         ts = "2026-09-18T23:50:00Z"
         res = run_eval(
             LUA_SEND_O2O, 0,
-            PREFIX, "bob", "task", "alice", "Run Tests", "pytest tests/", "locutus", "", "", ts
+            PREFIX, "bob", "task", "alice", "Run Tests", "pytest tests/", "rhizo", "", "", ts
         )
         self.assertEqual(res, "OK")
 
         # Verify Bob received perfectly formed JSON validated by wire envelope & Pydantic
         raw_msg = run_redis("RPOP", f"{PREFIX}inbox:bob")
-        LocutusPlugin.validate_wire_envelope(raw_msg)
-        msg = LocutusMessage.model_validate_json(raw_msg)
+        RhizoPlugin.validate_wire_envelope(raw_msg)
+        msg = RhizoMessage.model_validate_json(raw_msg)
         self.assertEqual(msg.from_agent, "alice")
         self.assertEqual(msg.to_agent, "bob")
         self.assertEqual(msg.type, "task")
         self.assertEqual(msg.subject, "Run Tests")
         self.assertEqual(msg.body, "pytest tests/")
-        self.assertEqual(msg.tags, ["locutus"])
+        self.assertEqual(msg.tags, ["rhizo"])
         self.assertEqual(msg.timestamp, ts)
         self.assertIsNone(msg.reply_to)
 
@@ -1014,8 +1014,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertEqual(res_complex, "OK")
 
         raw_complex = run_redis("RPOP", f"{PREFIX}inbox:bob")
-        LocutusPlugin.validate_wire_envelope(raw_complex)
-        parsed_complex = LocutusMessage.model_validate_json(raw_complex)
+        RhizoPlugin.validate_wire_envelope(raw_complex)
+        parsed_complex = RhizoMessage.model_validate_json(raw_complex)
         self.assertEqual(parsed_complex.id, custom_id)
         self.assertEqual(parsed_complex.from_agent, "alice")
         self.assertEqual(parsed_complex.to_agent, "bob")
@@ -1030,18 +1030,18 @@ class TestRedisA2AProtocol(unittest.TestCase):
         mcast_body = "All systems operational with \"quoted parameters\" and 'single'."
         res_mcast = run_eval(
             LUA_MULTICAST, 0,
-            PREFIX, "locutus", "status", "lead", mcast_subject, mcast_body, "locutus", "", "", ts
+            PREFIX, "rhizo", "status", "lead", mcast_subject, mcast_body, "rhizo", "", "", ts
         )
         self.assertIn(res_mcast, ["2", "(integer) 2"])
 
         # Both Alice and Bob received it with exact content
         raw_alice_m = run_redis("RPOP", f"{PREFIX}inbox:alice")
         raw_bob_m = run_redis("RPOP", f"{PREFIX}inbox:bob")
-        LocutusPlugin.validate_wire_envelope(raw_alice_m)
-        LocutusPlugin.validate_wire_envelope(raw_bob_m)
+        RhizoPlugin.validate_wire_envelope(raw_alice_m)
+        RhizoPlugin.validate_wire_envelope(raw_bob_m)
 
-        alice_mcast = LocutusMessage.model_validate_json(raw_alice_m)
-        bob_mcast = LocutusMessage.model_validate_json(raw_bob_m)
+        alice_mcast = RhizoMessage.model_validate_json(raw_alice_m)
+        bob_mcast = RhizoMessage.model_validate_json(raw_bob_m)
         self.assertEqual(alice_mcast.subject, mcast_subject)
         self.assertEqual(alice_mcast.body, mcast_body)
         self.assertEqual(bob_mcast.subject, mcast_subject)
@@ -1102,7 +1102,7 @@ class TestRedisA2AProtocol(unittest.TestCase):
         self.assertIn(del_backend, ["1", "(integer) 1"])
         self.assertEqual(run_redis("LLEN", f"{PREFIX}inbox:alice"), "1")
         raw_alice = run_redis("RPOP", f"{PREFIX}inbox:alice")
-        LocutusPlugin.validate_wire_envelope(raw_alice)
+        RhizoPlugin.validate_wire_envelope(raw_alice)
 
         # 4. Directory reflects updated tags
         directory = run_eval(LUA_DIRECTORY, 0, PREFIX)
@@ -1191,8 +1191,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         # Drain carol's inbox and validate wire envelope
         received_carol = run_redis("RPOP", f"{PREFIX}inbox:carol")
         self.assertEqual(received_carol, raw_payload)
-        LocutusPlugin.validate_wire_envelope(received_carol)
-        model_msg = LocutusMessage.model_validate_json(received_carol)
+        RhizoPlugin.validate_wire_envelope(received_carol)
+        model_msg = RhizoMessage.model_validate_json(received_carol)
         self.assertEqual(model_msg.id, "msg_qa_01")
         self.assertEqual(model_msg.from_agent, "dispatch")
         self.assertEqual(model_msg.body, "Execute test matrix")
@@ -1398,8 +1398,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         # 6. Strict FIFO consumer consumption (RPOP pops tail = oldest message first)
         pop1 = run_redis("RPOP", key)
         self.assertEqual(pop1, raw_msg1)
-        LocutusPlugin.validate_wire_envelope(pop1)
-        m1 = LocutusMessage.model_validate_json(pop1)
+        RhizoPlugin.validate_wire_envelope(pop1)
+        m1 = RhizoMessage.model_validate_json(pop1)
         self.assertEqual(m1.id, "job_01")
         self.assertEqual(m1.body, "Render frames 0-100")
         a1 = A2AMessage.model_validate_json(pop1)
@@ -1408,8 +1408,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
 
         pop2 = run_redis("RPOP", key)
         self.assertEqual(pop2, raw_msg2)
-        LocutusPlugin.validate_wire_envelope(pop2)
-        m2 = LocutusMessage.model_validate_json(pop2)
+        RhizoPlugin.validate_wire_envelope(pop2)
+        m2 = RhizoMessage.model_validate_json(pop2)
         self.assertEqual(m2.id, "job_02")
         self.assertEqual(m2.body, "Render frames 101-200")
         a2 = A2AMessage.model_validate_json(pop2)
@@ -1518,8 +1518,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         for agent_name in [a1, a2]:
             inbox_item = run_redis("RPOP", f"{PREFIX}inbox:{agent_name}")
             self.assertEqual(inbox_item, raw_msg)
-            LocutusPlugin.validate_wire_envelope(inbox_item)
-            m = LocutusMessage.model_validate_json(inbox_item)
+            RhizoPlugin.validate_wire_envelope(inbox_item)
+            m = RhizoMessage.model_validate_json(inbox_item)
             self.assertEqual(m.id, "scatter_task_99")
             self.assertEqual(m.from_agent, "planner")
             self.assertEqual(m.body, "Map slice partition")
@@ -1555,7 +1555,7 @@ class TestRedisA2AProtocol(unittest.TestCase):
         # Drain a1
         item_a1 = run_redis("RPOP", f"{PREFIX}inbox:{a1}")
         self.assertEqual(item_a1, raw_msg)
-        LocutusPlugin.validate_wire_envelope(item_a1)
+        RhizoPlugin.validate_wire_envelope(item_a1)
 
     def test_21_reliable_queue_lua_protocol(self):
         """Test claim.lua and ack.lua via Redis EVAL with lease timestamp score verification and schema validation."""
@@ -1596,8 +1596,8 @@ class TestRedisA2AProtocol(unittest.TestCase):
         # 4. Claim task with 10-second lease
         claimed = run_eval(LUA_CLAIM, 0, PREFIX, q, "worker1", "10", "3")
         self.assertEqual(claimed, raw_msg)
-        LocutusPlugin.validate_wire_envelope(claimed)
-        m = LocutusMessage.model_validate_json(claimed)
+        RhizoPlugin.validate_wire_envelope(claimed)
+        m = RhizoMessage.model_validate_json(claimed)
         self.assertEqual(m.id, "task_proto_1")
         self.assertEqual(m.body, "Payload 123")
         a2a = A2AMessage.model_validate_json(claimed)
@@ -1687,7 +1687,7 @@ class TestRedisA2AProtocol(unittest.TestCase):
 
         # 7. Snapshot validation with schema
         snap_json = run_eval(LUA_BLACKBOARD, 0, PREFIX, "snapshot", room, "", "", "300")
-        LocutusPlugin.validate_json_schema("blackboard", snap_json)
+        RhizoPlugin.validate_json_schema("blackboard", snap_json)
         snap = json.loads(snap_json)
         self.assertEqual(snap["room"], room)
         self.assertEqual(snap["kv"]["author"], "bob")

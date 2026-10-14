@@ -1,6 +1,6 @@
 -- scripts/claim_renew.lua
 -- Renews the lease of an in-flight task on a work queue without returning it to the queue.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: queue name (e.g. "jobs")
 -- ARGV[3]: task ID
 -- ARGV[4]: lease duration in seconds (default 120)

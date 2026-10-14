@@ -1,6 +1,6 @@
 -- scripts/enqueue.lua
 -- Pushes a task message onto a shared, load-balanced competing-consumers work queue.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: queue name (e.g. "tasks" -> key prefix .. "queue:" .. queue_name)
 -- ARGV[3]: message JSON string
 -- ARGV[4]: queue TTL seconds (default 604800)

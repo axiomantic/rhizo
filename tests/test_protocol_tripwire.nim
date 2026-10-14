@@ -1,19 +1,19 @@
-# locutus/tests/test_protocol_tripwire.nim
-# Native Nim integration tests for Locutus with Tripwire Redis passthrough & Lua protocol spying.
+# rhizo/tests/test_protocol_tripwire.nim
+# Native Nim integration tests for Rhizo with Tripwire Redis passthrough & Lua protocol spying.
 
 import tripwire
 import ./plugins/redis_tripwire
 import std/[os, strutils, json, tables, unittest]
 import config, rhizo
 
-suite "Locutus Native Tripwire Redis Passthrough Suite":
+suite "Rhizo Native Tripwire Redis Passthrough Suite":
 
   test "Registration, Enqueue, and Mutex execute real Lua with Tripwire protocol spying":
     sandbox:
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_test:"
+      cfg.prefix = "rhizo:tw_test:"
 
       # 1. Register agent 'tw_alice' with tag 'worker'
       doOpen(cfg, "tw_alice", "worker")
@@ -63,7 +63,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_queue_test:"
+      cfg.prefix = "rhizo:tw_queue_test:"
 
       # 1. Enqueue task
       let taskId = doEnqueue(cfg, "tw_job_queue", "task", "tw_alice", "Job 1", "Heavy payload computation")
@@ -111,7 +111,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_bb_test:"
+      cfg.prefix = "rhizo:tw_bb_test:"
 
       # 1. Set key on blackboard
       let setRes = doBlackboard(cfg, "set", "tw_room", "agent_state", "ready_for_work", ttlSec = 300)
@@ -154,7 +154,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_floor_test:"
+      cfg.prefix = "rhizo:tw_floor_test:"
 
       # 1. Agent Alice acquires floor
       doFloorRequest(cfg, "tw_panel", "tw_alice", waitSec = 0, leaseSec = 60)
@@ -197,7 +197,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_wf_test:"
+      cfg.prefix = "rhizo:tw_wf_test:"
       let flowId = "tw_flow_" & $getCurrentProcessId()
 
       # 1. Define DAG: step1 -> step2 -> step3
@@ -246,7 +246,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_bal_test:"
+      cfg.prefix = "rhizo:tw_bal_test:"
       let ballotId = "tw_bal_" & $getCurrentProcessId()
 
       # 1. Open ballot
@@ -284,7 +284,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_ldr_test:"
+      cfg.prefix = "rhizo:tw_ldr_test:"
 
       # 1. Acquire leadership
       doLeaderAcquire(cfg, "tw_lead_role", "tw_alice", leaseSec = 30)
@@ -320,7 +320,7 @@ suite "Locutus Native Tripwire Redis Passthrough Suite":
       allow(redisPluginInstance)
 
       var cfg = resolveFullConfig()
-      cfg.prefix = "locutus:tw_can_test:"
+      cfg.prefix = "rhizo:tw_can_test:"
       let runId = "tw_run_" & $getCurrentProcessId()
 
       # 1. Set cancellation token

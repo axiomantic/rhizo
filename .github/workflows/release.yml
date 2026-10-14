@@ -80,8 +80,8 @@ jobs:
           # Build amd64 .deb
           mkdir -p deb-amd64/DEBIAN deb-amd64/usr/bin deb-amd64/usr/share/doc/rhizo deb-amd64/usr/share/rhizo/skills
           cp dist/linux-amd64/rhizo deb-amd64/usr/bin/
-          # ln -sf rhizo deb-amd64/usr/bin/locu
-          # ln -sf rhizo deb-amd64/usr/bin/locuti
+          # ln -sf rhizo deb-amd64/usr/bin/rhizo
+          # ln -sf rhizo deb-amd64/usr/bin/rhizoti
           cp LICENSE deb-amd64/usr/share/doc/rhizo/copyright
           cp README.md deb-amd64/usr/share/doc/rhizo/
           cp -r skills/rhizo deb-amd64/usr/share/rhizo/skills/
@@ -118,8 +118,8 @@ jobs:
           # Build arm64 .deb
           mkdir -p deb-arm64/DEBIAN deb-arm64/usr/bin deb-arm64/usr/share/doc/rhizo deb-arm64/usr/share/rhizo/skills
           cp dist/linux-arm64/rhizo deb-arm64/usr/bin/
-          # ln -sf rhizo deb-arm64/usr/bin/locu
-          # ln -sf rhizo deb-arm64/usr/bin/locuti
+          # ln -sf rhizo deb-arm64/usr/bin/rhizo
+          # ln -sf rhizo deb-arm64/usr/bin/rhizoti
           cp LICENSE deb-arm64/usr/share/doc/rhizo/copyright
           cp README.md deb-arm64/usr/share/doc/rhizo/
           cp -r skills/rhizo deb-arm64/usr/share/rhizo/skills/

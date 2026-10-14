@@ -1,7 +1,7 @@
 -- scripts/reserve_name.lua
 -- Atomically tests candidate availability and reserves a codename hold with TTL.
--- ARGV[1]: prefix (e.g. "locutus:")
--- ARGV[2]: candidate name (e.g. "locutus-sequoia")
+-- ARGV[1]: prefix (e.g. "rhizo:")
+-- ARGV[2]: candidate name (e.g. "rhizo-sequoia")
 -- ARGV[3]: hold TTL seconds (default 600)
 
 local prefix = ARGV[1]

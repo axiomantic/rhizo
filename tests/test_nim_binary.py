@@ -12,10 +12,10 @@ import time
 import unittest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import redis
-from tests.schema import LocutusMessage
+from tests.schema import RhizoMessage
 
 REDIS_URL = os.environ.get("RHIZO_REDIS_URL", "redis://127.0.0.1:6379")
-TEST_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", f"locutus_test_{os.getpid()}:")
+TEST_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", f"rhizo_test_{os.getpid()}:")
 if os.name == "nt":
     BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
 else:
@@ -24,12 +24,12 @@ else:
 
 import pytest
 import tripwire
-from tests.tripwire_locutus import LocutusPlugin, LocutusSchemaError
+from tests.tripwire_rhizo import RhizoPlugin, RhizoSchemaError
 
 @pytest.mark.unit
-class TestLocutusNimBinary(unittest.TestCase):
+class TestRhizoNimBinary(unittest.TestCase):
     def setUp(self):
-        self.test_home = tempfile.mkdtemp(prefix="locutus_test_home_")
+        self.test_home = tempfile.mkdtemp(prefix="rhizo_test_home_")
         self.env = os.environ.copy()
         self.env["HOME"] = self.test_home
         self.env["USERPROFILE"] = self.test_home
@@ -39,16 +39,16 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.env["RHIZO_ALLOW_DRIFT"] = "1"
         self.env["RHIZO_AGENT_NAME"] = "nim_sender"
         self.assertTrue(os.path.isfile(BIN_PATH), f"Binary not found at {BIN_PATH}")
-        res = self.run_locutus(["nuke"])
+        res = self.run_rhizo(["nuke"])
         self.assertEqual(res.returncode, 0, f"Nuke failed in setUp: {res.stderr}")
 
     def tearDown(self):
-        res = self.run_locutus(["nuke"])
+        res = self.run_rhizo(["nuke"])
         self.assertEqual(res.returncode, 0, f"Nuke failed in tearDown: {res.stderr}")
         if hasattr(self, "test_home") and os.path.isdir(self.test_home):
             shutil.rmtree(self.test_home, ignore_errors=True)
 
-    def run_locutus(self, args, env_overrides=None, cwd=None):
+    def run_rhizo(self, args, env_overrides=None, cwd=None):
         cmd_env = self.env.copy()
         cmd_env["PYTHONUTF8"] = "1"
         if env_overrides:
@@ -58,7 +58,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         clean_args = []
         for arg in args:
             if isinstance(arg, str) and len(arg) > 25000:
-                tf = tempfile.NamedTemporaryFile(delete=False, prefix="locutus_large_arg_")
+                tf = tempfile.NamedTemporaryFile(delete=False, prefix="rhizo_large_arg_")
                 tf.write(arg.encode("utf-8"))
                 tf.close()
                 temp_files.append(tf.name)
@@ -87,9 +87,9 @@ class TestLocutusNimBinary(unittest.TestCase):
 
     def test_01_help_and_get_secret(self):
         # 1. Verify --help output, exit code, and exhaustive subcommand manifest
-        res = self.run_locutus(["--help"])
+        res = self.run_rhizo(["--help"])
         self.assertEqual(res.returncode, 0)
-        self.assertTrue("Rhizo" in res.stdout or "Locutus" in res.stdout)
+        self.assertTrue("Rhizo" in res.stdout)
         self.assertIn("Nim Native", res.stdout)
 
         expected_subcommands = [
@@ -99,7 +99,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             "pub", "sub", "who", "sweep", "tag", "drain", "close", "get-secret", "config", "route"
         ]
         for subcmd in expected_subcommands:
-            self.assertTrue(f"rhizo {subcmd}" in res.stdout or f"locu {subcmd}" in res.stdout or f"locutus {subcmd}" in res.stdout, f"Subcommand '{subcmd}' missing from --help output")
+            self.assertTrue(f"rhizo {subcmd}" in res.stdout, f"Subcommand '{subcmd}' missing from --help output")
 
         expected_global_options = [
             "--version", "--profile", "--config", "--redis-url", "--prefix", "--project", "--encrypt", "--cluster"
@@ -108,12 +108,12 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertIn(opt, res.stdout, f"Global option '{opt}' missing from --help output")
 
         # Negative control: unknown subcommand returns exit code 1 with descriptive error
-        res_unknown = self.run_locutus(["nonexistent_subcommand_test"])
+        res_unknown = self.run_rhizo(["nonexistent_subcommand_test"])
         self.assertEqual(res_unknown.returncode, 1)
         self.assertIn("Unknown subcommand: nonexistent_subcommand_test", res_unknown.stdout + res_unknown.stderr)
 
         # 2. Verify get-secret generates valid 64-character hex secret
-        res_secret = self.run_locutus(["get-secret"])
+        res_secret = self.run_rhizo(["get-secret"])
         self.assertEqual(res_secret.returncode, 0)
         secret = res_secret.stdout.strip()
         self.assertEqual(len(secret), 64, f"Secret must be 64 characters hex (32 bytes), got {len(secret)}")
@@ -121,8 +121,8 @@ class TestLocutusNimBinary(unittest.TestCase):
 
         # 3. Verify isolated secret file creation, content, and strict 0600 POSIX permissions
         with tempfile.TemporaryDirectory() as tmpdir:
-            custom_secret_file = os.path.join(tmpdir, "isolated_locutus", "custom.secret")
-            res_custom = self.run_locutus(
+            custom_secret_file = os.path.join(tmpdir, "isolated_rhizo", "custom.secret")
+            res_custom = self.run_rhizo(
                 ["get-secret"],
                 env_overrides={"RHIZO_SECRET_FILE": custom_secret_file, "RHIZO_SECRET": ""}
             )
@@ -143,7 +143,7 @@ class TestLocutusNimBinary(unittest.TestCase):
                 self.assertEqual(file_mode, 0o600, f"Expected 0600 file permissions, got {oct(file_mode)}")
 
             # Assert idempotency: subsequent run returns identical secret from file
-            res_second = self.run_locutus(
+            res_second = self.run_rhizo(
                 ["get-secret"],
                 env_overrides={"RHIZO_SECRET_FILE": custom_secret_file, "RHIZO_SECRET": ""}
             )
@@ -153,24 +153,24 @@ class TestLocutusNimBinary(unittest.TestCase):
     def test_02_open_and_directory(self):
         agent = "nim_test_bot"
         # Pre-cleanup in case of prior dirty state
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
         # 1. Register agent with specific tags
-        res = self.run_locutus(["open", agent, "backend,worker"])
+        res = self.run_rhizo(["open", agent, "backend,worker"])
         self.assertEqual(res.returncode, 0)
         self.assertIn(f"Agent Name : {agent}", res.stdout)
         self.assertIn("Registered Successfully", res.stdout)
 
         # 2. Text directory listing
-        res_who = self.run_locutus(["who", "*"])
+        res_who = self.run_rhizo(["who", "*"])
         self.assertEqual(res_who.returncode, 0)
         self.assertIn(agent, res_who.stdout)
         self.assertIn("ACTIVE", res_who.stdout)
 
-        # 3. JSON directory listing and strict schema validation via LocutusPlugin
-        res_json = self.run_locutus(["who", "*", "--json"])
+        # 3. JSON directory listing and strict schema validation via RhizoPlugin
+        res_json = self.run_rhizo(["who", "*", "--json"])
         self.assertEqual(res_json.returncode, 0)
-        agents = LocutusPlugin.validate_json_schema("who", res_json.stdout)
+        agents = RhizoPlugin.validate_json_schema("who", res_json.stdout)
         self.assertIsInstance(agents, list)
 
         # Locate registered bot in directory list
@@ -183,29 +183,29 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(bot["activity"], "")
 
         # 4. Filtered query by specific matching tag
-        res_filter = self.run_locutus(["who", "backend", "--json"])
+        res_filter = self.run_rhizo(["who", "backend", "--json"])
         self.assertEqual(res_filter.returncode, 0)
-        filter_agents = LocutusPlugin.validate_json_schema("who", res_filter.stdout)
+        filter_agents = RhizoPlugin.validate_json_schema("who", res_filter.stdout)
         self.assertTrue(any(a.get("agent") == agent or a.get("name") == agent for a in filter_agents))
 
         # 5. Negative control: query by non-matching tag must NOT return this agent
-        res_unmatched = self.run_locutus(["who", "nonexistent_custom_tag_xyz", "--json"])
+        res_unmatched = self.run_rhizo(["who", "nonexistent_custom_tag_xyz", "--json"])
         self.assertEqual(res_unmatched.returncode, 0)
-        unmatched_agents = LocutusPlugin.validate_json_schema("who", res_unmatched.stdout)
+        unmatched_agents = RhizoPlugin.validate_json_schema("who", res_unmatched.stdout)
         self.assertFalse(any(a.get("agent") == agent or a.get("name") == agent for a in unmatched_agents))
 
         # 6. Cleanup and verify departure
-        res_close = self.run_locutus(["close", agent])
+        res_close = self.run_rhizo(["close", agent])
         self.assertEqual(res_close.returncode, 0)
 
     def test_03_send_and_listen_authenticated(self):
         agent = "nim_receiver"
         # Pre-cleanup
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         # 1. Send direct message
-        send_res = self.run_locutus([
+        send_res = self.run_rhizo([
             "send",
             "--to", agent,
             "--type", "task",
@@ -215,9 +215,9 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(send_res.returncode, 0)
 
         # 2. Listen and validate wire envelope
-        listen_res = self.run_locutus(["listen", agent, "2"])
+        listen_res = self.run_rhizo(["listen", agent, "2"])
         self.assertEqual(listen_res.returncode, 0)
-        envelope = LocutusPlugin.validate_wire_envelope(listen_res.stdout.strip())
+        envelope = RhizoPlugin.validate_wire_envelope(listen_res.stdout.strip())
         self.assertEqual(envelope["to"], agent)
         self.assertEqual(envelope.get("subject"), "Nim Math")
         self.assertEqual(envelope["body"], "Compute 7 * 8")
@@ -225,7 +225,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertTrue(bool(envelope.get("sig")), "Authenticated message must include HMAC-SHA256 signature")
 
         # Pydantic validation
-        msg = LocutusMessage.model_validate_json(listen_res.stdout.strip())
+        msg = RhizoMessage.model_validate_json(listen_res.stdout.strip())
         self.assertEqual(msg.to_agent, agent)
         self.assertEqual(msg.subject, "Nim Math")
         self.assertEqual(msg.body, "Compute 7 * 8")
@@ -253,13 +253,13 @@ class TestLocutusNimBinary(unittest.TestCase):
         )
 
         # Listen must reject forged message and return empty payload on timeout
-        listen_forged = self.run_locutus(["listen", agent, "1"])
+        listen_forged = self.run_rhizo(["listen", agent, "1"])
         self.assertEqual(listen_forged.returncode, 0)
         self.assertEqual(listen_forged.stdout.strip(), "")
         self.assertIn("Dropping unauthenticated/tampered message", listen_forged.stderr)
 
         # 4. Resilience verification: subsequent legitimate authenticated message is received
-        send_res2 = self.run_locutus([
+        send_res2 = self.run_rhizo([
             "send",
             "--to", agent,
             "--type", "task",
@@ -268,18 +268,18 @@ class TestLocutusNimBinary(unittest.TestCase):
         ])
         self.assertEqual(send_res2.returncode, 0)
 
-        listen_res2 = self.run_locutus(["listen", agent, "2"])
+        listen_res2 = self.run_rhizo(["listen", agent, "2"])
         self.assertEqual(listen_res2.returncode, 0)
-        envelope2 = LocutusPlugin.validate_wire_envelope(listen_res2.stdout.strip())
+        envelope2 = RhizoPlugin.validate_wire_envelope(listen_res2.stdout.strip())
         self.assertEqual(envelope2["body"], "Post-firewall recovery verification")
 
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
     def test_04_prompt_injection_firewall_drops_forged(self):
         agent = "nim_victim"
         # Pre-cleanup
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         # 1. Negative control on wire envelope validator directly: forged signature must fail
         forged_dict = {
@@ -298,11 +298,11 @@ class TestLocutusNimBinary(unittest.TestCase):
         forged_payload = json.dumps(forged_dict)
 
         # Get current project secret
-        res_secret = self.run_locutus(["get-secret"])
+        res_secret = self.run_rhizo(["get-secret"])
         current_secret = res_secret.stdout.strip()
 
-        with self.assertRaises(LocutusSchemaError):
-            LocutusPlugin.validate_wire_envelope(forged_payload, secret=current_secret)
+        with self.assertRaises(RhizoSchemaError):
+            RhizoPlugin.validate_wire_envelope(forged_payload, secret=current_secret)
 
         # 2. Inject forged message into Redis inbox directly
         subprocess.run(
@@ -314,10 +314,10 @@ class TestLocutusNimBinary(unittest.TestCase):
         )
 
         # 3. Listen should drop forged message, log exact security warning to stderr, and return empty stdout on timeout
-        listen_res = self.run_locutus(["listen", agent, "1"])
+        listen_res = self.run_rhizo(["listen", agent, "1"])
         self.assertEqual(listen_res.returncode, 0)
         self.assertEqual(listen_res.stdout.strip(), "")
-        self.assertTrue("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered message" in listen_res.stderr or "[LOCUTUS SECURITY] WARNING: Dropping unauthenticated/tampered message" in listen_res.stderr)
+        self.assertTrue("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered message" in listen_res.stderr)
 
         # 4. Verify inbox is now drained/empty (the malicious payload was discarded, not re-queued)
         inbox_len = subprocess.run(
@@ -327,7 +327,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(int(inbox_len), 0, f"Expected victim inbox to be empty after drop, got {inbox_len}")
 
         # 5. Resilience: Send valid authenticated message and verify listener processes it
-        send_res = self.run_locutus([
+        send_res = self.run_rhizo([
             "send",
             "--to", agent,
             "--type", "task",
@@ -335,26 +335,26 @@ class TestLocutusNimBinary(unittest.TestCase):
             "--body", "Clean valid payload",
         ])
         self.assertEqual(send_res.returncode, 0)
-        valid_listen = self.run_locutus(["listen", agent, "2"])
+        valid_listen = self.run_rhizo(["listen", agent, "2"])
         self.assertEqual(valid_listen.returncode, 0)
-        valid_env = LocutusPlugin.validate_wire_envelope(valid_listen.stdout.strip())
+        valid_env = RhizoPlugin.validate_wire_envelope(valid_listen.stdout.strip())
         self.assertEqual(valid_env["body"], "Clean valid payload")
 
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
     def test_05_end_to_end_encryption(self):
         agent = "nim_e2ee"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         # Retrieve secret for independent decryption audit
-        secret_res = self.run_locutus(["get-secret"])
+        secret_res = self.run_rhizo(["get-secret"])
         secret = secret_res.stdout.strip()
 
         original_body = "E2EE Payload Content with Special Chars: §±!@#$%^&*()_+"
 
         # 1. Send encrypted message with RHIZO_ENCRYPT=1
-        send_res = self.run_locutus(
+        send_res = self.run_rhizo(
             ["send", "--to", agent, "--subject", "Top Secret", "--body", original_body],
             env_overrides={"RHIZO_ENCRYPT": "1"}
         )
@@ -407,24 +407,24 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertNotEqual(wrong_padded, original_body.encode("utf-8"))
 
         # 5. Listen should decrypt before stdout and deliver unencrypted payload to consumer
-        listen_res = self.run_locutus(["listen", agent, "2"], env_overrides={"RHIZO_ENCRYPT": "1"})
+        listen_res = self.run_rhizo(["listen", agent, "2"], env_overrides={"RHIZO_ENCRYPT": "1"})
         self.assertEqual(listen_res.returncode, 0)
         payload = json.loads(listen_res.stdout.strip())
         self.assertEqual(payload["body"], original_body)
         self.assertFalse(payload["encrypted"])
 
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
 
     def test_08_active_agent_persistence(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # 1. Negative control: running listen in fresh empty directory without active agent exits 1
-            empty_listen = self.run_locutus(["listen", "1"], cwd=tmpdir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            empty_listen = self.run_rhizo(["listen", "1"], cwd=tmpdir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(empty_listen.returncode, 1)
             self.assertIn("Error: No agent name specified", empty_listen.stderr)
 
-            # 2. When opening with session-id, registers mapping and NEVER creates .locutus.agent
-            open_res = self.run_locutus(["open", "--session-id", "opencode:ses_test_08"], cwd=tmpdir)
+            # 2. When opening with session-id, registers mapping and NEVER creates .rhizo.agent
+            open_res = self.run_rhizo(["open", "--session-id", "opencode:ses_test_08"], cwd=tmpdir)
             self.assertEqual(open_res.returncode, 0)
             self.assertIn("Agent Name :", open_res.stdout)
             self.assertIn("Session ID : opencode:ses_test_08", open_res.stdout)
@@ -437,17 +437,17 @@ class TestLocutusNimBinary(unittest.TestCase):
                     break
             self.assertTrue(active_agent.startswith("test_project-"))
 
-            # 3. Assert exact .locutus.agent file is NOT created in working directory
-            agent_file = os.path.join(tmpdir, ".locutus.agent")
-            self.assertFalse(os.path.isfile(agent_file), f".locutus.agent should NOT be created in workspace")
+            # 3. Assert exact .rhizo.agent file is NOT created in working directory
+            agent_file = os.path.join(tmpdir, ".rhizo.agent")
+            self.assertFalse(os.path.isfile(agent_file), f".rhizo.agent should NOT be created in workspace")
 
             # Verify session mapping in global store via 'session get'
-            ses_get = self.run_locutus(["session", "get", "opencode:ses_test_08"])
+            ses_get = self.run_rhizo(["session", "get", "opencode:ses_test_08"])
             self.assertEqual(ses_get.returncode, 0)
             self.assertEqual(ses_get.stdout.strip(), active_agent)
 
             # 4. Send to active agent using --session-id (infers sender from session mapping)
-            send_res = self.run_locutus([
+            send_res = self.run_rhizo([
                 "send",
                 "--to", active_agent,
                 "--subject", "Self Ping",
@@ -457,53 +457,53 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(send_res.returncode, 0)
 
             # 5. Listen using --session-id (resolves active agent from session mapping)
-            listen_res = self.run_locutus(["listen", "2", "--session-id", "opencode:ses_test_08"], cwd=tmpdir)
+            listen_res = self.run_rhizo(["listen", "2", "--session-id", "opencode:ses_test_08"], cwd=tmpdir)
             self.assertEqual(listen_res.returncode, 0)
-            envelope = LocutusPlugin.validate_wire_envelope(listen_res.stdout.strip())
+            envelope = RhizoPlugin.validate_wire_envelope(listen_res.stdout.strip())
             self.assertEqual(envelope["from"], active_agent)
             self.assertEqual(envelope["to"], active_agent)
             self.assertEqual(envelope["body"], "Testing persistence")
 
             # 6. Close using --session-id (should close active agent and unbind session mapping)
-            close_res = self.run_locutus(["close", "--session-id", "opencode:ses_test_08"], cwd=tmpdir)
+            close_res = self.run_rhizo(["close", "--session-id", "opencode:ses_test_08"], cwd=tmpdir)
             self.assertEqual(close_res.returncode, 0)
-            ses_after = self.run_locutus(["session", "get", "opencode:ses_test_08"])
+            ses_after = self.run_rhizo(["session", "get", "opencode:ses_test_08"])
             self.assertEqual(ses_after.returncode, 1)
 
             # 7. Test session CRUD subcommands
-            set_res = self.run_locutus(["session", "set", "claude:ses_crud_test", "crud_agent_99"])
+            set_res = self.run_rhizo(["session", "set", "claude:ses_crud_test", "crud_agent_99"])
             self.assertEqual(set_res.returncode, 0)
             self.assertIn("OK [session]", set_res.stdout)
 
-            get_res = self.run_locutus(["session", "get", "claude:ses_crud_test"])
+            get_res = self.run_rhizo(["session", "get", "claude:ses_crud_test"])
             self.assertEqual(get_res.returncode, 0)
             self.assertEqual(get_res.stdout.strip(), "crud_agent_99")
 
-            list_res = self.run_locutus(["session", "list", "--json"])
+            list_res = self.run_rhizo(["session", "list", "--json"])
             self.assertEqual(list_res.returncode, 0)
             sessions_data = json.loads(list_res.stdout.strip())
             self.assertIn("claude:ses_crud_test", sessions_data)
 
-            del_res = self.run_locutus(["session", "remove", "claude:ses_crud_test"])
+            del_res = self.run_rhizo(["session", "remove", "claude:ses_crud_test"])
             self.assertEqual(del_res.returncode, 0)
             self.assertIn("OK [session] removed", del_res.stdout)
 
-            # 8. Assert plain open without session-id also NEVER creates .locutus.agent in working directory
-            plain_open = self.run_locutus(["open", "plain_agent_test"], cwd=tmpdir)
+            # 8. Assert plain open without session-id also NEVER creates .rhizo.agent in working directory
+            plain_open = self.run_rhizo(["open", "plain_agent_test"], cwd=tmpdir)
             self.assertEqual(plain_open.returncode, 0)
-            self.assertFalse(os.path.isfile(os.path.join(tmpdir, ".locutus.agent")), ".locutus.agent must never be created in working directory")
-            self.run_locutus(["close", "plain_agent_test"])
+            self.assertFalse(os.path.isfile(os.path.join(tmpdir, ".rhizo.agent")), ".rhizo.agent must never be created in working directory")
+            self.run_rhizo(["close", "plain_agent_test"])
 
 
     def test_09_multicast_broadcast_with_tags_routing(self):
         # Pre-cleanup
         for a in ["agent_qa", "agent_dev", "agent_ops"]:
-            self.run_locutus(["close", a])
+            self.run_rhizo(["close", a])
 
         # 1. Open 3 agents with distinct and overlapping tags
-        self.run_locutus(["open", "agent_qa", "qa,backend"])
-        self.run_locutus(["open", "agent_dev", "dev,backend"])
-        self.run_locutus(["open", "agent_ops", "ops,infra"])
+        self.run_rhizo(["open", "agent_qa", "qa,backend"])
+        self.run_rhizo(["open", "agent_dev", "dev,backend"])
+        self.run_rhizo(["open", "agent_ops", "ops,infra"])
 
         # Negative control: verify all 3 inboxes are empty initially
         for a in ["agent_qa", "agent_dev", "agent_ops"]:
@@ -514,7 +514,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(qlen, 0, f"Inbox for {a} must be empty before broadcast")
 
         # 2. Broadcast targeting specific tag 'qa'
-        bcast_res1 = self.run_locutus([
+        bcast_res1 = self.run_rhizo([
             "broadcast",
             "--tags", "qa",
             "--subject", "QA Notice",
@@ -531,24 +531,24 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(ops_len, 0, "agent_ops must NOT receive qa broadcast")
 
         # agent_qa consumes and validates message wire envelope
-        res_qa = self.run_locutus(["listen", "agent_qa", "1"])
+        res_qa = self.run_rhizo(["listen", "agent_qa", "1"])
         self.assertEqual(res_qa.returncode, 0)
-        env_qa = LocutusPlugin.validate_wire_envelope(res_qa.stdout.strip())
+        env_qa = RhizoPlugin.validate_wire_envelope(res_qa.stdout.strip())
         self.assertEqual(env_qa["to"], "@qa")
         self.assertEqual(env_qa["subject"], "QA Notice")
         self.assertEqual(env_qa["body"], "Only for QA")
 
         # Non-matching agents timeout with empty stdout
-        res_dev = self.run_locutus(["listen", "agent_dev", "1"])
+        res_dev = self.run_rhizo(["listen", "agent_dev", "1"])
         self.assertEqual(res_dev.returncode, 0)
         self.assertEqual(res_dev.stdout.strip(), "")
 
-        res_ops = self.run_locutus(["listen", "agent_ops", "1"])
+        res_ops = self.run_rhizo(["listen", "agent_ops", "1"])
         self.assertEqual(res_ops.returncode, 0)
         self.assertEqual(res_ops.stdout.strip(), "")
 
         # 3. Multicast targeting shared tag 'backend' (should reach agent_qa AND agent_dev, but NOT agent_ops)
-        bcast_res2 = self.run_locutus([
+        bcast_res2 = self.run_rhizo([
             "broadcast",
             "--tags", "backend",
             "--subject", "Backend Sync",
@@ -558,19 +558,19 @@ class TestLocutusNimBinary(unittest.TestCase):
 
         # Both backend agents should receive it
         for agent_name in ["agent_qa", "agent_dev"]:
-            rec_res = self.run_locutus(["listen", agent_name, "1"])
+            rec_res = self.run_rhizo(["listen", agent_name, "1"])
             self.assertEqual(rec_res.returncode, 0)
-            env = LocutusPlugin.validate_wire_envelope(rec_res.stdout.strip())
+            env = RhizoPlugin.validate_wire_envelope(rec_res.stdout.strip())
             self.assertEqual(env["to"], "@backend")
             self.assertEqual(env["body"], "Shared backend update")
 
         # agent_ops still empty
-        ops_rec = self.run_locutus(["listen", "agent_ops", "1"])
+        ops_rec = self.run_rhizo(["listen", "agent_ops", "1"])
         self.assertEqual(ops_rec.returncode, 0)
         self.assertEqual(ops_rec.stdout.strip(), "")
 
         # 4. Negative control: broadcast to nonexistent tag delivers to 0 agents
-        bcast_none = self.run_locutus([
+        bcast_none = self.run_rhizo([
             "broadcast",
             "--tags", "nonexistent_null_tag",
             "--subject", "Ghost",
@@ -586,16 +586,16 @@ class TestLocutusNimBinary(unittest.TestCase):
 
         # Cleanup
         for a in ["agent_qa", "agent_dev", "agent_ops"]:
-            self.run_locutus(["close", a])
+            self.run_rhizo(["close", a])
 
     def test_10_corrupted_encrypted_payload_dropped(self):
         agent = "agent_corrupt_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         # 1. Construct an encrypted payload with valid HMAC signature but invalid ciphertext
         import hmac
-        secret = self.run_locutus(["get-secret"]).stdout.strip()
+        secret = self.run_rhizo(["get-secret"]).stdout.strip()
         msg_id = "msg_corrupt_1"
         ts = "2026-09-19T00:00:00Z"
         corrupted_ciphertext = "NOT_VALID_BASE64_AES_CIPHERTEXT"
@@ -625,7 +625,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         )
 
         # 2. Listen should drop the undecryptable frame, log warning to stderr, and return empty stdout on timeout
-        listen_res = self.run_locutus(["listen", agent, "1"])
+        listen_res = self.run_rhizo(["listen", agent, "1"])
         self.assertEqual(listen_res.returncode, 0)
         self.assertEqual(listen_res.stdout.strip(), "")
         self.assertIn("Dropping corrupted/undecryptable message", listen_res.stderr)
@@ -638,53 +638,53 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(int(inbox_len), 0, "Corrupted message must be purged from queue")
 
         # 4. Resilience verification: listener process remains healthy and processes subsequent valid encrypted payload
-        send_res = self.run_locutus(
+        send_res = self.run_rhizo(
             ["send", "--to", agent, "--subject", "Healthy Message", "--body", "Valid Post-Corruption Payload"],
             env_overrides={"RHIZO_ENCRYPT": "1"}
         )
         self.assertEqual(send_res.returncode, 0)
 
-        valid_listen = self.run_locutus(["listen", agent, "2"], env_overrides={"RHIZO_ENCRYPT": "1"})
+        valid_listen = self.run_rhizo(["listen", agent, "2"], env_overrides={"RHIZO_ENCRYPT": "1"})
         self.assertEqual(valid_listen.returncode, 0)
         valid_payload = json.loads(valid_listen.stdout.strip())
         self.assertEqual(valid_payload["body"], "Valid Post-Corruption Payload")
         self.assertFalse(valid_payload["encrypted"])
 
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
     def test_11_argument_validation_for_send_and_broadcast(self):
         # 1. Send missing --subject and --body
-        res_no_body = self.run_locutus(["send", "--to", "nobody"])
+        res_no_body = self.run_rhizo(["send", "--to", "nobody"])
         self.assertEqual(res_no_body.returncode, 1)
         self.assertIn("Error: Missing required arguments. --subject and --body are required.", res_no_body.stderr)
-        self.assertTrue("Usage: rhizo send --to <recipient>" in res_no_body.stderr or "Usage: locutus send --to <recipient>" in res_no_body.stderr)
+        self.assertTrue("Usage: rhizo send --to <recipient>" in res_no_body.stderr)
 
         # 2. Send missing --to recipient
-        res_no_to = self.run_locutus(["send", "--subject", "Task", "--body", "Details"])
+        res_no_to = self.run_rhizo(["send", "--subject", "Task", "--body", "Details"])
         self.assertEqual(res_no_to.returncode, 1)
         self.assertIn("Error: Missing required argument '--to <recipient>'.", res_no_to.stderr)
 
         # 3. Broadcast missing --subject and --body
-        res_b_empty = self.run_locutus(["broadcast"])
+        res_b_empty = self.run_rhizo(["broadcast"])
         self.assertEqual(res_b_empty.returncode, 1)
         self.assertIn("Error: Missing required arguments. --subject and --body are required.", res_b_empty.stderr)
-        self.assertTrue("Usage: rhizo broadcast" in res_b_empty.stderr or "Usage: locutus broadcast" in res_b_empty.stderr)
+        self.assertTrue("Usage: rhizo broadcast" in res_b_empty.stderr)
 
         # 4. Reply missing --to recipient
-        res_rep_no_to = self.run_locutus(["reply", "--subject", "Re: Task", "--body", "Done"])
+        res_rep_no_to = self.run_rhizo(["reply", "--subject", "Re: Task", "--body", "Done"])
         self.assertEqual(res_rep_no_to.returncode, 1)
         self.assertIn("Error: Missing required argument '--to <recipient>'.", res_rep_no_to.stderr)
-        self.assertTrue("Usage: rhizo reply --to <recipient>" in res_rep_no_to.stderr or "Usage: locutus reply --to <recipient>" in res_rep_no_to.stderr)
+        self.assertTrue("Usage: rhizo reply --to <recipient>" in res_rep_no_to.stderr)
 
         # 5. Reply missing body
-        res_rep_no_body = self.run_locutus(["reply", "--to", "alice", "--subject", "Re: Task"])
+        res_rep_no_body = self.run_rhizo(["reply", "--to", "alice", "--subject", "Re: Task"])
         self.assertEqual(res_rep_no_body.returncode, 1)
         self.assertIn("Error: Missing required arguments. --subject and --body are required.", res_rep_no_body.stderr)
 
     def test_12_large_e2ee_payload_byte_for_byte(self):
         agent = "test_large_e2ee"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         # 1. Generate 1 MB structured payload with entropy and verify pre-send hash
         chunk = "EntropyBlock:0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
@@ -700,7 +700,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(inbox_pre, 0)
 
         # 2. Send 1MB payload with RHIZO_ENCRYPT=1
-        res = self.run_locutus(
+        res = self.run_rhizo(
             ["send", "--to", agent, "--subject", "Large E2EE 1MB", "--body", large_body],
             env_overrides={"RHIZO_ENCRYPT": "1"}
         )
@@ -717,9 +717,9 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertGreater(len(raw_msg.get("body", "")), 1000000)
 
         # 4. Listen should decrypt 1MB payload cleanly and match exact SHA-256 digest
-        listen_res = self.run_locutus(["listen", agent, "5"], env_overrides={"RHIZO_ENCRYPT": "1"})
+        listen_res = self.run_rhizo(["listen", agent, "5"], env_overrides={"RHIZO_ENCRYPT": "1"})
         self.assertEqual(listen_res.returncode, 0)
-        envelope = LocutusPlugin.validate_wire_envelope(listen_res.stdout.strip())
+        envelope = RhizoPlugin.validate_wire_envelope(listen_res.stdout.strip())
         received_body = envelope.get("body", "")
 
         self.assertEqual(len(received_body), len(large_body))
@@ -732,11 +732,11 @@ class TestLocutusNimBinary(unittest.TestCase):
         tampered_sha256 = hashlib.sha256(tampered_body.encode("utf-8")).hexdigest()
         self.assertNotEqual(tampered_sha256, expected_sha256)
 
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
     def test_13_config_show_and_json(self):
         # 1. Table output verification
-        res = self.run_locutus(["config", "show"])
+        res = self.run_rhizo(["config", "show"])
         self.assertEqual(res.returncode, 0)
         self.assertIn("SETTING", res.stdout)
         self.assertIn("VALUE", res.stdout)
@@ -745,10 +745,10 @@ class TestLocutusNimBinary(unittest.TestCase):
         for key in ["redis_url", "prefix", "project", "encrypt", "heartbeat_ttl", "message_ttl", "listen_timeout", "cluster"]:
             self.assertIn(key, res.stdout, f"Config table missing key row: {key}")
 
-        # 2. JSON output and schema validation via LocutusPlugin
-        res_j = self.run_locutus(["config", "show", "--json"])
+        # 2. JSON output and schema validation via RhizoPlugin
+        res_j = self.run_rhizo(["config", "show", "--json"])
         self.assertEqual(res_j.returncode, 0)
-        data = LocutusPlugin.validate_json_schema("config", res_j.stdout)
+        data = RhizoPlugin.validate_json_schema("config", res_j.stdout)
         self.assertIsInstance(data, dict)
 
         # Assert full key presence and provenance types
@@ -768,40 +768,40 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(data["project"]["value"], "test_project")
 
         # 3. Negative control: unknown config subcommand returns exit code 1
-        res_bad = self.run_locutus(["config", "nonexistent_subaction"])
+        res_bad = self.run_rhizo(["config", "nonexistent_subaction"])
         self.assertEqual(res_bad.returncode, 1)
         self.assertIn("Unknown config action: nonexistent_subaction", res_bad.stderr)
-        self.assertTrue("Usage: rhizo config <show|get|path|init>" in res_bad.stderr or "Usage: locutus config <show|get|path|init>" in res_bad.stderr)
+        self.assertTrue("Usage: rhizo config <show|get|path|init>" in res_bad.stderr)
 
     def test_14_config_get(self):
         # 1. Positive queries across core config keys
-        res = self.run_locutus(["config", "get", "redis_url"])
+        res = self.run_rhizo(["config", "get", "redis_url"])
         self.assertEqual(res.returncode, 0)
         self.assertEqual(res.stdout.strip(), REDIS_URL)
 
-        res_p = self.run_locutus(["config", "get", "project"])
+        res_p = self.run_rhizo(["config", "get", "project"])
         self.assertEqual(res_p.returncode, 0)
         self.assertEqual(res_p.stdout.strip(), "test_project")
 
-        res_pfx = self.run_locutus(["config", "get", "prefix"])
+        res_pfx = self.run_rhizo(["config", "get", "prefix"])
         self.assertEqual(res_pfx.returncode, 0)
         self.assertEqual(res_pfx.stdout.strip(), TEST_PREFIX)
 
-        res_enc = self.run_locutus(["config", "get", "encrypt"])
+        res_enc = self.run_rhizo(["config", "get", "encrypt"])
         self.assertEqual(res_enc.returncode, 0)
         self.assertIn(res_enc.stdout.strip(), ["false", "true"])
 
-        res_hb = self.run_locutus(["config", "get", "heartbeat_ttl"])
+        res_hb = self.run_rhizo(["config", "get", "heartbeat_ttl"])
         self.assertEqual(res_hb.returncode, 0)
         self.assertGreater(int(res_hb.stdout.strip()), 0)
 
         # 2. Negative control: missing key argument exits 1 with usage instruction
-        res_no_key = self.run_locutus(["config", "get"])
+        res_no_key = self.run_rhizo(["config", "get"])
         self.assertEqual(res_no_key.returncode, 1)
-        self.assertTrue("Usage: rhizo config get <key>" in res_no_key.stderr or "Usage: locutus config get <key>" in res_no_key.stderr)
+        self.assertTrue("Usage: rhizo config get <key>" in res_no_key.stderr)
 
         # 3. Negative control: non-existent key exits 1 with descriptive error
-        res_err = self.run_locutus(["config", "get", "non_existent_key_xyz"])
+        res_err = self.run_rhizo(["config", "get", "non_existent_key_xyz"])
         self.assertEqual(res_err.returncode, 1)
         self.assertIn("Error: Unknown configuration key: non_existent_key_xyz", res_err.stderr)
 
@@ -813,42 +813,42 @@ class TestLocutusNimBinary(unittest.TestCase):
                 f.write('redis_url = "redis://file-tier:6379"\nprefix = "file_pfx:"\nproject = "file_proj"\n')
 
             # 1. Tier 1: Config file value active when env and CLI are absent
-            res_tier1 = self.run_locutus(["config", "get", "redis_url"], env_overrides={"RHIZO_REDIS_URL": "", "RHIZO_REDIS_PREFIX": "", "RHIZO_PROJECT": ""}, cwd=tmpdir)
+            res_tier1 = self.run_rhizo(["config", "get", "redis_url"], env_overrides={"RHIZO_REDIS_URL": "", "RHIZO_REDIS_PREFIX": "", "RHIZO_PROJECT": ""}, cwd=tmpdir)
             self.assertEqual(res_tier1.returncode, 0)
             self.assertEqual(res_tier1.stdout.strip(), "redis://file-tier:6379")
 
-            res_t1_j = self.run_locutus(["config", "show", "--json"], env_overrides={"RHIZO_REDIS_URL": "", "RHIZO_REDIS_PREFIX": "", "RHIZO_PROJECT": ""}, cwd=tmpdir)
-            d1 = LocutusPlugin.validate_json_schema("config", res_t1_j.stdout)
+            res_t1_j = self.run_rhizo(["config", "show", "--json"], env_overrides={"RHIZO_REDIS_URL": "", "RHIZO_REDIS_PREFIX": "", "RHIZO_PROJECT": ""}, cwd=tmpdir)
+            d1 = RhizoPlugin.validate_json_schema("config", res_t1_j.stdout)
             self.assertEqual(d1["redis_url"]["source"], "workspace config")
 
             # 2. Tier 2: Environment variable overrides config file
             env_tier2 = {"RHIZO_REDIS_URL": "redis://env-tier:6379", "RHIZO_REDIS_PREFIX": "env_pfx:", "RHIZO_PROJECT": "env_proj"}
-            res_tier2 = self.run_locutus(["config", "get", "redis_url"], env_overrides=env_tier2, cwd=tmpdir)
+            res_tier2 = self.run_rhizo(["config", "get", "redis_url"], env_overrides=env_tier2, cwd=tmpdir)
             self.assertEqual(res_tier2.returncode, 0)
             self.assertEqual(res_tier2.stdout.strip(), "redis://env-tier:6379")
 
-            res_t2_j = self.run_locutus(["config", "show", "--json"], env_overrides=env_tier2, cwd=tmpdir)
-            d2 = LocutusPlugin.validate_json_schema("config", res_t2_j.stdout)
+            res_t2_j = self.run_rhizo(["config", "show", "--json"], env_overrides=env_tier2, cwd=tmpdir)
+            d2 = RhizoPlugin.validate_json_schema("config", res_t2_j.stdout)
             self.assertEqual(d2["redis_url"]["source"], "environment")
 
             # 3. Tier 3: CLI flag overrides BOTH environment variable AND config file
             custom_url = "rediss://cli-tier.custom:6380"
-            res_tier3 = self.run_locutus(["--redis-url", custom_url, "config", "get", "redis_url"], env_overrides=env_tier2, cwd=tmpdir)
+            res_tier3 = self.run_rhizo(["--redis-url", custom_url, "config", "get", "redis_url"], env_overrides=env_tier2, cwd=tmpdir)
             self.assertEqual(res_tier3.returncode, 0)
             self.assertEqual(res_tier3.stdout.strip(), custom_url)
 
-            res_t3_j = self.run_locutus(["--redis-url", custom_url, "config", "show", "--json"], env_overrides=env_tier2, cwd=tmpdir)
-            d3 = LocutusPlugin.validate_json_schema("config", res_t3_j.stdout)
+            res_t3_j = self.run_rhizo(["--redis-url", custom_url, "config", "show", "--json"], env_overrides=env_tier2, cwd=tmpdir)
+            d3 = RhizoPlugin.validate_json_schema("config", res_t3_j.stdout)
             self.assertEqual(d3["redis_url"]["value"], custom_url)
             self.assertEqual(d3["redis_url"]["source"], "cli flag")
 
         # 4. Cluster mode auto-applies hash tags
-        res_c = self.run_locutus(["--cluster", "--prefix", "myapp:", "config", "get", "prefix"])
+        res_c = self.run_rhizo(["--cluster", "--prefix", "myapp:", "config", "get", "prefix"])
         self.assertEqual(res_c.returncode, 0)
         self.assertIn("{myapp:test_project}:", res_c.stdout)
 
     def test_16_config_file_and_profiles(self):
-        tmp_dir = tempfile.mkdtemp(prefix="locutus_cfg_test_")
+        tmp_dir = tempfile.mkdtemp(prefix="rhizo_cfg_test_")
         try:
             cfg_path = os.path.join(tmp_dir, ".rhizo.toml")
             with open(cfg_path, "w", encoding="utf-8") as f:
@@ -877,9 +877,9 @@ class TestLocutusNimBinary(unittest.TestCase):
             }
 
             # 1. Default profile verification (no --profile specified)
-            res_def_json = self.run_locutus(["config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_def_json = self.run_rhizo(["config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_def_json.returncode, 0)
-            data_def = LocutusPlugin.validate_json_schema("config", res_def_json.stdout)
+            data_def = RhizoPlugin.validate_json_schema("config", res_def_json.stdout)
             self.assertEqual(data_def.get("active_profile"), "default")
             self.assertEqual(data_def["redis_url"]["value"], "redis://workspace-default:6379")
             self.assertEqual(data_def["prefix"]["value"], "ws_default:")
@@ -887,9 +887,9 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(data_def["heartbeat_ttl"]["value"], "300")
 
             # 2. Profile switching to 'staging' via --profile
-            res_stag_json = self.run_locutus(["--profile", "staging", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_stag_json = self.run_rhizo(["--profile", "staging", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_stag_json.returncode, 0)
-            data_stag = LocutusPlugin.validate_json_schema("config", res_stag_json.stdout)
+            data_stag = RhizoPlugin.validate_json_schema("config", res_stag_json.stdout)
             self.assertEqual(data_stag.get("active_profile"), "staging")
             self.assertEqual(data_stag["redis_url"]["value"], "rediss://staging.cluster:6380")
             self.assertEqual(data_stag["prefix"]["value"], "ws_staging:")
@@ -897,18 +897,18 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(data_stag["encrypt"]["value"], "true")
 
             # 3. Profile switching to 'prod'
-            res_prod_json = self.run_locutus(["--profile", "prod", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_prod_json = self.run_rhizo(["--profile", "prod", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_prod_json.returncode, 0)
-            data_prod = LocutusPlugin.validate_json_schema("config", res_prod_json.stdout)
+            data_prod = RhizoPlugin.validate_json_schema("config", res_prod_json.stdout)
             self.assertEqual(data_prod.get("active_profile"), "prod")
             self.assertEqual(data_prod["redis_url"]["value"], "rediss://prod.cluster:6380")
             self.assertEqual(data_prod["prefix"]["value"], "ws_prod:")
             self.assertEqual(data_prod["heartbeat_ttl"]["value"], "3600")
 
             # 4. Negative control: switching to unconfigured profile falls back to default base settings
-            res_none_json = self.run_locutus(["--profile", "unconfigured_xyz", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_none_json = self.run_rhizo(["--profile", "unconfigured_xyz", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_none_json.returncode, 0)
-            data_none = LocutusPlugin.validate_json_schema("config", res_none_json.stdout)
+            data_none = RhizoPlugin.validate_json_schema("config", res_none_json.stdout)
             self.assertEqual(data_none.get("active_profile"), "unconfigured_xyz")
             self.assertEqual(data_none["redis_url"]["value"], "redis://workspace-default:6379")
         finally:
@@ -916,7 +916,7 @@ class TestLocutusNimBinary(unittest.TestCase):
 
     def test_17_config_paths_and_init(self):
         # 1. Path hierarchy verification
-        res_paths = self.run_locutus(["config", "path"])
+        res_paths = self.run_rhizo(["config", "path"])
         self.assertEqual(res_paths.returncode, 0)
         self.assertIn("System config", res_paths.stdout)
         self.assertIn("User config", res_paths.stdout)
@@ -924,11 +924,11 @@ class TestLocutusNimBinary(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # 2. Initial config generation
-            res_init = self.run_locutus(["config", "init"], cwd=tmp_dir)
+            res_init = self.run_rhizo(["config", "init"], cwd=tmp_dir)
             self.assertEqual(res_init.returncode, 0)
-            self.assertTrue("Initialized Rhizo configuration at:" in res_init.stdout or "Initialized Locutus configuration at:" in res_init.stdout)
+            self.assertTrue("Initialized Rhizo configuration at:" in res_init.stdout)
 
-            created_file = os.path.join(tmp_dir, ".rhizo.toml") if os.path.isfile(os.path.join(tmp_dir, ".rhizo.toml")) else os.path.join(tmp_dir, ".locutus.toml")
+            created_file = os.path.join(tmp_dir, ".rhizo.toml") if os.path.isfile(os.path.join(tmp_dir, ".rhizo.toml")) else os.path.join(tmp_dir, ".rhizo.toml")
             self.assertTrue(os.path.isfile(created_file))
             with open(created_file, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -943,15 +943,15 @@ class TestLocutusNimBinary(unittest.TestCase):
                 self.assertEqual(mode, 0o600, f"Expected 0600 config file permissions, got {oct(mode)}")
 
             # 3. Negative control: duplicate init without --force fails with exit code 1
-            res_dup = self.run_locutus(["config", "init"], cwd=tmp_dir)
+            res_dup = self.run_rhizo(["config", "init"], cwd=tmp_dir)
             self.assertEqual(res_dup.returncode, 1)
             self.assertIn("Error: Config file already exists", res_dup.stderr)
             self.assertIn("--force", res_dup.stderr)
 
             # 4. Force overwrite with --force succeeds with exit code 0
-            res_force = self.run_locutus(["config", "init", "--force"], cwd=tmp_dir)
+            res_force = self.run_rhizo(["config", "init", "--force"], cwd=tmp_dir)
             self.assertEqual(res_force.returncode, 0)
-            self.assertTrue("Initialized Rhizo configuration at:" in res_force.stdout or "Initialized Locutus configuration at:" in res_force.stdout)
+            self.assertTrue("Initialized Rhizo configuration at:" in res_force.stdout)
             if os.name != "nt":
                 mode_after = os.stat(created_file).st_mode & 0o777
                 self.assertEqual(mode_after, 0o600)
@@ -959,8 +959,8 @@ class TestLocutusNimBinary(unittest.TestCase):
     def test_18_non_json_payload_dropped(self):
         """Verify that malformed non-JSON messages in Redis are dropped to stderr and don't crash listener."""
         agent = "agent_malformed_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         # 1. Inject multiple forms of invalid non-JSON raw text
         garbage_payloads = [
@@ -978,7 +978,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             )
 
         # 2. Listen should drop non-JSON payloads to stderr and exit cleanly on timeout
-        listen_res = self.run_locutus(["listen", agent, "1"])
+        listen_res = self.run_rhizo(["listen", agent, "1"])
         self.assertEqual(listen_res.returncode, 0)
         self.assertEqual(listen_res.stdout.strip(), "")
         self.assertIn("Dropping non-JSON payload from inbox", listen_res.stderr)
@@ -991,7 +991,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertEqual(int(inbox_len), 0, f"Expected inbox to be empty after dropping garbage, got {inbox_len}")
 
         # 4. Resilience recovery: verify listener process remains operational and receives subsequent valid message
-        send_res = self.run_locutus([
+        send_res = self.run_rhizo([
             "send",
             "--to", agent,
             "--subject", "Recovery Task",
@@ -999,19 +999,19 @@ class TestLocutusNimBinary(unittest.TestCase):
         ])
         self.assertEqual(send_res.returncode, 0)
 
-        listen_res2 = self.run_locutus(["listen", agent, "2"])
+        listen_res2 = self.run_rhizo(["listen", agent, "2"])
         self.assertEqual(listen_res2.returncode, 0)
-        envelope = LocutusPlugin.validate_wire_envelope(listen_res2.stdout.strip())
+        envelope = RhizoPlugin.validate_wire_envelope(listen_res2.stdout.strip())
         self.assertEqual(envelope["body"], "Post-garbage healthy message")
 
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
     def test_19_unreachable_redis_error_handling(self):
         """Verify that attempting to contact an unreachable Redis instance returns exit code 1 and clean error."""
         unreachable_url = "redis://127.0.0.1:1"
 
         # 1. Test unreachable Redis on 'send'
-        res_send = self.run_locutus([
+        res_send = self.run_rhizo([
             "--redis-url", unreachable_url,
             "send",
             "--to", "nobody",
@@ -1027,7 +1027,7 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertNotIn("SIGSEGV", output_send)
 
         # 2. Test unreachable Redis on 'who'
-        res_who = self.run_locutus([
+        res_who = self.run_rhizo([
             "--redis-url", unreachable_url,
             "who"
         ])
@@ -1037,41 +1037,41 @@ class TestLocutusNimBinary(unittest.TestCase):
         self.assertNotIn("Traceback (most recent call last)", output_who)
 
     def test_20_tag_argument_validation(self):
-        """Verify that 'locutus tag' validates required arguments, actions, agent identity, and handles complex tag matrices."""
+        """Verify that 'rhizo tag' validates required arguments, actions, agent identity, and handles complex tag matrices."""
         # 1. Missing arguments
-        res_missing = self.run_locutus(["tag"])
+        res_missing = self.run_rhizo(["tag"])
         self.assertEqual(res_missing.returncode, 1)
         self.assertIn("Error: Missing arguments for tag command.", res_missing.stderr)
-        self.assertTrue("Usage: rhizo tag <add|remove|set> <tags> [name]" in res_missing.stderr or "Usage: locutus tag <add|remove|set> <tags> [name]" in res_missing.stderr)
+        self.assertTrue("Usage: rhizo tag <add|remove|set> <tags> [name]" in res_missing.stderr)
 
-        res_missing_tags = self.run_locutus(["tag", "add"])
+        res_missing_tags = self.run_rhizo(["tag", "add"])
         self.assertEqual(res_missing_tags.returncode, 1)
         self.assertIn("Error: Missing arguments for tag command.", res_missing_tags.stderr)
 
         # 2. Invalid action
-        res_invalid = self.run_locutus(["tag", "badaction", "mytag"])
+        res_invalid = self.run_rhizo(["tag", "badaction", "mytag"])
         self.assertEqual(res_invalid.returncode, 1)
         self.assertIn("Error: Invalid tag action 'badaction'. Expected add, remove, or set.", res_invalid.stderr)
 
         # 3. Missing agent identity when no current agent exists
         with tempfile.TemporaryDirectory() as empty_dir:
-            res_no_agent = self.run_locutus(["tag", "add", "mytag"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            res_no_agent = self.run_rhizo(["tag", "add", "mytag"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(res_no_agent.returncode, 1)
             self.assertIn("Error: No agent name specified", res_no_agent.stderr)
 
         # 4. Unregistered agent negative control
-        res_unreg = self.run_locutus(["tag", "add", "mytag", "nonexistent_agent_999"])
+        res_unreg = self.run_rhizo(["tag", "add", "mytag", "nonexistent_agent_999"])
         self.assertEqual(res_unreg.returncode, 1)
         self.assertIn("ERR agent 'nonexistent_agent_999' is not registered", res_unreg.stderr)
 
         # 5. Matrix of valid tag operations with special characters, colons, and whitespace trimming
         agent = "agent_tag_matrix_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         try:
             # 5a. Add tags with whitespace padding and colons/special characters
-            res_add = self.run_locutus(["tag", "add", "  team:backend , @infra/node-1 , worker_core  ", agent])
+            res_add = self.run_rhizo(["tag", "add", "  team:backend , @infra/node-1 , worker_core  ", agent])
             self.assertEqual(res_add.returncode, 0)
             tags_stdout = res_add.stdout.strip()
             self.assertIn("@infra/node-1", tags_stdout)
@@ -1087,7 +1087,7 @@ class TestLocutusNimBinary(unittest.TestCase):
                 self.assertEqual(is_mem, "1", f"Agent {agent} must be in set for tag {t}")
 
             # 5b. Remove tag
-            res_rem = self.run_locutus(["tag", "remove", "team:backend", agent])
+            res_rem = self.run_rhizo(["tag", "remove", "team:backend", agent])
             self.assertEqual(res_rem.returncode, 0)
             self.assertNotIn("team:backend", res_rem.stdout)
             is_mem_rem = subprocess.run(
@@ -1097,7 +1097,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(is_mem_rem, "0", f"Agent {agent} must no longer be in tag:team:backend")
 
             # 5c. Set tags (overwrites existing tags)
-            res_set = self.run_locutus(["tag", "set", "production,v2.0", agent])
+            res_set = self.run_rhizo(["tag", "set", "production,v2.0", agent])
             self.assertEqual(res_set.returncode, 0)
             self.assertEqual(res_set.stdout.strip(), "production,v2.0")
 
@@ -1118,30 +1118,30 @@ class TestLocutusNimBinary(unittest.TestCase):
                 self.assertEqual(is_mem_new, "1", f"New tag {new_t} must be present")
 
             # 5d. Negative control: removing nonexistent tag is safe and idempotent
-            res_rem_ghost = self.run_locutus(["tag", "remove", "ghost_tag_xyz", agent])
+            res_rem_ghost = self.run_rhizo(["tag", "remove", "ghost_tag_xyz", agent])
             self.assertEqual(res_rem_ghost.returncode, 0)
             self.assertEqual(res_rem_ghost.stdout.strip(), "production,v2.0")
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
 
     def test_21_drain_argument_validation(self):
-        """Verify that 'locutus drain' rejects non-integer counts, handles missing agent identities, and empties Redis queues."""
+        """Verify that 'rhizo drain' rejects non-integer counts, handles missing agent identities, and empties Redis queues."""
         # 1. Non-integer count rejection
-        res_non_int = self.run_locutus(["drain", "not_a_number"])
+        res_non_int = self.run_rhizo(["drain", "not_a_number"])
         self.assertEqual(res_non_int.returncode, 1)
         self.assertIn("Error: Invalid count 'not_a_number' for drain command. Expected an integer.", res_non_int.stderr)
-        self.assertTrue("Usage: rhizo drain [count] [name]" in res_non_int.stderr or "Usage: locutus drain [count] [name]" in res_non_int.stderr)
+        self.assertTrue("Usage: rhizo drain [count] [name]" in res_non_int.stderr)
 
         # 2. Missing agent identity when no current agent exists
         with tempfile.TemporaryDirectory() as empty_dir:
-            res_no_agent = self.run_locutus(["drain", "10"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            res_no_agent = self.run_rhizo(["drain", "10"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(res_no_agent.returncode, 1)
             self.assertIn("Error: No agent name specified", res_no_agent.stderr)
 
         # 3. Operational drain and Redis queue verification
         agent = "agent_drain_verify_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         try:
             inbox_key = f"{TEST_PREFIX}inbox:{agent}"
@@ -1150,7 +1150,7 @@ class TestLocutusNimBinary(unittest.TestCase):
 
             # Send 3 distinct messages
             for i in range(1, 4):
-                res_send = self.run_locutus([
+                res_send = self.run_rhizo([
                     "send",
                     "--to", agent,
                     "--subject", f"Drain Task {i}",
@@ -1166,7 +1166,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(int(llen_before), 3, "Inbox must contain exactly 3 items before drain")
 
             # Partial drain: pop 2 items
-            res_drain_2 = self.run_locutus(["drain", "2", agent])
+            res_drain_2 = self.run_rhizo(["drain", "2", agent])
             self.assertEqual(res_drain_2.returncode, 0)
             llen_after_2 = subprocess.run(
                 ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
@@ -1175,7 +1175,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(int(llen_after_2), 1, "Inbox must contain 1 item after draining 2")
 
             # Complete drain: pop remaining items
-            res_drain_rem = self.run_locutus(["drain", "10", agent])
+            res_drain_rem = self.run_rhizo(["drain", "10", agent])
             self.assertEqual(res_drain_rem.returncode, 0)
             llen_empty = subprocess.run(
                 ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
@@ -1184,7 +1184,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             self.assertEqual(int(llen_empty), 0, "Inbox must be completely emptied (LLEN 0)")
 
             # Drain on empty queue returns exit code 0 and keeps LLEN at 0
-            res_drain_empty = self.run_locutus(["drain", "10", agent])
+            res_drain_empty = self.run_rhizo(["drain", "10", agent])
             self.assertEqual(res_drain_empty.returncode, 0)
             llen_still_empty = subprocess.run(
                 ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
@@ -1192,26 +1192,26 @@ class TestLocutusNimBinary(unittest.TestCase):
             ).stdout.strip()
             self.assertEqual(int(llen_still_empty), 0)
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
 
     def test_22_crypto_tmp_cleanup_guarantee(self):
         """Verify that encrypt/decrypt operations leave zero temporary files, even during induced crypto failures and reap stale files."""
         agent = "agent_crypto_cleanup_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
 
         tmp_dir = os.path.join(self.test_home, ".config", "rhizo", "tmp")
         os.makedirs(tmp_dir, exist_ok=True)
 
         try:
             # 1. Normal encrypted send and decrypt
-            res_send = self.run_locutus(
+            res_send = self.run_rhizo(
                 ["send", "--to", agent, "--subject", "Cleanup Test", "--body", "Confidential Data 123"],
                 env_overrides={"RHIZO_ENCRYPT": "1"}
             )
             self.assertEqual(res_send.returncode, 0)
 
-            res_listen = self.run_locutus(["listen", agent, "2"], env_overrides={"RHIZO_ENCRYPT": "1"})
+            res_listen = self.run_rhizo(["listen", agent, "2"], env_overrides={"RHIZO_ENCRYPT": "1"})
             self.assertEqual(res_listen.returncode, 0)
             self.assertEqual(json.loads(res_listen.stdout.strip())["body"], "Confidential Data 123")
 
@@ -1239,7 +1239,7 @@ class TestLocutusNimBinary(unittest.TestCase):
             )
 
             # Listen will attempt decryption, fail, and drop the message
-            res_fail = self.run_locutus(["listen", agent, "1"], env_overrides={"RHIZO_ENCRYPT": "1"})
+            res_fail = self.run_rhizo(["listen", agent, "1"], env_overrides={"RHIZO_ENCRYPT": "1"})
             self.assertEqual(res_fail.returncode, 0)
 
             # Assert zero temp files left behind after failure
@@ -1259,8 +1259,8 @@ class TestLocutusNimBinary(unittest.TestCase):
             os.utime(stale_tmp, (past_time, past_time))
 
             # Running 'open' triggers cleanupOldTmpFiles()
-            self.run_locutus(["open", f"{agent}_reaper", "worker"])
-            self.run_locutus(["close", f"{agent}_reaper"])
+            self.run_rhizo(["open", f"{agent}_reaper", "worker"])
+            self.run_rhizo(["close", f"{agent}_reaper"])
 
             # Stale file must be purged; fresh file must remain intact
             self.assertFalse(os.path.exists(stale_tmp), "Stale tmp file (>1h old) must be purged by cleanupOldTmpFiles")
@@ -1270,10 +1270,10 @@ class TestLocutusNimBinary(unittest.TestCase):
             if os.path.exists(fresh_tmp):
                 os.remove(fresh_tmp)
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
 
     def test_23_readme_example_config_comprehensive(self):
-        """Fact-check: verify that the exact example .locutus.toml in README.md is extracted from docs and parsed correctly."""
+        """Fact-check: verify that the exact example .rhizo.toml in README.md is extracted from docs and parsed correctly."""
         import re
         readme_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "README.md"))
         self.assertTrue(os.path.isfile(readme_path), f"README.md not found at {readme_path}")
@@ -1281,8 +1281,8 @@ class TestLocutusNimBinary(unittest.TestCase):
             readme_text = f.read()
 
         # Dynamically extract example toml snippet from README.md to guarantee 0 documentation drift
-        match = re.search(r"### Example `\.(?:rhizo|locutus)\.toml`\s+```toml\n(.*?)```", readme_text, re.DOTALL)
-        self.assertIsNotNone(match, "README.md must contain ### Example `.rhizo.toml` or `.locutus.toml` TOML code block")
+        match = re.search(r"### Example `\.rhizo\.toml`\s+```toml\n(.*?)```", readme_text, re.DOTALL)
+        self.assertIsNotNone(match, "README.md must contain ### Example `.rhizo.toml` or `.rhizo.toml` TOML code block")
         extracted_toml = match.group(1).strip()
         self.assertIn("redis_url", extracted_toml)
         self.assertIn("[profiles.staging]", extracted_toml)
@@ -1307,13 +1307,13 @@ class TestLocutusNimBinary(unittest.TestCase):
             }
 
             # 1. Root default profile verification with schema validation
-            res = self.run_locutus(["config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res = self.run_rhizo(["config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res.returncode, 0)
-            data = LocutusPlugin.validate_json_schema("config", res.stdout)
+            data = RhizoPlugin.validate_json_schema("config", res.stdout)
 
             self.assertEqual(data["redis_url"]["value"], "redis://127.0.0.1:6379")
             self.assertEqual(data["redis_url"]["source"], "workspace config")
-            self.assertTrue(data["prefix"]["value"] in ["rhizo:", "locutus:"])
+            self.assertTrue(data["prefix"]["value"] in ["rhizo:"])
             self.assertEqual(data["project"]["value"], "my-project")
             self.assertEqual(data["encrypt"]["value"], "false")
             self.assertEqual(data["cluster"]["value"], "false")
@@ -1327,28 +1327,28 @@ class TestLocutusNimBinary(unittest.TestCase):
             )
 
             # 2. Staging profile verification with schema validation
-            res_stg = self.run_locutus(["--profile", "staging", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_stg = self.run_rhizo(["--profile", "staging", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_stg.returncode, 0)
-            stg_data = LocutusPlugin.validate_json_schema("config", res_stg.stdout)
+            stg_data = RhizoPlugin.validate_json_schema("config", res_stg.stdout)
             self.assertEqual(stg_data["redis_url"]["value"], "rediss://staging.internal:6380")
             self.assertEqual(stg_data["prefix"]["value"], "stg:rhizo:")
             self.assertEqual(stg_data["encrypt"]["value"], "true")
             self.assertEqual(stg_data.get("active_profile"), "staging")
 
             # 3. Prod profile verification (cluster mode hashtag auto-applied)
-            res_prod = self.run_locutus(["--profile", "prod", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_prod = self.run_rhizo(["--profile", "prod", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_prod.returncode, 0)
-            prod_data = LocutusPlugin.validate_json_schema("config", res_prod.stdout)
+            prod_data = RhizoPlugin.validate_json_schema("config", res_prod.stdout)
             self.assertEqual(prod_data["redis_url"]["value"], "rediss://prod-cluster.internal:6379")
             self.assertEqual(prod_data["cluster"]["value"], "true")
-            self.assertTrue(prod_data["prefix"]["value"] in ["{rhizo:my-project}:", "{locutus:my-project}:"])
+            self.assertTrue(prod_data["prefix"]["value"] in ["{rhizo:my-project}:"])
             self.assertEqual(prod_data["encrypt"]["value"], "true")
             self.assertEqual(prod_data.get("active_profile"), "prod")
 
             # 4. Negative control: Unconfigured profile fallback to workspace defaults
-            res_none = self.run_locutus(["--profile", "unconfigured_demo", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_none = self.run_rhizo(["--profile", "unconfigured_demo", "config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_none.returncode, 0)
-            none_data = LocutusPlugin.validate_json_schema("config", res_none.stdout)
+            none_data = RhizoPlugin.validate_json_schema("config", res_none.stdout)
             self.assertEqual(none_data.get("active_profile"), "unconfigured_demo")
             self.assertEqual(none_data["redis_url"]["value"], "redis://127.0.0.1:6379")
 
@@ -1386,18 +1386,18 @@ secret_file = "{custom_secret_file_toml}"
             }
 
             # A. Test agent_name and secret_file resolution
-            res_agent = self.run_locutus(["config", "get", "agent_name"], env_overrides=clean_env, cwd=tmp_dir)
+            res_agent = self.run_rhizo(["config", "get", "agent_name"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_agent.stdout.strip(), "configured_agent_99")
 
-            res_secret = self.run_locutus(["get-secret"], env_overrides=clean_env, cwd=tmp_dir)
+            res_secret = self.run_rhizo(["get-secret"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_secret.stdout.strip(), custom_secret_val)
 
             agent = "agent_heartbeat_ttl_test"
-            self.run_locutus(["close", agent], env_overrides=clean_env, cwd=tmp_dir)
+            self.run_rhizo(["close", agent], env_overrides=clean_env, cwd=tmp_dir)
 
             try:
                 # B. Test heartbeat_ttl strictly sets Redis EX TTL (bounded within 40..45s)
-                self.run_locutus(["open", agent, "worker"], env_overrides=clean_env, cwd=tmp_dir)
+                self.run_rhizo(["open", agent, "worker"], env_overrides=clean_env, cwd=tmp_dir)
                 ttl_res = subprocess.run(
                     ["redis-cli", "-u", REDIS_URL, "TTL", f"{TEST_PREFIX}heartbeat:{agent}"],
                     capture_output=True,
@@ -1408,7 +1408,7 @@ secret_file = "{custom_secret_file_toml}"
                 self.assertTrue(38 <= hb_ttl <= 45, f"Expected heartbeat TTL strictly between 38 and 45, got {hb_ttl}")
 
                 # C. Test message_ttl strictly sets inbox TTL on send (bounded within 68..75s)
-                self.run_locutus(
+                self.run_rhizo(
                     ["send", "--to", agent, "--subject", "TTL Check", "--body", "Checking message TTL"],
                     env_overrides=clean_env,
                     cwd=tmp_dir
@@ -1423,9 +1423,9 @@ secret_file = "{custom_secret_file_toml}"
                 self.assertTrue(68 <= msg_ttl <= 75, f"Expected inbox TTL strictly between 68 and 75, got {msg_ttl}")
 
                 # D. Test listen_timeout: drain message, then listen with empty inbox (should timeout in 1.0s to 3.0s)
-                self.run_locutus(["drain", "1", agent], env_overrides=clean_env, cwd=tmp_dir)
+                self.run_rhizo(["drain", "1", agent], env_overrides=clean_env, cwd=tmp_dir)
                 start_t = time.time()
-                res_listen = self.run_locutus(["listen", agent], env_overrides=clean_env, cwd=tmp_dir)
+                res_listen = self.run_rhizo(["listen", agent], env_overrides=clean_env, cwd=tmp_dir)
                 elapsed = time.time() - start_t
                 self.assertEqual(res_listen.returncode, 0)
                 self.assertEqual(res_listen.stdout.strip(), "")
@@ -1439,7 +1439,7 @@ secret = "my_inline_secret_test_555"
                 with open(cfg_inline_path, "w", encoding="utf-8") as f:
                     f.write(cfg_inline_secret)
 
-                res_inline = self.run_locutus(["--config", cfg_inline_path, "get-secret"], env_overrides=clean_env, cwd=tmp_dir)
+                res_inline = self.run_rhizo(["--config", cfg_inline_path, "get-secret"], env_overrides=clean_env, cwd=tmp_dir)
                 self.assertEqual(res_inline.stdout.strip(), "my_inline_secret_test_555")
 
                 # F. Negative control: change heartbeat_ttl to 12s in config and assert Redis TTL reflects exact new bounds
@@ -1447,7 +1447,7 @@ secret = "my_inline_secret_test_555"
                     f.write(cfg_content.replace("heartbeat_ttl = 45", "heartbeat_ttl = 12"))
 
                 agent_alt = "agent_heartbeat_alt_test"
-                self.run_locutus(["open", agent_alt, "worker"], env_overrides=clean_env, cwd=tmp_dir)
+                self.run_rhizo(["open", agent_alt, "worker"], env_overrides=clean_env, cwd=tmp_dir)
                 alt_ttl_res = subprocess.run(
                     ["redis-cli", "-u", REDIS_URL, "TTL", f"{TEST_PREFIX}heartbeat:{agent_alt}"],
                     capture_output=True,
@@ -1456,19 +1456,19 @@ secret = "my_inline_secret_test_555"
                 )
                 alt_ttl = int(alt_ttl_res.stdout.strip())
                 self.assertTrue(8 <= alt_ttl <= 12, f"Expected modified heartbeat TTL between 8 and 12, got {alt_ttl}")
-                self.run_locutus(["close", agent_alt], env_overrides=clean_env, cwd=tmp_dir)
+                self.run_rhizo(["close", agent_alt], env_overrides=clean_env, cwd=tmp_dir)
             finally:
-                self.run_locutus(["close", agent], env_overrides=clean_env, cwd=tmp_dir)
+                self.run_rhizo(["close", agent], env_overrides=clean_env, cwd=tmp_dir)
 
     def test_25_config_init_targets(self):
-        """Verify that 'locutus config init' generates valid TOML templates for --project and --user targets with strict permissions and overwrite guards."""
+        """Verify that 'rhizo config init' generates valid TOML templates for --project and --user targets with strict permissions and overwrite guards."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             # 1. Project target initialization (--project)
-            res_proj = self.run_locutus(["config", "init", "--project"], cwd=tmp_dir)
+            res_proj = self.run_rhizo(["config", "init", "--project"], cwd=tmp_dir)
             self.assertEqual(res_proj.returncode, 0)
-            self.assertTrue("Initialized Rhizo configuration at:" in res_proj.stdout or "Initialized Locutus configuration at:" in res_proj.stdout)
+            self.assertTrue("Initialized Rhizo configuration at:" in res_proj.stdout)
 
-            proj_file = os.path.join(tmp_dir, ".rhizo.toml") if os.path.isfile(os.path.join(tmp_dir, ".rhizo.toml")) else os.path.join(tmp_dir, ".locutus.toml")
+            proj_file = os.path.join(tmp_dir, ".rhizo.toml") if os.path.isfile(os.path.join(tmp_dir, ".rhizo.toml")) else os.path.join(tmp_dir, ".rhizo.toml")
             self.assertTrue(os.path.isfile(proj_file))
             if os.name != "nt":
                 self.assertEqual(os.stat(proj_file).st_mode & 0o777, 0o600, "Project config must have 0600 permissions")
@@ -1477,10 +1477,10 @@ secret = "my_inline_secret_test_555"
                 proj_content = f.read()
 
             # Assert template comments and default keys
-            self.assertTrue("# Rhizo Configuration File" in proj_content or "# Locutus Configuration File" in proj_content)
+            self.assertTrue("# Rhizo Configuration File" in proj_content)
             self.assertIn("# Redis connection endpoint", proj_content)
             self.assertIn('redis_url = "redis://127.0.0.1:6379"', proj_content)
-            self.assertTrue('prefix = "rhizo:"' in proj_content or 'prefix = "locutus:"' in proj_content)
+            self.assertTrue('prefix = "rhizo:"' in proj_content or 'prefix = "rhizo:"' in proj_content)
             self.assertIn("encrypt = false", proj_content)
             self.assertIn("cluster = false", proj_content)
             self.assertIn("heartbeat_ttl = 150", proj_content)
@@ -1501,14 +1501,14 @@ secret = "my_inline_secret_test_555"
                 "RHIZO_ENCRYPT": "",
                 "RHIZO_CLUSTER": "",
             }
-            res_show = self.run_locutus(["config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
+            res_show = self.run_rhizo(["config", "show", "--json"], env_overrides=clean_env, cwd=tmp_dir)
             self.assertEqual(res_show.returncode, 0)
-            data = LocutusPlugin.validate_json_schema("config", res_show.stdout)
+            data = RhizoPlugin.validate_json_schema("config", res_show.stdout)
             self.assertEqual(data["redis_url"]["value"], "redis://127.0.0.1:6379")
-            self.assertTrue(data["prefix"]["value"] in ["rhizo:", "locutus:"])
+            self.assertTrue(data["prefix"]["value"] in ["rhizo:"])
 
             # 2. Negative control: Duplicate init without --force fails with exit code 1
-            res_dup = self.run_locutus(["config", "init", "--project"], cwd=tmp_dir)
+            res_dup = self.run_rhizo(["config", "init", "--project"], cwd=tmp_dir)
             self.assertEqual(res_dup.returncode, 1)
             self.assertIn("Error: Config file already exists at", res_dup.stderr)
             self.assertIn("(use --force to overwrite)", res_dup.stderr)
@@ -1516,11 +1516,11 @@ secret = "my_inline_secret_test_555"
             # 3. Overwrite with --force succeeds
             with open(proj_file, "w", encoding="utf-8") as f:
                 f.write("corrupted_content = true\n")
-            res_force = self.run_locutus(["config", "init", "--project", "--force"], cwd=tmp_dir)
+            res_force = self.run_rhizo(["config", "init", "--project", "--force"], cwd=tmp_dir)
             self.assertEqual(res_force.returncode, 0)
             with open(proj_file, "r", encoding="utf-8") as f:
                 f_text = f.read()
-                self.assertTrue("# Rhizo Configuration File" in f_text or "# Locutus Configuration File" in f_text)
+                self.assertTrue("# Rhizo Configuration File" in f_text)
 
             # 4. User target initialization (--user) with isolated HOME and XDG_CONFIG_HOME
             with tempfile.TemporaryDirectory() as user_home:
@@ -1531,7 +1531,7 @@ secret = "my_inline_secret_test_555"
                     "APPDATA": appdata_dir,
                     "XDG_CONFIG_HOME": os.path.join(user_home, ".config")
                 }
-                res_user = self.run_locutus(["config", "init", "--user"], env_overrides=user_env)
+                res_user = self.run_rhizo(["config", "init", "--user"], env_overrides=user_env)
                 self.assertEqual(res_user.returncode, 0)
                 if os.name == "nt":
                     user_file = os.path.join(appdata_dir, "rhizo", "config.toml")
@@ -1546,40 +1546,40 @@ secret = "my_inline_secret_test_555"
                 self.assertIn("# Rhizo Configuration File", user_content)
 
                 # Negative control for user target without --force
-                res_user_dup = self.run_locutus(["config", "init", "--user"], env_overrides=user_env)
+                res_user_dup = self.run_rhizo(["config", "init", "--user"], env_overrides=user_env)
                 self.assertEqual(res_user_dup.returncode, 1)
                 self.assertIn("Error: Config file already exists", res_user_dup.stderr)
 
                 # Overwrite with --force succeeds for user target
                 with open(user_file, "w", encoding="utf-8") as f:
                     f.write("modified = true\n")
-                res_user_force = self.run_locutus(["config", "init", "--user", "--force"], env_overrides=user_env)
+                res_user_force = self.run_rhizo(["config", "init", "--user", "--force"], env_overrides=user_env)
                 self.assertEqual(res_user_force.returncode, 0)
                 with open(user_file, "r", encoding="utf-8") as f:
                     u_txt = f.read()
-                    self.assertTrue("# Rhizo Configuration File" in u_txt or "# Locutus Configuration File" in u_txt)
+                    self.assertTrue("# Rhizo Configuration File" in u_txt)
 
     def test_26_status_and_directory_state(self):
-        """Test 'locutus status' updates state and activity, asserts last_seen freshness within 2s, and validates schema."""
+        """Test 'rhizo status' updates state and activity, asserts last_seen freshness within 2s, and validates schema."""
         # 1. Negative controls: argument validation
-        res_missing = self.run_locutus(["status"])
+        res_missing = self.run_rhizo(["status"])
         self.assertEqual(res_missing.returncode, 1)
         self.assertIn("Error: Missing state argument for status command.", res_missing.stderr)
-        self.assertTrue("Usage: rhizo status <idle|busy|error>" in res_missing.stderr or "Usage: locutus status <idle|busy|error>" in res_missing.stderr)
+        self.assertTrue("Usage: rhizo status <idle|busy|error>" in res_missing.stderr)
 
         with tempfile.TemporaryDirectory() as empty_dir:
-            res_no_agent = self.run_locutus(["status", "busy", "Working"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            res_no_agent = self.run_rhizo(["status", "busy", "Working"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(res_no_agent.returncode, 1)
             self.assertIn("Error: No agent name specified", res_no_agent.stderr)
 
         agent = "status_worker_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "backend,worker"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "backend,worker"])
 
         try:
             # 2. Update status to 'busy'
             now_pre = time.time()
-            res_stat = self.run_locutus(["status", "busy", "Compiling LLVM", agent])
+            res_stat = self.run_rhizo(["status", "busy", "Compiling LLVM", agent])
             self.assertEqual(res_stat.returncode, 0)
             self.assertEqual(res_stat.stdout.strip(), "OK")
 
@@ -1595,9 +1595,9 @@ secret = "my_inline_secret_test_555"
             self.assertTrue(abs(last_seen - now_pre) <= 2.5, f"last_seen ({last_seen}) must be within 2.5s of current time ({now_pre})")
 
             # 4. Check directory via who --json with schema validation
-            res_who_json = self.run_locutus(["who", "--json", "*"])
+            res_who_json = self.run_rhizo(["who", "--json", "*"])
             self.assertEqual(res_who_json.returncode, 0)
-            agents_list = LocutusPlugin.validate_json_schema("directory", res_who_json.stdout)
+            agents_list = RhizoPlugin.validate_json_schema("directory", res_who_json.stdout)
             matching = [a for a in agents_list if a["agent"] == agent]
             self.assertEqual(len(matching), 1, f"Agent {agent} must appear in directory")
             self.assertEqual(matching[0]["state"], "BUSY")
@@ -1606,7 +1606,7 @@ secret = "my_inline_secret_test_555"
 
             # 5. Update status to 'idle'
             now_idle = time.time()
-            res_stat2 = self.run_locutus(["status", "idle", "Awaiting jobs", agent])
+            res_stat2 = self.run_rhizo(["status", "idle", "Awaiting jobs", agent])
             self.assertEqual(res_stat2.returncode, 0)
             self.assertEqual(res_stat2.stdout.strip(), "OK")
 
@@ -1620,18 +1620,18 @@ secret = "my_inline_secret_test_555"
             self.assertTrue(abs(last_seen_idle - now_idle) <= 2.5)
 
             # Re-verify directory JSON schema
-            res_who_json2 = self.run_locutus(["who", "--json", "*"])
+            res_who_json2 = self.run_rhizo(["who", "--json", "*"])
             self.assertEqual(res_who_json2.returncode, 0)
-            agents_list2 = LocutusPlugin.validate_json_schema("directory", res_who_json2.stdout)
+            agents_list2 = RhizoPlugin.validate_json_schema("directory", res_who_json2.stdout)
             matching2 = [a for a in agents_list2 if a["agent"] == agent]
             self.assertEqual(len(matching2), 1)
             self.assertEqual(matching2[0]["state"], "IDLE")
             self.assertEqual(matching2[0]["activity"], "Awaiting jobs")
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
 
     def test_27_distributed_locking(self):
-        """Test 'locutus lock' acquisition, mutual exclusion, unauthorized unlock rejection, TTL bounds, and fencing tokens."""
+        """Test 'rhizo lock' acquisition, mutual exclusion, unauthorized unlock rejection, TTL bounds, and fencing tokens."""
         lock_name = "deploy_mutex_test"
         scoped_lock = f"test_project:{lock_name}"
         lock_key = f"{TEST_PREFIX}lock:{{{scoped_lock}}}"
@@ -1641,18 +1641,18 @@ secret = "my_inline_secret_test_555"
         subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", lock_key, fencing_key], check=True, capture_output=True)
 
         # 1. Missing argument negative controls
-        res_no_name = self.run_locutus(["lock"])
+        res_no_name = self.run_rhizo(["lock"])
         self.assertEqual(res_no_name.returncode, 1)
         self.assertIn("Error: Missing lock name.", res_no_name.stderr)
 
-        res_no_unlock_name = self.run_locutus(["unlock"])
+        res_no_unlock_name = self.run_rhizo(["unlock"])
         self.assertEqual(res_no_unlock_name.returncode, 1)
         self.assertIn("Error: Missing lock name.", res_no_unlock_name.stderr)
-        self.assertTrue("Usage: rhizo unlock <lock_name>" in res_no_unlock_name.stderr or "Usage: locutus unlock <lock_name>" in res_no_unlock_name.stderr)
+        self.assertTrue("Usage: rhizo unlock <lock_name>" in res_no_unlock_name.stderr)
 
         try:
             # 2. Acquire lock with owner 'agent_lock_owner'
-            res_lock = self.run_locutus(["--agent-name=agent_lock_owner", "lock", lock_name, "10"])
+            res_lock = self.run_rhizo(["--agent-name=agent_lock_owner", "lock", lock_name, "10"])
             self.assertEqual(res_lock.returncode, 0)
             self.assertIn(f"LOCKED {scoped_lock} by agent_lock_owner", res_lock.stdout)
 
@@ -1670,7 +1670,7 @@ secret = "my_inline_secret_test_555"
             self.assertTrue(7 <= ttl_in_redis <= 10, f"Expected lock TTL between 7 and 10, got {ttl_in_redis}")
 
             # 3. Second process ('intruder_agent') attempts to acquire held lock -> must fail with exit code 1
-            res_conflict = self.run_locutus(["--agent-name=intruder_agent", "lock", lock_name, "10"])
+            res_conflict = self.run_rhizo(["--agent-name=intruder_agent", "lock", lock_name, "10"])
             self.assertEqual(res_conflict.returncode, 1)
             self.assertIn(f"Error: Lock '{scoped_lock}' is already held.", res_conflict.stderr)
 
@@ -1681,7 +1681,7 @@ secret = "my_inline_secret_test_555"
             ).stdout.strip(), "agent_lock_owner")
 
             # 4. Unauthorized unlock negative control: intruder cannot release lock held by agent_lock_owner
-            res_unlock_bad = self.run_locutus(["--agent-name=intruder_agent", "unlock", lock_name])
+            res_unlock_bad = self.run_rhizo(["--agent-name=intruder_agent", "unlock", lock_name])
             self.assertEqual(res_unlock_bad.returncode, 1)
             self.assertIn(f"Error: Cannot unlock '{scoped_lock}': not owner or lock not found.", res_unlock_bad.stderr)
 
@@ -1692,7 +1692,7 @@ secret = "my_inline_secret_test_555"
             ).stdout.strip(), "1")
 
             # 5. Authorized unlock by owner succeeds
-            res_unlock = self.run_locutus(["--agent-name=agent_lock_owner", "unlock", lock_name])
+            res_unlock = self.run_rhizo(["--agent-name=agent_lock_owner", "unlock", lock_name])
             self.assertEqual(res_unlock.returncode, 0)
             self.assertIn(f"UNLOCKED {scoped_lock}", res_unlock.stdout)
 
@@ -1703,20 +1703,20 @@ secret = "my_inline_secret_test_555"
             ).stdout.strip(), "0")
 
             # 6. Re-unlock negative control: unlocking an already released lock returns exit code 1
-            res_reunlock = self.run_locutus(["--agent-name=agent_lock_owner", "unlock", lock_name])
+            res_reunlock = self.run_rhizo(["--agent-name=agent_lock_owner", "unlock", lock_name])
             self.assertEqual(res_reunlock.returncode, 1)
             self.assertIn("not owner or lock not found", res_reunlock.stderr)
 
             # 7. Monotonic fencing tokens test
-            res_fencing_1 = self.run_locutus(["--agent-name=agent_lock_owner", "lock", lock_name, "10", "--fencing", "--raw"])
+            res_fencing_1 = self.run_rhizo(["--agent-name=agent_lock_owner", "lock", lock_name, "10", "--fencing", "--raw"])
             self.assertEqual(res_fencing_1.returncode, 0)
             token_1 = int(res_fencing_1.stdout.strip())
-            self.run_locutus(["--agent-name=agent_lock_owner", "unlock", lock_name])
+            self.run_rhizo(["--agent-name=agent_lock_owner", "unlock", lock_name])
 
-            res_fencing_2 = self.run_locutus(["--agent-name=agent_lock_owner", "lock", lock_name, "10", "--fencing", "--raw"])
+            res_fencing_2 = self.run_rhizo(["--agent-name=agent_lock_owner", "lock", lock_name, "10", "--fencing", "--raw"])
             self.assertEqual(res_fencing_2.returncode, 0)
             token_2 = int(res_fencing_2.stdout.strip())
-            self.run_locutus(["--agent-name=agent_lock_owner", "unlock", lock_name])
+            self.run_rhizo(["--agent-name=agent_lock_owner", "unlock", lock_name])
 
             self.assertEqual(token_2, token_1 + 1, "Fencing tokens must be strictly monotonic consecutive integers")
         finally:
@@ -1728,11 +1728,11 @@ secret = "my_inline_secret_test_555"
         qkey = f"{TEST_PREFIX}queue:{{{qname}}}"
 
         # 1. Argument validation negative controls
-        res_no_q = self.run_locutus(["enqueue"])
+        res_no_q = self.run_rhizo(["enqueue"])
         self.assertEqual(res_no_q.returncode, 1)
         self.assertIn("Error: Missing queue name.", res_no_q.stderr)
 
-        res_no_work_q = self.run_locutus(["work"])
+        res_no_work_q = self.run_rhizo(["work"])
         self.assertEqual(res_no_work_q.returncode, 1)
         self.assertIn("Error: Missing queue name.", res_no_work_q.stderr)
 
@@ -1745,7 +1745,7 @@ secret = "my_inline_secret_test_555"
             for i in range(1, 6):
                 subj = f"Render Frame {i * 10}"
                 bdy = f"blender -b project.blend -f {i * 10} --output /tmp/frame_{i}.png"
-                res_enq = self.run_locutus([
+                res_enq = self.run_rhizo([
                     "enqueue", qname,
                     "--subject", subj,
                     "--body", bdy,
@@ -1766,11 +1766,11 @@ secret = "my_inline_secret_test_555"
 
             # 5. Consume tasks one by one and assert strict FIFO ordering
             for idx, (exp_id, exp_subj, exp_bdy) in enumerate(enqueued_tasks, start=1):
-                res_work = self.run_locutus(["work", qname, "5"])
+                res_work = self.run_rhizo(["work", qname, "5"])
                 self.assertEqual(res_work.returncode, 0)
 
                 # Validate wire envelope schema
-                env = LocutusPlugin.validate_wire_envelope(res_work.stdout.strip())
+                env = RhizoPlugin.validate_wire_envelope(res_work.stdout.strip())
                 self.assertEqual(env["id"], exp_id)
                 self.assertEqual(env["from"], "scheduler_agent")
                 self.assertEqual(env["to"], f"queue:{qname}")
@@ -1778,7 +1778,7 @@ secret = "my_inline_secret_test_555"
                 self.assertEqual(env["body"], exp_bdy)
 
                 # Validate Pydantic schema
-                msg = LocutusMessage.model_validate_json(res_work.stdout)
+                msg = RhizoMessage.model_validate_json(res_work.stdout)
                 self.assertEqual(msg.id, exp_id)
                 self.assertEqual(msg.from_agent, "scheduler_agent")
                 self.assertEqual(msg.to_agent, f"queue:{qname}")
@@ -1794,7 +1794,7 @@ secret = "my_inline_secret_test_555"
 
             # 6. Negative control: Work on empty queue with 1s timeout returns empty stdout in ~1s
             start_t = time.time()
-            res_empty = self.run_locutus(["work", qname, "1"])
+            res_empty = self.run_rhizo(["work", qname, "1"])
             elapsed = time.time() - start_t
             self.assertEqual(res_empty.returncode, 0)
             self.assertEqual(res_empty.stdout.strip(), "")
@@ -1803,34 +1803,34 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", qkey], check=True, capture_output=True)
 
     def test_29_synchronous_request_rpc(self):
-        """Test synchronous RPC 'locutus request': correlation matching, ephemeral queue deletion, raw mode, and timeout negative control."""
+        """Test synchronous RPC 'rhizo request': correlation matching, ephemeral queue deletion, raw mode, and timeout negative control."""
         # 1. Argument validation negative controls
-        res_missing_all = self.run_locutus(["request"])
+        res_missing_all = self.run_rhizo(["request"])
         self.assertEqual(res_missing_all.returncode, 1)
         self.assertIn("Error: Missing required arguments. --to, --subject, and --body are required.", res_missing_all.stderr)
 
-        res_missing_body = self.run_locutus(["request", "--to", "some_agent", "--subject", "Hello"])
+        res_missing_body = self.run_rhizo(["request", "--to", "some_agent", "--subject", "Hello"])
         self.assertEqual(res_missing_body.returncode, 1)
         self.assertIn("Error: Missing required arguments.", res_missing_body.stderr)
 
         ts = int(time.time() * 1000)
         server_agent = f"rpc_srv_{ts}"
         client_agent = f"rpc_cli_{ts}"
-        self.run_locutus(["close", server_agent])
-        self.run_locutus(["open", server_agent, "rpc"])
+        self.run_rhizo(["close", server_agent])
+        self.run_rhizo(["open", server_agent, "rpc"])
 
         try:
             captured_reply_to = []
 
             def server_loop():
-                req_res = self.run_locutus(["listen", server_agent, "15"])
+                req_res = self.run_rhizo(["listen", server_agent, "15"])
                 if req_res.returncode == 0 and req_res.stdout.strip() not in ["", "(nil)"]:
-                    data = LocutusPlugin.validate_wire_envelope(req_res.stdout.strip())
+                    data = RhizoPlugin.validate_wire_envelope(req_res.stdout.strip())
                     reply_to = data.get("reply_to")
                     # Assert strict correlation ID matching: reply_to must equal 'reply:' + request_id
                     assert reply_to == f"reply:{data['id']}", f"Correlation failure: reply_to {reply_to} != reply:{data['id']}"
                     captured_reply_to.append(reply_to)
-                    self.run_locutus([
+                    self.run_rhizo([
                         "--agent-name=" + server_agent,
                         "send",
                         "--to", reply_to,
@@ -1844,7 +1844,7 @@ secret = "my_inline_secret_test_555"
             t.start()
             time.sleep(0.5)
 
-            res_req = self.run_locutus([
+            res_req = self.run_rhizo([
                 f"--agent-name={client_agent}",
                 "request",
                 "--to", server_agent,
@@ -1855,8 +1855,8 @@ secret = "my_inline_secret_test_555"
             t.join(timeout=20)
 
             self.assertEqual(res_req.returncode, 0)
-            LocutusPlugin.validate_wire_envelope(res_req.stdout.strip())
-            reply_msg = LocutusMessage.model_validate_json(res_req.stdout)
+            RhizoPlugin.validate_wire_envelope(res_req.stdout.strip())
+            reply_msg = RhizoMessage.model_validate_json(res_req.stdout)
             self.assertEqual(reply_msg.body, "answer:42")
             self.assertEqual(reply_msg.subject, "RPC Result")
 
@@ -1874,7 +1874,7 @@ secret = "my_inline_secret_test_555"
             t2.start()
             time.sleep(0.5)
 
-            res_raw = self.run_locutus([
+            res_raw = self.run_rhizo([
                 f"--agent-name={client_agent}",
                 "request",
                 "--to", server_agent,
@@ -1890,7 +1890,7 @@ secret = "my_inline_secret_test_555"
 
             # 5. Negative control: Timeout when server does not respond
             start_to = time.time()
-            res_timeout = self.run_locutus([
+            res_timeout = self.run_rhizo([
                 f"--agent-name={client_agent}",
                 "request",
                 "--to", server_agent,
@@ -1903,20 +1903,20 @@ secret = "my_inline_secret_test_555"
             self.assertIn(f"Error: Request timed out waiting for reply from {server_agent}", res_timeout.stderr)
             self.assertTrue(0.8 <= elapsed_to <= 3.0)
         finally:
-            self.run_locutus(["close", server_agent])
+            self.run_rhizo(["close", server_agent])
 
     def test_30_ephemeral_pub_sub(self):
-        """Test ephemeral streaming with 'locutus pub' and 'locutus sub': argument validation, live receipt, and late-subscriber non-persistence."""
+        """Test ephemeral streaming with 'rhizo pub' and 'rhizo sub': argument validation, live receipt, and late-subscriber non-persistence."""
         # 1. Negative controls: argument validation
-        res_pub_missing = self.run_locutus(["pub"])
+        res_pub_missing = self.run_rhizo(["pub"])
         self.assertEqual(res_pub_missing.returncode, 1)
         self.assertIn("Error: Missing arguments for pub command.", res_pub_missing.stderr)
-        self.assertTrue("Usage: rhizo pub <channel> <message>" in res_pub_missing.stderr or "Usage: locutus pub <channel> <message>" in res_pub_missing.stderr)
+        self.assertTrue("Usage: rhizo pub <channel> <message>" in res_pub_missing.stderr)
 
-        res_sub_missing = self.run_locutus(["sub"])
+        res_sub_missing = self.run_rhizo(["sub"])
         self.assertEqual(res_sub_missing.returncode, 1)
         self.assertIn("Error: Missing channel name for sub command.", res_sub_missing.stderr)
-        self.assertTrue("Usage: rhizo sub <channel> [timeout_sec]" in res_sub_missing.stderr or "Usage: locutus sub <channel> [timeout_sec]" in res_sub_missing.stderr)
+        self.assertTrue("Usage: rhizo sub <channel> [timeout_sec]" in res_sub_missing.stderr)
 
         channel = f"telemetry_{int(time.time() * 1000)}"
         message = "METRIC:cpu_temp=48C"
@@ -1924,7 +1924,7 @@ secret = "my_inline_secret_test_555"
         # 2. Live subscriber receives message in real-time
         received = []
         def sub_worker():
-            res_sub = self.run_locutus(["sub", channel, "5"])
+            res_sub = self.run_rhizo(["sub", channel, "5"])
             if res_sub.returncode == 0:
                 received.append(res_sub.stdout.strip())
 
@@ -1932,7 +1932,7 @@ secret = "my_inline_secret_test_555"
         t.start()
         time.sleep(0.4)
 
-        res_pub = self.run_locutus(["pub", channel, message])
+        res_pub = self.run_rhizo(["pub", channel, message])
         self.assertEqual(res_pub.returncode, 0)
         t.join(timeout=6)
 
@@ -1941,12 +1941,12 @@ secret = "my_inline_secret_test_555"
 
         # 3. Non-persistence semantics: Late subscriber receives 0 messages
         # Publish message when no subscriber is active
-        res_pub_ghost = self.run_locutus(["pub", channel, "GHOST_METRIC:unheard=99"])
+        res_pub_ghost = self.run_rhizo(["pub", channel, "GHOST_METRIC:unheard=99"])
         self.assertEqual(res_pub_ghost.returncode, 0)
 
         # Late subscriber arrives after publication
         start_late = time.time()
-        res_late = self.run_locutus(["sub", channel, "1"])
+        res_late = self.run_rhizo(["sub", channel, "1"])
         elapsed_late = time.time() - start_late
         self.assertEqual(res_late.returncode, 0)
         self.assertEqual(res_late.stdout.strip(), "", "Late subscriber must receive 0 past messages (non-persistence guarantee)")
@@ -1954,21 +1954,21 @@ secret = "my_inline_secret_test_555"
 
         # 4. Silent channel timeout verification
         start_silent = time.time()
-        res_silent = self.run_locutus(["sub", f"silent_{int(time.time()*1000)}", "1"])
+        res_silent = self.run_rhizo(["sub", f"silent_{int(time.time()*1000)}", "1"])
         elapsed_silent = time.time() - start_silent
         self.assertEqual(res_silent.returncode, 0)
         self.assertEqual(res_silent.stdout.strip(), "")
         self.assertTrue(0.8 <= elapsed_silent <= 2.5)
 
     def test_31_who_flags_and_json(self):
-        """Test 'locutus who' supports -a, --all, and --json output with full schema validation and tag filtering."""
+        """Test 'rhizo who' supports -a, --all, and --json output with full schema validation and tag filtering."""
         agent = "who_test_bot"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "backend,testgroup"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "backend,testgroup"])
 
         try:
             # 1. Test -a flag (table output formatting)
-            res_a = self.run_locutus(["who", "-a"])
+            res_a = self.run_rhizo(["who", "-a"])
             self.assertEqual(res_a.returncode, 0)
             self.assertIn("AGENT", res_a.stdout)
             self.assertIn("STATUS", res_a.stdout)
@@ -1979,14 +1979,14 @@ secret = "my_inline_secret_test_555"
             self.assertIn("ACTIVE", res_a.stdout)
 
             # 2. Test --all flag
-            res_all = self.run_locutus(["who", "--all"])
+            res_all = self.run_rhizo(["who", "--all"])
             self.assertEqual(res_all.returncode, 0)
             self.assertIn(agent, res_all.stdout)
 
             # 3. Test --json flag with complete schema validation
-            res_json = self.run_locutus(["who", "--json", "-a"])
+            res_json = self.run_rhizo(["who", "--json", "-a"])
             self.assertEqual(res_json.returncode, 0)
-            agents = LocutusPlugin.validate_json_schema("directory", res_json.stdout)
+            agents = RhizoPlugin.validate_json_schema("directory", res_json.stdout)
             self.assertIsInstance(agents, list)
 
             # Validate structural integrity of every agent entry in the directory
@@ -2009,48 +2009,48 @@ secret = "my_inline_secret_test_555"
             self.assertIn("testgroup", match[0]["tags"])
 
             # 4. Tag filtering via who <tag> --json
-            res_filtered = self.run_locutus(["who", "backend", "--json"])
+            res_filtered = self.run_rhizo(["who", "backend", "--json"])
             self.assertEqual(res_filtered.returncode, 0)
-            filtered_agents = LocutusPlugin.validate_json_schema("directory", res_filtered.stdout)
+            filtered_agents = RhizoPlugin.validate_json_schema("directory", res_filtered.stdout)
             match_filtered = [a for a in filtered_agents if a["agent"] == agent]
             self.assertEqual(len(match_filtered), 1)
 
             # 5. Negative control: Non-matching tag returns empty list
-            res_empty_tag = self.run_locutus(["who", "nonexistent_tag_xyz999", "--json"])
+            res_empty_tag = self.run_rhizo(["who", "nonexistent_tag_xyz999", "--json"])
             self.assertEqual(res_empty_tag.returncode, 0)
-            empty_agents = LocutusPlugin.validate_json_schema("directory", res_empty_tag.stdout)
+            empty_agents = RhizoPlugin.validate_json_schema("directory", res_empty_tag.stdout)
             self.assertEqual(empty_agents, [])
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
 
     def test_32_listen_auto_registers_in_directory(self):
         """Test that listening with an agent name auto-registers it in the active directory and renews heartbeats."""
         agent = "auto_listener_bot"
-        self.run_locutus(["close", agent])
+        self.run_rhizo(["close", agent])
 
         try:
             # 1. Send a message to the agent while it is offline
-            res_send = self.run_locutus([
+            res_send = self.run_rhizo([
                 "send", "--from", "sender_bot", "--to", agent, "--subject", "Wake", "--body", "Wakeup"
             ])
             self.assertEqual(res_send.returncode, 0)
 
             # 2. Agent listens for 1 second (consuming the message)
-            res_listen = self.run_locutus(["listen", agent, "1"])
+            res_listen = self.run_rhizo(["listen", agent, "1"])
             self.assertEqual(res_listen.returncode, 0)
 
             # Wire envelope and Pydantic validation
             parsed_msg = json.loads(res_listen.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(parsed_msg)
-            msg_obj = LocutusMessage.model_validate(parsed_msg)
+            RhizoPlugin.validate_wire_envelope(parsed_msg)
+            msg_obj = RhizoMessage.model_validate(parsed_msg)
             self.assertEqual(msg_obj.to_agent, agent)
             self.assertEqual(msg_obj.subject, "Wake")
             self.assertEqual(msg_obj.body, "Wakeup")
 
-            # 3. Verify agent is immediately visible as ACTIVE in locutus who with valid directory schema
-            res_who = self.run_locutus(["who", "-a", "--json"])
+            # 3. Verify agent is immediately visible as ACTIVE in rhizo who with valid directory schema
+            res_who = self.run_rhizo(["who", "-a", "--json"])
             self.assertEqual(res_who.returncode, 0)
-            agents = LocutusPlugin.validate_json_schema("directory", res_who.stdout)
+            agents = RhizoPlugin.validate_json_schema("directory", res_who.stdout)
             match = [a for a in agents if a["agent"] == agent]
             self.assertEqual(len(match), 1, f"Expected {agent} to be registered in who output")
             self.assertEqual(match[0]["status"], "ACTIVE")
@@ -2071,7 +2071,7 @@ secret = "my_inline_secret_test_555"
             # 4. Extended listen heartbeat renewal verification
             renew_agent = f"renew_bot_{int(time.time() * 1000)}"
             renew_hb_key = f"{TEST_PREFIX}heartbeat:{renew_agent}"
-            self.run_locutus(["close", renew_agent])
+            self.run_rhizo(["close", renew_agent])
 
             with tempfile.TemporaryDirectory() as hb_tmp:
                 hb_cfg_path = os.path.join(hb_tmp, "heartbeat.toml")
@@ -2130,7 +2130,7 @@ secret = "my_inline_secret_test_555"
                     if p.poll() is None:
                         p.kill()
                         p.wait()
-                    self.run_locutus(["close", renew_agent])
+                    self.run_rhizo(["close", renew_agent])
                     chk_renew_del = subprocess.run(
                         ["redis-cli", "-u", REDIS_URL, "EXISTS", renew_hb_key],
                         capture_output=True, text=True, check=True
@@ -2138,13 +2138,13 @@ secret = "my_inline_secret_test_555"
                     self.assertEqual(chk_renew_del.stdout.strip(), "0")
 
             # 5. Negative control: unregistered agent does not appear in active who directory
-            res_who_active = self.run_locutus(["who", "--json"])
+            res_who_active = self.run_rhizo(["who", "--json"])
             self.assertEqual(res_who_active.returncode, 0)
-            active_agents = LocutusPlugin.validate_json_schema("directory", res_who_active.stdout)
+            active_agents = RhizoPlugin.validate_json_schema("directory", res_who_active.stdout)
             match_fake = [a for a in active_agents if a["agent"] == "nonexistent_fake_agent_999"]
             self.assertEqual(match_fake, [])
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
             chk_del = subprocess.run(
                 ["redis-cli", "-u", REDIS_URL, "EXISTS", f"{TEST_PREFIX}heartbeat:{agent}"],
                 capture_output=True, text=True, check=True
@@ -2152,71 +2152,71 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(chk_del.stdout.strip(), "0")
 
     def test_33_multi_agent_workspace_and_env_isolation(self):
-        """Test that agent identity, RHIZO_AGENT_NAME, and project namespaces isolate agents (and .locutus.agent is never created in workspaces)."""
-        tmp1 = tempfile.mkdtemp(prefix="locutus_ws1_")
-        tmp2 = tempfile.mkdtemp(prefix="locutus_ws2_")
-        proj1 = tempfile.mkdtemp(prefix="locutus_proj1_")
-        proj2 = tempfile.mkdtemp(prefix="locutus_proj2_")
+        """Test that agent identity, RHIZO_AGENT_NAME, and project namespaces isolate agents (and .rhizo.agent is never created in workspaces)."""
+        tmp1 = tempfile.mkdtemp(prefix="rhizo_ws1_")
+        tmp2 = tempfile.mkdtemp(prefix="rhizo_ws2_")
+        proj1 = tempfile.mkdtemp(prefix="rhizo_proj1_")
+        proj2 = tempfile.mkdtemp(prefix="rhizo_proj2_")
 
         try:
             # 1. Open agent 1 with session ID 1 in directory 1
-            res1 = self.run_locutus(["open", "agent_one_ws", "teamA", "--session-id", "opencode:ses_ws1"], cwd=tmp1)
+            res1 = self.run_rhizo(["open", "agent_one_ws", "teamA", "--session-id", "opencode:ses_ws1"], cwd=tmp1)
             self.assertEqual(res1.returncode, 0)
-            agent_file1 = os.path.join(tmp1, ".locutus.agent")
-            self.assertFalse(os.path.isfile(agent_file1), ".locutus.agent must not be created in directory 1")
+            agent_file1 = os.path.join(tmp1, ".rhizo.agent")
+            self.assertFalse(os.path.isfile(agent_file1), ".rhizo.agent must not be created in directory 1")
 
             # 2. Open agent 2 with session ID 2 in directory 2
-            res2 = self.run_locutus(["open", "agent_two_ws", "teamB", "--session-id", "opencode:ses_ws2"], cwd=tmp2)
+            res2 = self.run_rhizo(["open", "agent_two_ws", "teamB", "--session-id", "opencode:ses_ws2"], cwd=tmp2)
             self.assertEqual(res2.returncode, 0)
-            agent_file2 = os.path.join(tmp2, ".locutus.agent")
-            self.assertFalse(os.path.isfile(agent_file2), ".locutus.agent must not be created in directory 2")
+            agent_file2 = os.path.join(tmp2, ".rhizo.agent")
+            self.assertFalse(os.path.isfile(agent_file2), ".rhizo.agent must not be created in directory 2")
 
             # 3. Negative control: Send message ONLY to agent_two_ws
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--from", "sender_bot", "--to", "agent_two_ws",
                 "--subject", "Dir2Only", "--body", "PayloadTwo"
             ])
 
             # In dir1, listen with session 1: MUST NOT receive agent_two_ws message
-            listen_iso = self.run_locutus(["listen", "1", "--session-id", "opencode:ses_ws1"], cwd=tmp1)
+            listen_iso = self.run_rhizo(["listen", "1", "--session-id", "opencode:ses_ws1"], cwd=tmp1)
             self.assertEqual(listen_iso.returncode, 0)
             self.assertEqual(listen_iso.stdout.strip(), "", "Session 1 must not consume Session 2 messages")
 
             # 4. In dir1, send message to agent_one_ws and consume it via session 1
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--from", "sender_bot", "--to", "agent_one_ws",
                 "--subject", "Dir1", "--body", "Payload1"
             ])
-            listen1 = self.run_locutus(["listen", "2", "--session-id", "opencode:ses_ws1"], cwd=tmp1)
+            listen1 = self.run_rhizo(["listen", "2", "--session-id", "opencode:ses_ws1"], cwd=tmp1)
             self.assertEqual(listen1.returncode, 0)
             data1 = json.loads(listen1.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(data1)
-            msg1 = LocutusMessage.model_validate(data1)
+            RhizoPlugin.validate_wire_envelope(data1)
+            msg1 = RhizoMessage.model_validate(data1)
             self.assertEqual(msg1.to_agent, "agent_one_ws")
             self.assertEqual(msg1.from_agent, "sender_bot")
             self.assertEqual(msg1.body, "Payload1")
 
             # 5. In dir2, consume the pending message for agent_two_ws via session 2
-            listen2 = self.run_locutus(["listen", "2", "--session-id", "opencode:ses_ws2"], cwd=tmp2)
+            listen2 = self.run_rhizo(["listen", "2", "--session-id", "opencode:ses_ws2"], cwd=tmp2)
             self.assertEqual(listen2.returncode, 0)
             data2 = json.loads(listen2.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(data2)
-            msg2 = LocutusMessage.model_validate(data2)
+            RhizoPlugin.validate_wire_envelope(data2)
+            msg2 = RhizoMessage.model_validate(data2)
             self.assertEqual(msg2.to_agent, "agent_two_ws")
             self.assertEqual(msg2.from_agent, "sender_bot")
             self.assertEqual(msg2.body, "PayloadTwo")
 
             # 6. RHIZO_AGENT_NAME env var overrides session mapping
             env_override = {"RHIZO_AGENT_NAME": "agent_override_env"}
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--from", "sender_bot", "--to", "agent_override_env",
                 "--subject", "Env", "--body", "EnvPayload"
             ])
-            listen_env = self.run_locutus(["listen", "2"], cwd=tmp1, env_overrides=env_override)
+            listen_env = self.run_rhizo(["listen", "2"], cwd=tmp1, env_overrides=env_override)
             self.assertEqual(listen_env.returncode, 0)
             data_env = json.loads(listen_env.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(data_env)
-            msg_env = LocutusMessage.model_validate(data_env)
+            RhizoPlugin.validate_wire_envelope(data_env)
+            msg_env = RhizoMessage.model_validate(data_env)
             self.assertEqual(msg_env.to_agent, "agent_override_env")
             self.assertEqual(msg_env.body, "EnvPayload")
 
@@ -2227,22 +2227,22 @@ secret = "my_inline_secret_test_555"
                 f.write(f'redis_url = "{REDIS_URL}"\nprefix = "{TEST_PREFIX}"\nproject = "projBeta"\n')
 
             no_env_proj = {"RHIZO_PROJECT": "", "RHIZO_PROJECT": ""}
-            self.run_locutus(["open", "alpha_bot", "worker"], cwd=proj1, env_overrides=no_env_proj)
-            self.run_locutus(["open", "beta_bot", "worker"], cwd=proj2, env_overrides=no_env_proj)
+            self.run_rhizo(["open", "alpha_bot", "worker"], cwd=proj1, env_overrides=no_env_proj)
+            self.run_rhizo(["open", "beta_bot", "worker"], cwd=proj2, env_overrides=no_env_proj)
 
-            # In proj1, 'locutus who --json' filters by projAlpha
-            who1 = self.run_locutus(["who", "--json"], cwd=proj1, env_overrides=no_env_proj)
+            # In proj1, 'rhizo who --json' filters by projAlpha
+            who1 = self.run_rhizo(["who", "--json"], cwd=proj1, env_overrides=no_env_proj)
             self.assertEqual(who1.returncode, 0)
-            agents1 = LocutusPlugin.validate_json_schema("directory", who1.stdout)
+            agents1 = RhizoPlugin.validate_json_schema("directory", who1.stdout)
             match1_alpha = [a for a in agents1 if a["agent"] == "alpha_bot"]
             match1_beta = [a for a in agents1 if a["agent"] == "beta_bot"]
             self.assertEqual(len(match1_alpha), 1, "alpha_bot must appear in projAlpha who directory")
             self.assertEqual(len(match1_beta), 0, "beta_bot must NOT leak into projAlpha who directory")
 
-            # In proj2, 'locutus who --json' filters by projBeta
-            who2 = self.run_locutus(["who", "--json"], cwd=proj2, env_overrides=no_env_proj)
+            # In proj2, 'rhizo who --json' filters by projBeta
+            who2 = self.run_rhizo(["who", "--json"], cwd=proj2, env_overrides=no_env_proj)
             self.assertEqual(who2.returncode, 0)
-            agents2 = LocutusPlugin.validate_json_schema("directory", who2.stdout)
+            agents2 = RhizoPlugin.validate_json_schema("directory", who2.stdout)
             match2_beta = [a for a in agents2 if a["agent"] == "beta_bot"]
             match2_alpha = [a for a in agents2 if a["agent"] == "alpha_bot"]
             self.assertEqual(len(match2_beta), 1, "beta_bot must appear in projBeta who directory")
@@ -2253,15 +2253,15 @@ secret = "my_inline_secret_test_555"
             shutil.rmtree(tmp2, ignore_errors=True)
             shutil.rmtree(proj1, ignore_errors=True)
             shutil.rmtree(proj2, ignore_errors=True)
-            self.run_locutus(["close", "agent_one_ws"])
-            self.run_locutus(["close", "agent_two_ws"])
-            self.run_locutus(["close", "agent_override_env"])
-            self.run_locutus(["close", "alpha_bot"])
-            self.run_locutus(["close", "beta_bot"])
+            self.run_rhizo(["close", "agent_one_ws"])
+            self.run_rhizo(["close", "agent_two_ws"])
+            self.run_rhizo(["close", "agent_override_env"])
+            self.run_rhizo(["close", "alpha_bot"])
+            self.run_rhizo(["close", "beta_bot"])
 
     def test_34_listen_requires_agent_identity(self):
-        """Test that calling 'locutus listen' without an agent name or configured identity fails fast with exact error."""
-        clean_dir = tempfile.mkdtemp(prefix="locutus_clean_ws_")
+        """Test that calling 'rhizo listen' without an agent name or configured identity fails fast with exact error."""
+        clean_dir = tempfile.mkdtemp(prefix="rhizo_clean_ws_")
         clean_env = {
             "RHIZO_AGENT_NAME": "",
             "RHIZO_AGENT_NAME": "",
@@ -2273,54 +2273,53 @@ secret = "my_inline_secret_test_555"
         }
         def _assert_listen_err(stderr_out):
             self.assertTrue(
-                "Error: No agent name specified. Run 'rhizo open <name>'" in stderr_out or
-                "Error: No agent name specified. Run 'locutus open <name>'" in stderr_out,
+                "Error: No agent name specified. Run 'rhizo open <name>'" in stderr_out,
                 f"Unexpected stderr: {stderr_out}"
             )
 
         try:
-            # 1. No arguments: 'locutus listen'
-            res_bare = self.run_locutus(["listen"], cwd=clean_dir, env_overrides=clean_env)
+            # 1. No arguments: 'rhizo listen'
+            res_bare = self.run_rhizo(["listen"], cwd=clean_dir, env_overrides=clean_env)
             self.assertEqual(res_bare.returncode, 1)
             self.assertEqual(res_bare.stdout, "")
             _assert_listen_err(res_bare.stderr.strip())
 
-            # 2. Timeout argument only: 'locutus listen 1'
-            res_timeout = self.run_locutus(["listen", "1"], cwd=clean_dir, env_overrides=clean_env)
+            # 2. Timeout argument only: 'rhizo listen 1'
+            res_timeout = self.run_rhizo(["listen", "1"], cwd=clean_dir, env_overrides=clean_env)
             self.assertEqual(res_timeout.returncode, 1)
             self.assertEqual(res_timeout.stdout, "")
             _assert_listen_err(res_timeout.stderr.strip())
 
-            # 3. Flag argument only: 'locutus listen --force'
-            res_flag = self.run_locutus(["listen", "--force"], cwd=clean_dir, env_overrides=clean_env)
+            # 3. Flag argument only: 'rhizo listen --force'
+            res_flag = self.run_rhizo(["listen", "--force"], cwd=clean_dir, env_overrides=clean_env)
             self.assertEqual(res_flag.returncode, 1)
             self.assertEqual(res_flag.stdout, "")
             _assert_listen_err(res_flag.stderr.strip())
 
-            # 4. Flag and timeout argument: 'locutus listen -f 1'
-            res_flag_to = self.run_locutus(["listen", "-f", "1"], cwd=clean_dir, env_overrides=clean_env)
+            # 4. Flag and timeout argument: 'rhizo listen -f 1'
+            res_flag_to = self.run_rhizo(["listen", "-f", "1"], cwd=clean_dir, env_overrides=clean_env)
             self.assertEqual(res_flag_to.returncode, 1)
             self.assertEqual(res_flag_to.stdout, "")
             _assert_listen_err(res_flag_to.stderr.strip())
 
             # 5. Positive control: Providing explicit name succeeds (silent timeout exit 0)
-            res_named = self.run_locutus(["listen", "explicit_probe_bot", "1"], cwd=clean_dir, env_overrides=clean_env)
+            res_named = self.run_rhizo(["listen", "explicit_probe_bot", "1"], cwd=clean_dir, env_overrides=clean_env)
             self.assertEqual(res_named.returncode, 0)
             self.assertEqual(res_named.stdout.strip(), "")
-            self.run_locutus(["close", "explicit_probe_bot"])
+            self.run_rhizo(["close", "explicit_probe_bot"])
 
             # 6. Positive control: Providing identity via RHIZO_AGENT_NAME succeeds
             env_with_name = {**clean_env, "RHIZO_AGENT_NAME": "env_probe_bot"}
-            res_env = self.run_locutus(["listen", "1"], cwd=clean_dir, env_overrides=env_with_name)
+            res_env = self.run_rhizo(["listen", "1"], cwd=clean_dir, env_overrides=env_with_name)
             self.assertEqual(res_env.returncode, 0)
             self.assertEqual(res_env.stdout.strip(), "")
-            self.run_locutus(["close", "env_probe_bot"])
+            self.run_rhizo(["close", "env_probe_bot"])
 
         finally:
             shutil.rmtree(clean_dir, ignore_errors=True)
 
     def test_35_version_flags(self):
-        """Test locutus --version, -v, and version subcommand output strict SemVer matching project files."""
+        """Test rhizo --version, -v, and version subcommand output strict SemVer matching project files."""
         # Read canonical version from pyproject.toml
         pyproject_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pyproject.toml")
         with open(pyproject_path, "r", encoding="utf-8") as f:
@@ -2330,11 +2329,11 @@ secret = "my_inline_secret_test_555"
         canonical_version = m_pyproject.group(1)
 
         # SemVer strict regex (major.minor.patch with optional pre-release / build metadata)
-        semver_pattern = r"^(?:rhizo|locutus)\s+(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$"
+        semver_pattern = r"^rhizo\s+(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$"
 
         # 1. Test all positive version invocations
         for flag in [["--version"], ["-v"], ["version"]]:
-            res = self.run_locutus(flag)
+            res = self.run_rhizo(flag)
             self.assertEqual(res.returncode, 0, f"Failed on flag: {flag}")
             self.assertEqual(res.stderr, "", f"Stderr must be empty on version flag: {flag}")
             out = res.stdout.strip()
@@ -2348,22 +2347,22 @@ secret = "my_inline_secret_test_555"
             self.assertGreaterEqual(patch, 0)
 
             # Assert exact match against pyproject.toml canonical version
-            self.assertTrue(out in [f"rhizo {canonical_version}", f"locutus {canonical_version}"])
+            self.assertTrue(out in [f"rhizo {canonical_version}"])
 
         # 2. Negative controls: invalid version variations
-        res_bad_flag = self.run_locutus(["--version-extra"])
+        res_bad_flag = self.run_rhizo(["--version-extra"])
         self.assertEqual(res_bad_flag.returncode, 1)
         self.assertIn("Unknown subcommand: --version-extra", res_bad_flag.stdout + res_bad_flag.stderr)
 
-        res_bad_case = self.run_locutus(["-V"])
+        res_bad_case = self.run_rhizo(["-V"])
         self.assertEqual(res_bad_case.returncode, 1)
         self.assertIn("Unknown subcommand: -v", res_bad_case.stdout + res_bad_case.stderr)
 
     def test_36_listen_default_blocks_silently(self):
-        """Test that 'locutus listen <agent>' with no timeout blocks silently and receives messages with 0 byte timeout guarantee."""
+        """Test that 'rhizo listen <agent>' with no timeout blocks silently and receives messages with 0 byte timeout guarantee."""
         agent = "silent_listener_bot"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "testing"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "testing"])
 
         received = []
         errors = []
@@ -2371,11 +2370,11 @@ secret = "my_inline_secret_test_555"
         def listener_worker():
             try:
                 # No timeout specified -> blocks indefinitely until message arrives
-                res = self.run_locutus(["listen", agent])
+                res = self.run_rhizo(["listen", agent])
                 if res.returncode == 0 and res.stdout.strip():
                     data = json.loads(res.stdout)
-                    LocutusPlugin.validate_wire_envelope(data)
-                    msg = LocutusMessage.model_validate(data)
+                    RhizoPlugin.validate_wire_envelope(data)
+                    msg = RhizoMessage.model_validate(data)
                     received.append(msg)
                 else:
                     errors.append(f"Unexpected listener exit: rc={res.returncode}, out='{res.stdout}', err='{res.stderr}'")
@@ -2394,7 +2393,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(len(received), 0)
 
             # Send a message to wake it up
-            res_send = self.run_locutus([
+            res_send = self.run_rhizo([
                 "send",
                 "--from", "sender_bot",
                 "--to", agent,
@@ -2413,7 +2412,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(received[0].from_agent, "sender_bot")
 
             # Test that explicit timeout on empty inbox returns strictly 0 bytes (zero-token exit)
-            res_empty = self.run_locutus(["listen", agent, "1"])
+            res_empty = self.run_rhizo(["listen", agent, "1"])
             self.assertEqual(res_empty.returncode, 0)
             self.assertEqual(
                 len(res_empty.stdout), 0,
@@ -2425,29 +2424,29 @@ secret = "my_inline_secret_test_555"
             )
 
             # Negative control: Message sent to another agent does not wake or leak into this agent
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--from", "sender_bot", "--to", "other_silent_bot",
                 "--subject", "Other Msg", "--body", "Do Not Deliver Here"
             ])
-            res_iso = self.run_locutus(["listen", agent, "1"])
+            res_iso = self.run_rhizo(["listen", agent, "1"])
             self.assertEqual(res_iso.returncode, 0)
             self.assertEqual(
                 len(res_iso.stdout), 0,
                 "Listener must not receive message destined for other_silent_bot"
             )
-            self.run_locutus(["close", "other_silent_bot"])
+            self.run_rhizo(["close", "other_silent_bot"])
 
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
 
     def test_37_send_with_listen_piggyback(self):
-        """Test 'locutus send ... --listen' sends to recipient and immediately blocks on sender's inbox in same PID."""
+        """Test 'rhizo send ... --listen' sends to recipient and immediately blocks on sender's inbox in same PID."""
         alice = "alice_piggyback"
         bob = "bob_piggyback"
-        self.run_locutus(["close", alice])
-        self.run_locutus(["close", bob])
-        self.run_locutus(["open", alice, "dev"])
-        self.run_locutus(["open", bob, "dev"])
+        self.run_rhizo(["close", alice])
+        self.run_rhizo(["close", bob])
+        self.run_rhizo(["open", alice, "dev"])
+        self.run_rhizo(["open", bob, "dev"])
 
         try:
             # 1. Start Alice process with send --listen
@@ -2492,18 +2491,18 @@ secret = "my_inline_secret_test_555"
             )
 
             # 2. Bob drains his inbox and verifies message
-            bob_drain = self.run_locutus(["drain", "1", bob])
+            bob_drain = self.run_rhizo(["drain", "1", bob])
             self.assertEqual(bob_drain.returncode, 0)
             bob_data = json.loads(bob_drain.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(bob_data)
-            bob_msg = LocutusMessage.model_validate(bob_data)
+            RhizoPlugin.validate_wire_envelope(bob_data)
+            bob_msg = RhizoMessage.model_validate(bob_data)
             self.assertEqual(bob_msg.from_agent, alice)
             self.assertEqual(bob_msg.to_agent, bob)
             self.assertEqual(bob_msg.subject, "Task for Bob")
             self.assertEqual(bob_msg.body, "Compute hash")
 
             # 3. Bob sends reply to Alice
-            bob_reply = self.run_locutus([
+            bob_reply = self.run_rhizo([
                 "send",
                 "--to", alice,
                 "--from", bob,
@@ -2519,15 +2518,15 @@ secret = "my_inline_secret_test_555"
 
             # Validate Alice stdout is clean wire envelope with reply payload
             data_a = json.loads(stdout_a.strip())
-            LocutusPlugin.validate_wire_envelope(data_a)
-            msg_a = LocutusMessage.model_validate(data_a)
+            RhizoPlugin.validate_wire_envelope(data_a)
+            msg_a = RhizoMessage.model_validate(data_a)
             self.assertEqual(msg_a.from_agent, bob)
             self.assertEqual(msg_a.to_agent, alice)
             self.assertEqual(msg_a.subject, "Re: Task for Bob")
             self.assertEqual(msg_a.body, "hash_result_abcdef")
             self.assertEqual(msg_a.type, "reply")
 
-            self.assertTrue("[RHIZO BUS] Message sent to bob_piggyback" in stderr_a or "[LOCUTUS BUS] Message sent to bob_piggyback" in stderr_a)
+            self.assertTrue("[RHIZO BUS] Message sent to bob_piggyback" in stderr_a)
 
             # Assert listener lock was cleanly deleted from Redis upon exit
             chk_lock_after = subprocess.run(
@@ -2537,7 +2536,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(chk_lock_after.stdout.strip(), "0", "Alice listener lock was not cleaned up on exit")
 
             # 4. Negative control: send --listen with timeout when no reply arrives exits 0 with 0 bytes stdout
-            res_to = self.run_locutus([
+            res_to = self.run_rhizo([
                 "--timeout", "1", "send",
                 "--to", bob,
                 "--from", alice,
@@ -2551,31 +2550,31 @@ secret = "my_inline_secret_test_555"
                 f"Expected 0 bytes on timeout, got: {res_to.stdout!r}"
             )
             # Drain bob's inbox so it doesn't linger
-            self.run_locutus(["drain", "1", bob])
+            self.run_rhizo(["drain", "1", bob])
 
         finally:
             if 'alice_proc' in locals() and alice_proc.poll() is None:
                 alice_proc.kill()
                 alice_proc.wait()
-            self.run_locutus(["close", alice])
-            self.run_locutus(["close", bob])
+            self.run_rhizo(["close", alice])
+            self.run_rhizo(["close", bob])
 
     def test_38_reply_command_with_listen(self):
-        """Test 'locutus reply ... --listen' sends type=reply with reply_to and blocks cleanly in same PID."""
+        """Test 'rhizo reply ... --listen' sends type=reply with reply_to and blocks cleanly in same PID."""
         carol = "carol_worker"
         dave = "dave_worker"
-        self.run_locutus(["close", carol])
-        self.run_locutus(["close", dave])
-        self.run_locutus(["open", carol, "team"])
-        self.run_locutus(["open", dave, "team"])
+        self.run_rhizo(["close", carol])
+        self.run_rhizo(["close", dave])
+        self.run_rhizo(["open", carol, "team"])
+        self.run_rhizo(["open", dave, "team"])
 
         try:
             # 1. Negative controls: missing required arguments on reply command
-            res_no_to = self.run_locutus(["reply", "--subject", "Subj", "--body", "Body"])
+            res_no_to = self.run_rhizo(["reply", "--subject", "Subj", "--body", "Body"])
             self.assertEqual(res_no_to.returncode, 1)
             self.assertIn("Error: Missing required argument '--to <recipient>'", res_no_to.stderr)
 
-            res_no_body = self.run_locutus(["reply", "--to", carol, "--subject", "Subj"])
+            res_no_body = self.run_rhizo(["reply", "--to", carol, "--subject", "Subj"])
             self.assertEqual(res_no_body.returncode, 1)
             self.assertIn("Error: Missing required arguments. --subject and --body are required.", res_no_body.stderr)
 
@@ -2621,11 +2620,11 @@ secret = "my_inline_secret_test_555"
             )
 
             # 3. Carol drains her inbox to verify reply structure
-            carol_drain = self.run_locutus(["drain", "1", carol])
+            carol_drain = self.run_rhizo(["drain", "1", carol])
             self.assertEqual(carol_drain.returncode, 0)
             rep_data = json.loads(carol_drain.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(rep_data)
-            rep_msg = LocutusMessage.model_validate(rep_data)
+            RhizoPlugin.validate_wire_envelope(rep_data)
+            rep_msg = RhizoMessage.model_validate(rep_data)
             self.assertEqual(rep_msg.type, "reply")
             self.assertEqual(rep_msg.reply_to, "req_msg_999")
             self.assertEqual(rep_msg.from_agent, dave)
@@ -2634,7 +2633,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(rep_msg.body, "Built successfully")
 
             # 4. Carol sends next instruction to Dave
-            carol_next = self.run_locutus([
+            carol_next = self.run_rhizo([
                 "send",
                 "--to", dave,
                 "--from", carol,
@@ -2649,8 +2648,8 @@ secret = "my_inline_secret_test_555"
 
             # Dave's stdout must be clean JSON wire envelope
             next_data = json.loads(stdout_d.strip())
-            LocutusPlugin.validate_wire_envelope(next_data)
-            next_msg = LocutusMessage.model_validate(next_data)
+            RhizoPlugin.validate_wire_envelope(next_data)
+            next_msg = RhizoMessage.model_validate(next_data)
             self.assertEqual(next_msg.from_agent, carol)
             self.assertEqual(next_msg.to_agent, dave)
             self.assertEqual(next_msg.subject, "Next Task")
@@ -2664,7 +2663,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(chk_dave_lock.stdout.strip(), "0")
 
             # 5. Verify timeout mode on reply with --listen-timeout
-            timeout_res = self.run_locutus([
+            timeout_res = self.run_rhizo([
                 "reply",
                 "--to", carol,
                 "--from", dave,
@@ -2678,23 +2677,23 @@ secret = "my_inline_secret_test_555"
                 f"Expected strictly 0 bytes stdout on timeout, got: {timeout_res.stdout!r}"
             )
             # Drain carol's inbox
-            self.run_locutus(["drain", "1", carol])
+            self.run_rhizo(["drain", "1", carol])
 
         finally:
             if 'dave_proc' in locals() and dave_proc.poll() is None:
                 dave_proc.kill()
                 dave_proc.wait()
-            self.run_locutus(["close", carol])
-            self.run_locutus(["close", dave])
+            self.run_rhizo(["close", carol])
+            self.run_rhizo(["close", dave])
 
     def test_39_prevent_stacked_listeners_piggyback(self):
         """Verify that 'send --listen' detects an existing active listener, logs warning with exact PID, and skips without exit 1."""
         alice = "alice_stack_guard"
         bob = "bob_stack_guard"
-        self.run_locutus(["close", alice])
-        self.run_locutus(["close", bob])
-        self.run_locutus(["open", alice, "dev"])
-        self.run_locutus(["open", bob, "dev"])
+        self.run_rhizo(["close", alice])
+        self.run_rhizo(["close", bob])
+        self.run_rhizo(["open", alice, "dev"])
+        self.run_rhizo(["open", bob, "dev"])
 
         bob_lock_key = f"{TEST_PREFIX}listener:{bob}"
 
@@ -2730,7 +2729,7 @@ secret = "my_inline_secret_test_555"
 
             # 2. Second process: Bob calls send with --listen
             # Must detect existing active listener, log warning with orig_p.pid, and exit 0 immediately
-            send_res = self.run_locutus([
+            send_res = self.run_rhizo([
                 "send",
                 "--to", alice,
                 "--from", bob,
@@ -2751,18 +2750,18 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(lock_after.get("pid"), orig_p.pid, "Original lock PID was overwritten!")
 
             # 3. Alice drains message and validates payload
-            alice_drain = self.run_locutus(["drain", "1", alice])
+            alice_drain = self.run_rhizo(["drain", "1", alice])
             self.assertEqual(alice_drain.returncode, 0)
             a_data = json.loads(alice_drain.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(a_data)
-            a_msg = LocutusMessage.model_validate(a_data)
+            RhizoPlugin.validate_wire_envelope(a_data)
+            a_msg = RhizoMessage.model_validate(a_data)
             self.assertEqual(a_msg.from_agent, bob)
             self.assertEqual(a_msg.to_agent, alice)
             self.assertEqual(a_msg.subject, "Intermediate update")
             self.assertEqual(a_msg.body, "Processing chunk 1")
 
             # 4. Alice replies to Bob to unblock the original listener cleanly
-            self.run_locutus([
+            self.run_rhizo([
                 "send",
                 "--to", bob,
                 "--from", alice,
@@ -2773,8 +2772,8 @@ secret = "my_inline_secret_test_555"
             orig_stdout, orig_stderr = orig_p.communicate(timeout=5)
             self.assertEqual(orig_p.returncode, 0)
             bob_data = json.loads(orig_stdout.strip())
-            LocutusPlugin.validate_wire_envelope(bob_data)
-            bob_msg = LocutusMessage.model_validate(bob_data)
+            RhizoPlugin.validate_wire_envelope(bob_data)
+            bob_msg = RhizoMessage.model_validate(bob_data)
             self.assertEqual(bob_msg.from_agent, alice)
             self.assertEqual(bob_msg.to_agent, bob)
             self.assertEqual(bob_msg.subject, "Ack update")
@@ -2791,14 +2790,14 @@ secret = "my_inline_secret_test_555"
             if orig_p.poll() is None:
                 orig_p.kill()
                 orig_p.wait()
-            self.run_locutus(["close", alice])
-            self.run_locutus(["close", bob])
+            self.run_rhizo(["close", alice])
+            self.run_rhizo(["close", bob])
 
     def test_40_standalone_listen_rejects_duplicate(self):
-        """Verify that running 'locutus listen' when one is already active fails with code 1, preserves lock, unless --force is used."""
+        """Verify that running 'rhizo listen' when one is already active fails with code 1, preserves lock, unless --force is used."""
         carol = "carol_dup_test"
-        self.run_locutus(["close", carol])
-        self.run_locutus(["open", carol, "dev"])
+        self.run_rhizo(["close", carol])
+        self.run_rhizo(["open", carol, "dev"])
 
         carol_lock_key = f"{TEST_PREFIX}listener:{carol}"
 
@@ -2834,7 +2833,7 @@ secret = "my_inline_secret_test_555"
 
             # 2. Attempt duplicate standalone listen without --force
             # Must exit with code 1, empty stdout, and exact error containing original PID
-            dup_res = self.run_locutus(["listen", carol, "2"])
+            dup_res = self.run_rhizo(["listen", carol, "2"])
             self.assertEqual(dup_res.returncode, 1)
             self.assertEqual(dup_res.stdout, "", "Duplicate listener must produce 0 bytes stdout")
             self.assertIn(
@@ -2852,7 +2851,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(lock_after, lock_orig, "Redis listener lock was mutated by duplicate listen attempt")
 
             # 4. Standalone listen WITH --force bypasses the guard
-            force_res = self.run_locutus(["listen", carol, "1", "--force"])
+            force_res = self.run_rhizo(["listen", carol, "1", "--force"])
             self.assertEqual(force_res.returncode, 0)
             self.assertEqual(force_res.stdout.strip(), "")
 
@@ -2864,13 +2863,13 @@ secret = "my_inline_secret_test_555"
                 except subprocess.TimeoutExpired:
                     orig_p.kill()
                     orig_p.wait()
-            self.run_locutus(["close", carol])
+            self.run_rhizo(["close", carol])
 
     def test_41_stale_listener_self_healing(self):
         """Verify that a stale listener lock with a dead local PID is self-healed, while living local PID and remote locks are preserved."""
         dave = "dave_stale_test"
-        self.run_locutus(["close", dave])
-        self.run_locutus(["open", dave, "dev"])
+        self.run_rhizo(["close", dave])
+        self.run_rhizo(["open", dave, "dev"])
 
         import socket
         host = socket.gethostname()
@@ -2884,7 +2883,7 @@ secret = "my_inline_secret_test_555"
                 capture_output=True, check=True
             )
 
-            res = self.run_locutus(["listen", dave, "1"])
+            res = self.run_rhizo(["listen", dave, "1"])
             self.assertEqual(res.returncode, 0)
             self.assertEqual(res.stdout.strip(), "")
 
@@ -2903,7 +2902,7 @@ secret = "my_inline_secret_test_555"
                 capture_output=True, check=True
             )
 
-            res_live = self.run_locutus(["listen", dave, "1"])
+            res_live = self.run_rhizo(["listen", dave, "1"])
             self.assertEqual(res_live.returncode, 1, "Listener must NOT overwrite a living local PID")
             self.assertIn(f"Listener already active for agent '{dave}' (PID {my_pid} on {host})", res_live.stderr)
             self.assertIn("Refusing to start duplicate listener.", res_live.stderr)
@@ -2923,7 +2922,7 @@ secret = "my_inline_secret_test_555"
                 capture_output=True, check=True
             )
 
-            res_remote = self.run_locutus(["listen", dave, "1"])
+            res_remote = self.run_rhizo(["listen", dave, "1"])
             self.assertEqual(res_remote.returncode, 1, "Listener must NOT clear foreign host listener lock")
             self.assertIn(f"Listener already active for agent '{dave}' (PID 9999999 on {remote_host})", res_remote.stderr)
 
@@ -2935,14 +2934,14 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(json.loads(chk_remote.stdout.strip())["host"], remote_host)
 
         finally:
-            self.run_locutus(["close", dave])
+            self.run_rhizo(["close", dave])
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", lock_key], capture_output=True)
 
     def test_42_listener_exit_does_not_delete_foreign_lock(self):
         """Verify that an exiting listener does not delete a foreign/preempted lock, but cleans its own lock normally."""
         agent = "preempt_listener_test"
-        self.run_locutus(["close", agent])
-        self.run_locutus(["open", agent, "dev"])
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "dev"])
 
         import socket
         host = socket.gethostname()
@@ -3008,7 +3007,7 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", lock_key], capture_output=True, check=True)
 
             # Start listener with 1s timeout without foreign preemption
-            normal_res = self.run_locutus(["listen", agent, "1"])
+            normal_res = self.run_rhizo(["listen", agent, "1"])
             self.assertEqual(normal_res.returncode, 0)
             self.assertEqual(normal_res.stdout.strip(), "")
 
@@ -3023,15 +3022,15 @@ secret = "my_inline_secret_test_555"
             if orig_p.poll() is None:
                 orig_p.kill()
                 orig_p.wait()
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", lock_key], capture_output=True)
 
     def test_43_worker_heartbeat_renewal(self):
-        """Verify that 'locutus work' registers and refreshes worker heartbeat, and prunes after process termination."""
+        """Verify that 'rhizo work' registers and refreshes worker heartbeat, and prunes after process termination."""
         worker = "queue_worker_bot"
         queue = "long_wait_queue"
-        self.run_locutus(["close", worker])
-        self.run_locutus(["open", worker, "workers"])
+        self.run_rhizo(["close", worker])
+        self.run_rhizo(["open", worker, "workers"])
 
         hb_key = f"{TEST_PREFIX}heartbeat:{worker}"
 
@@ -3066,9 +3065,9 @@ secret = "my_inline_secret_test_555"
                     self.assertTrue(registered, f"Worker {worker} failed to register heartbeat in Redis")
 
                     # Verify worker is ACTIVE in who directory with valid directory schema
-                    res_who = self.run_locutus(["who", "-a", "--json"])
+                    res_who = self.run_rhizo(["who", "-a", "--json"])
                     self.assertEqual(res_who.returncode, 0)
-                    agents = LocutusPlugin.validate_json_schema("directory", res_who.stdout)
+                    agents = RhizoPlugin.validate_json_schema("directory", res_who.stdout)
                     match = [a for a in agents if a["agent"] == worker]
                     self.assertEqual(len(match), 1, f"Expected {worker} to be active in who output while working")
                     self.assertEqual(match[0]["status"], "ACTIVE")
@@ -3110,12 +3109,12 @@ secret = "my_inline_secret_test_555"
                     )
 
                     # Run sweep to clean up dead agent
-                    self.run_locutus(["sweep"])
+                    self.run_rhizo(["sweep"])
 
                     # Verify worker is no longer ACTIVE in who directory
-                    res_who_dead = self.run_locutus(["who", "--json"])
+                    res_who_dead = self.run_rhizo(["who", "--json"])
                     self.assertEqual(res_who_dead.returncode, 0)
-                    active_now = LocutusPlugin.validate_json_schema("directory", res_who_dead.stdout)
+                    active_now = RhizoPlugin.validate_json_schema("directory", res_who_dead.stdout)
                     match_dead = [a for a in active_now if a["agent"] == worker]
                     self.assertEqual(len(match_dead), 0, f"Dead worker {worker} should not be in active who directory")
 
@@ -3125,41 +3124,41 @@ secret = "my_inline_secret_test_555"
                         p.wait()
 
             # 3. Positive worker task execution: consume task and validate envelope
-            self.run_locutus(["open", worker, "workers"])
-            self.run_locutus(["enqueue", queue, "--subject", "Job 1", "--body", "Payload 1"])
+            self.run_rhizo(["open", worker, "workers"])
+            self.run_rhizo(["enqueue", queue, "--subject", "Job 1", "--body", "Payload 1"])
 
-            res_work = self.run_locutus(["work", queue, "2"], env_overrides={"RHIZO_AGENT_NAME": worker})
+            res_work = self.run_rhizo(["work", queue, "2"], env_overrides={"RHIZO_AGENT_NAME": worker})
             self.assertEqual(res_work.returncode, 0)
             data_work = json.loads(res_work.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(data_work)
-            msg_work = LocutusMessage.model_validate(data_work)
+            RhizoPlugin.validate_wire_envelope(data_work)
+            msg_work = RhizoMessage.model_validate(data_work)
             self.assertEqual(msg_work.subject, "Job 1")
             self.assertEqual(msg_work.body, "Payload 1")
 
         finally:
-            self.run_locutus(["close", worker])
+            self.run_rhizo(["close", worker])
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}queue:{queue}:items"], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", hb_key], capture_output=True)
 
     def test_44_scatter_gather_quorum(self):
-        """Test 'locutus scatter' with quorum aggregation, wire envelope validation, and ephemeral queue cleanup."""
+        """Test 'rhizo scatter' with quorum aggregation, wire envelope validation, and ephemeral queue cleanup."""
         w1 = "scatter_w1"
         w2 = "scatter_w2"
-        self.run_locutus(["close", w1])
-        self.run_locutus(["close", w2])
-        self.run_locutus(["open", w1, "scatter_team"])
-        self.run_locutus(["open", w2, "scatter_team"])
+        self.run_rhizo(["close", w1])
+        self.run_rhizo(["close", w2])
+        self.run_rhizo(["open", w1, "scatter_team"])
+        self.run_rhizo(["open", w2, "scatter_team"])
 
         captured_reply_queue = []
 
         try:
             # 1. Negative control: missing required arguments
-            res_bad = self.run_locutus(["scatter", "--subject", "No Targets", "--body", "Missing"])
+            res_bad = self.run_rhizo(["scatter", "--subject", "No Targets", "--body", "Missing"])
             self.assertEqual(res_bad.returncode, 1)
             self.assertIn("Error: Missing required arguments for scatter.", res_bad.stderr)
 
             # 2. Negative control: scatter to empty tag returns empty array without hang
-            res_empty_scatter = self.run_locutus([
+            res_empty_scatter = self.run_rhizo([
                 "scatter",
                 "--targets", "@nonexistent_scatter_tag_999",
                 "--subject", "Ghost",
@@ -3172,13 +3171,13 @@ secret = "my_inline_secret_test_555"
 
             # 3. Quorum scatter with distinct payload replies
             def worker_loop(w_name, vote_val):
-                res = self.run_locutus(["listen", w_name, "5"])
+                res = self.run_rhizo(["listen", w_name, "5"])
                 if res.returncode == 0 and res.stdout.strip():
                     data = json.loads(res.stdout.strip())
                     reply_to = data.get("reply_to")
                     if reply_to:
                         captured_reply_queue.append(reply_to)
-                        self.run_locutus([
+                        self.run_rhizo([
                             "--agent-name=" + w_name,
                             "reply",
                             "--to", data.get("from", "scatter_lead"),
@@ -3194,7 +3193,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(0.3)
 
             # Scatter by tag with quorum=2
-            res_scatter = self.run_locutus([
+            res_scatter = self.run_rhizo([
                 "--agent-name=scatter_lead",
                 "scatter",
                 "--targets", "@scatter_team",
@@ -3213,8 +3212,8 @@ secret = "my_inline_secret_test_555"
             # Wire envelope and Pydantic validation for each reply
             by_sender = {}
             for r in replies:
-                LocutusPlugin.validate_wire_envelope(r)
-                msg = LocutusMessage.model_validate(r)
+                RhizoPlugin.validate_wire_envelope(r)
+                msg = RhizoMessage.model_validate(r)
                 self.assertEqual(msg.type, "reply")
                 self.assertEqual(msg.subject, "Vote Response")
                 self.assertEqual(msg.to_agent, "scatter_lead")
@@ -3236,33 +3235,33 @@ secret = "my_inline_secret_test_555"
                 )
 
         finally:
-            self.run_locutus(["close", w1])
-            self.run_locutus(["close", w2])
+            self.run_rhizo(["close", w1])
+            self.run_rhizo(["close", w2])
 
     def test_45_scatter_explicit_targets_and_raw(self):
-        """Test 'locutus scatter' with explicit named targets and --raw mode, asserting target isolation."""
+        """Test 'rhizo scatter' with explicit named targets and --raw mode, asserting target isolation."""
         w1 = "scatter_raw_w1"
         w2 = "scatter_raw_w2"
         w_innocent = "scatter_raw_innocent"
-        self.run_locutus(["close", w1])
-        self.run_locutus(["close", w2])
-        self.run_locutus(["close", w_innocent])
-        self.run_locutus(["open", w1, "calc"])
-        self.run_locutus(["open", w2, "calc"])
-        self.run_locutus(["open", w_innocent, "calc"])
+        self.run_rhizo(["close", w1])
+        self.run_rhizo(["close", w2])
+        self.run_rhizo(["close", w_innocent])
+        self.run_rhizo(["open", w1, "calc"])
+        self.run_rhizo(["open", w2, "calc"])
+        self.run_rhizo(["open", w_innocent, "calc"])
 
         try:
             def worker_loop(w_name, res_val):
-                res = self.run_locutus(["listen", w_name, "5"])
+                res = self.run_rhizo(["listen", w_name, "5"])
                 if res.returncode == 0 and res.stdout.strip():
                     data = json.loads(res.stdout.strip())
-                    LocutusPlugin.validate_wire_envelope(data)
-                    msg = LocutusMessage.model_validate(data)
+                    RhizoPlugin.validate_wire_envelope(data)
+                    msg = RhizoMessage.model_validate(data)
                     self.assertEqual(msg.subject, "Compute")
                     self.assertEqual(msg.body, "Run calculation")
                     reply_to = data.get("reply_to")
                     if reply_to:
-                        self.run_locutus([
+                        self.run_rhizo([
                             "--agent-name=" + w_name,
                             "reply",
                             "--to", data.get("from", "calc_lead"),
@@ -3278,7 +3277,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(0.3)
 
             # Scatter with explicit comma-separated target list and --raw mode
-            res_scatter = self.run_locutus([
+            res_scatter = self.run_rhizo([
                 "--agent-name=calc_lead",
                 "scatter",
                 "--targets", f"{w1},{w2}",
@@ -3306,27 +3305,27 @@ secret = "my_inline_secret_test_555"
                 f"Non-targeted agent {w_innocent} received scatter task in inbox!"
             )
             # Listening on innocent worker returns 0 bytes
-            res_iso = self.run_locutus(["listen", w_innocent, "1"])
+            res_iso = self.run_rhizo(["listen", w_innocent, "1"])
             self.assertEqual(res_iso.returncode, 0)
             self.assertEqual(len(res_iso.stdout), 0, "Non-targeted agent received leaked message")
 
         finally:
-            self.run_locutus(["close", w1])
-            self.run_locutus(["close", w2])
-            self.run_locutus(["close", w_innocent])
+            self.run_rhizo(["close", w1])
+            self.run_rhizo(["close", w2])
+            self.run_rhizo(["close", w_innocent])
 
     def test_45b_scatter_quorum_clamping(self):
         """Test that scatter clamps quorum to delivered count when quorum > delivered."""
         w1 = f"clamp_w1_{int(time.time() * 1000)}"
-        self.run_locutus(["open", w1, "clamp_test"])
+        self.run_rhizo(["open", w1, "clamp_test"])
 
         def worker_loop():
-            res = self.run_locutus(["listen", w1, "5"])
+            res = self.run_rhizo(["listen", w1, "5"])
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 reply_to = data.get("reply_to")
                 if reply_to:
-                    self.run_locutus([
+                    self.run_rhizo([
                         "--agent-name=" + w1,
                         "reply",
                         "--to", data.get("from", "lead"),
@@ -3341,7 +3340,7 @@ secret = "my_inline_secret_test_555"
 
         # Scatter to single target w1, but request --quorum 10 and --timeout 6
         t_start = time.time()
-        res_scatter = self.run_locutus([
+        res_scatter = self.run_rhizo([
             "--agent-name=lead",
             "scatter",
             "--targets", w1,
@@ -3353,7 +3352,7 @@ secret = "my_inline_secret_test_555"
         ])
         elapsed = time.time() - t_start
         t.join(timeout=5)
-        self.run_locutus(["close", w1])
+        self.run_rhizo(["close", w1])
 
         self.assertEqual(res_scatter.returncode, 0)
         self.assertEqual(res_scatter.stdout.strip(), "finished")
@@ -3361,10 +3360,10 @@ secret = "my_inline_secret_test_555"
         self.assertLess(elapsed, 3.0, "Scatter did not clamp quorum and hung waiting for phantom targets")
 
     def test_46_reliable_queue_claim_ack_and_dlq(self):
-        """Test 'locutus claim' with lease, 'locutus ack', and DLQ auto-reclaim after 3 retries."""
+        """Test 'rhizo claim' with lease, 'rhizo ack', and DLQ auto-reclaim after 3 retries."""
         q = f"reliable_q_{int(time.time() * 1000)}"
         agent = "claim_bot"
-        self.run_locutus(["open", agent, "workers"])
+        self.run_rhizo(["open", agent, "workers"])
 
         queue_key = f"{TEST_PREFIX}queue:{{{q}}}"
         leases_key = f"{TEST_PREFIX}leases:{{{q}}}"
@@ -3372,22 +3371,22 @@ secret = "my_inline_secret_test_555"
         dlq_key = f"{TEST_PREFIX}queue:dlq:{{{q}}}"
 
         # 0. Missing argument negative controls
-        res_no_q = self.run_locutus(["claim"])
+        res_no_q = self.run_rhizo(["claim"])
         self.assertEqual(res_no_q.returncode, 1)
         self.assertIn("Error: Missing queue name.", res_no_q.stderr)
 
-        res_no_ack = self.run_locutus(["ack"])
+        res_no_ack = self.run_rhizo(["ack"])
         self.assertEqual(res_no_ack.returncode, 1)
         self.assertIn("Error: Missing queue name or task ID.", res_no_ack.stderr)
 
         try:
             # 1. Enqueue and Claim successfully with ACK
-            self.run_locutus(["enqueue", q, "--subject", "Task 1", "--body", "data:123"])
-            res_claim = self.run_locutus(["claim", q, "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": agent})
+            self.run_rhizo(["enqueue", q, "--subject", "Task 1", "--body", "data:123"])
+            res_claim = self.run_rhizo(["claim", q, "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": agent})
             self.assertEqual(res_claim.returncode, 0, f"Claim failed: {res_claim.stderr}")
             task1 = json.loads(res_claim.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(task1)
-            msg1 = LocutusMessage.model_validate(task1)
+            RhizoPlugin.validate_wire_envelope(task1)
+            msg1 = RhizoMessage.model_validate(task1)
             self.assertEqual(msg1.subject, "Task 1")
             self.assertEqual(msg1.body, "data:123")
             self.assertEqual(msg1.to_agent, f"queue:{q}")
@@ -3407,7 +3406,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(act1, "1", f"Active lease key for {task1_id} should exist")
 
             # Ack task 1
-            res_ack = self.run_locutus(["ack", q, task1_id])
+            res_ack = self.run_rhizo(["ack", q, task1_id])
             self.assertEqual(res_ack.returncode, 0, f"Ack failed: {res_ack.stderr}")
             self.assertIn(task1_id, res_ack.stdout)
 
@@ -3425,14 +3424,14 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(att1_post, "0")
 
             # 2. Enqueue a task that will expire and fail 3 times -> moves to DLQ
-            self.run_locutus(["enqueue", q, "--subject", "Failing Task", "--body", "fail_data"])
+            self.run_rhizo(["enqueue", q, "--subject", "Failing Task", "--body", "fail_data"])
 
             # Attempt 1: Claim with 1s lease, do not ACK
-            res_c1 = self.run_locutus(["claim", q, "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
+            res_c1 = self.run_rhizo(["claim", q, "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
             self.assertEqual(res_c1.returncode, 0)
             t_fail1 = json.loads(res_c1.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(t_fail1)
-            msg_fail1 = LocutusMessage.model_validate(t_fail1)
+            RhizoPlugin.validate_wire_envelope(t_fail1)
+            msg_fail1 = RhizoMessage.model_validate(t_fail1)
             self.assertEqual(msg_fail1.subject, "Failing Task")
             self.assertEqual(msg_fail1.body, "fail_data")
             t_fail_id = t_fail1["id"]
@@ -3445,11 +3444,11 @@ secret = "my_inline_secret_test_555"
             time.sleep(1.2)  # Wait for lease to expire
 
             # Attempt 2: Claim again (auto-reclaim from expired lease, attempts increments to 2)
-            res_c2 = self.run_locutus(["claim", q, "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
+            res_c2 = self.run_rhizo(["claim", q, "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
             self.assertEqual(res_c2.returncode, 0)
             t_fail2 = json.loads(res_c2.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(t_fail2)
-            msg_fail2 = LocutusMessage.model_validate(t_fail2)
+            RhizoPlugin.validate_wire_envelope(t_fail2)
+            msg_fail2 = RhizoMessage.model_validate(t_fail2)
             self.assertEqual(msg_fail2.id, t_fail_id)
             self.assertEqual(msg_fail2.subject, "Failing Task")
 
@@ -3461,11 +3460,11 @@ secret = "my_inline_secret_test_555"
             time.sleep(1.2)  # Wait for lease to expire
 
             # Attempt 3: Claim again (third attempt, attempts increments to 3)
-            res_c3 = self.run_locutus(["claim", q, "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
+            res_c3 = self.run_rhizo(["claim", q, "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
             self.assertEqual(res_c3.returncode, 0)
             t_fail3 = json.loads(res_c3.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(t_fail3)
-            msg_fail3 = LocutusMessage.model_validate(t_fail3)
+            RhizoPlugin.validate_wire_envelope(t_fail3)
+            msg_fail3 = RhizoMessage.model_validate(t_fail3)
             self.assertEqual(msg_fail3.id, t_fail_id)
 
             att_fail3 = subprocess.run(
@@ -3476,7 +3475,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(1.2)  # Wait for lease to expire
 
             # Attempt 4: Next claim should move the task to DLQ, clean attempts, and return empty
-            res_c4 = self.run_locutus(["claim", q, "1", "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
+            res_c4 = self.run_rhizo(["claim", q, "1", "--lease", "1"], env_overrides={"RHIZO_AGENT_NAME": agent})
             self.assertEqual(res_c4.returncode, 0)
             self.assertEqual(res_c4.stdout.strip(), "")
 
@@ -3500,32 +3499,32 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(dlq_len, "1", "DLQ should contain exactly 1 failed task")
 
             # Verify DLQ contains the failed task with full wire envelope and correct task_id
-            res_dlq = self.run_locutus(["work", "dlq:" + q, "1"])
+            res_dlq = self.run_rhizo(["work", "dlq:" + q, "1"])
             self.assertEqual(res_dlq.returncode, 0)
             dlq_data = json.loads(res_dlq.stdout.strip())
-            LocutusPlugin.validate_wire_envelope(dlq_data)
-            dlq_msg = LocutusMessage.model_validate(dlq_data)
+            RhizoPlugin.validate_wire_envelope(dlq_data)
+            dlq_msg = RhizoMessage.model_validate(dlq_data)
             self.assertEqual(dlq_msg.id, t_fail_id)
             self.assertEqual(dlq_msg.subject, "Failing Task")
             self.assertEqual(dlq_msg.body, "fail_data")
 
         finally:
-            self.run_locutus(["close", agent])
+            self.run_rhizo(["close", agent])
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", queue_key, leases_key, attempts_key, dlq_key], capture_output=True)
 
     def test_46b_claim_lease_renewal(self):
-        """Test in-flight claim lease extension ('locutus claim renew')."""
+        """Test in-flight claim lease extension ('rhizo claim renew')."""
         q = f"renew_q_{int(time.time() * 1000)}"
-        self.run_locutus(["enqueue", q, "--subject", "Long Task", "--body", "heavy_workload"])
+        self.run_rhizo(["enqueue", q, "--subject", "Long Task", "--body", "heavy_workload"])
 
         # Claim with short 2s lease
-        res_claim = self.run_locutus(["claim", q, "--lease", "2"])
+        res_claim = self.run_rhizo(["claim", q, "--lease", "2"])
         self.assertEqual(res_claim.returncode, 0)
         task = json.loads(res_claim.stdout.strip())
         task_id = task["id"]
 
         # Renew lease for 60s
-        res_renew = self.run_locutus(["claim", "renew", q, task_id, "--lease", "60"])
+        res_renew = self.run_rhizo(["claim", "renew", q, task_id, "--lease", "60"])
         self.assertEqual(res_renew.returncode, 0)
         renew_data = json.loads(res_renew.stdout.strip())
         self.assertTrue(renew_data.get("renewed"))
@@ -3535,12 +3534,12 @@ secret = "my_inline_secret_test_555"
         time.sleep(2.5)
 
         # Another worker attempts to claim; should get nothing because lease was renewed
-        res_other = self.run_locutus(["claim", q, "1"])
+        res_other = self.run_rhizo(["claim", q, "1"])
         self.assertEqual(res_other.returncode, 0)
         self.assertEqual(res_other.stdout.strip(), "")
 
         # Acknowledge task
-        res_ack = self.run_locutus(["ack", q, task_id])
+        res_ack = self.run_rhizo(["ack", q, task_id])
         self.assertEqual(res_ack.returncode, 0)
 
     def test_46c_poison_pill_tail_requeue(self):
@@ -3548,11 +3547,11 @@ secret = "my_inline_secret_test_555"
         q = f"poison_q_{int(time.time() * 1000)}"
 
         # Enqueue Task 1 then Task 2
-        self.run_locutus(["enqueue", q, "--subject", "Task 1 Failing", "--body", "data1"])
-        self.run_locutus(["enqueue", q, "--subject", "Task 2 Healthy", "--body", "data2"])
+        self.run_rhizo(["enqueue", q, "--subject", "Task 1 Failing", "--body", "data1"])
+        self.run_rhizo(["enqueue", q, "--subject", "Task 2 Healthy", "--body", "data2"])
 
         # Claim Task 1 with 1s lease
-        res_c1 = self.run_locutus(["claim", q, "--lease", "1"])
+        res_c1 = self.run_rhizo(["claim", q, "--lease", "1"])
         self.assertEqual(res_c1.returncode, 0)
         self.assertIn("Task 1 Failing", res_c1.stdout)
 
@@ -3560,25 +3559,25 @@ secret = "my_inline_secret_test_555"
         time.sleep(1.2)
 
         # Claim next: Task 1 should be re-queued to tail (LPUSH), so Task 2 is popped next!
-        res_c2 = self.run_locutus(["claim", q, "--lease", "10"])
+        res_c2 = self.run_rhizo(["claim", q, "--lease", "10"])
         self.assertEqual(res_c2.returncode, 0)
         self.assertIn("Task 2 Healthy", res_c2.stdout)
 
     def test_46d_worker_cancellation_awareness(self):
-        """Test --run-id cancellation interceptor in 'locutus work' and 'locutus claim'."""
+        """Test --run-id cancellation interceptor in 'rhizo work' and 'rhizo claim'."""
         q = f"cancel_aware_q_{int(time.time() * 1000)}"
         run_id = f"run_worker_{int(time.time() * 1000)}"
 
         # Cancel the run
-        res_c = self.run_locutus(["cancel", run_id, "--reason", "Workflow aborted by user"])
+        res_c = self.run_rhizo(["cancel", run_id, "--reason", "Workflow aborted by user"])
         self.assertEqual(res_c.returncode, 0)
 
         # Enqueue a task to the queue
-        self.run_locutus(["enqueue", q, "--subject", "Cancelled Work", "--body", "should_not_run"])
+        self.run_rhizo(["enqueue", q, "--subject", "Cancelled Work", "--body", "should_not_run"])
 
         # 'work' with --run-id should detect cancellation and exit cleanly without processing
         t_start = time.time()
-        res_work = self.run_locutus(["work", q, "10", "--run-id", run_id])
+        res_work = self.run_rhizo(["work", q, "10", "--run-id", run_id])
         elapsed = time.time() - t_start
         self.assertEqual(res_work.returncode, 0)
         self.assertLess(elapsed, 3.0, "Worker did not exit immediately upon detecting cancellation")
@@ -3586,7 +3585,7 @@ secret = "my_inline_secret_test_555"
 
         # 'claim' with --run-id should also detect cancellation and exit cleanly
         t_start2 = time.time()
-        res_claim = self.run_locutus(["claim", q, "10", "--run-id", run_id])
+        res_claim = self.run_rhizo(["claim", q, "10", "--run-id", run_id])
         elapsed2 = time.time() - t_start2
         self.assertEqual(res_claim.returncode, 0)
         self.assertLess(elapsed2, 3.0, "Claim did not exit immediately upon detecting cancellation")
@@ -3608,7 +3607,7 @@ secret = "my_inline_secret_test_555"
             q = f"reuse_q_{int(time.time() * 1000)}"
             conns_before = get_total_conns()
             t0 = time.time()
-            res = self.run_locutus(["claim", q, "2"])
+            res = self.run_rhizo(["claim", q, "2"])
             elapsed = time.time() - t0
             conns_after = get_total_conns()
             conns_delta = conns_after - conns_before - 1
@@ -3619,7 +3618,7 @@ secret = "my_inline_secret_test_555"
         self.assertEqual(res.returncode, 0)
         self.assertGreaterEqual(elapsed, 1.8)
         # Without socket reuse, 2 seconds of 250ms polling opens ~8-16 connections.
-        # With socket reuse, only 1 connection is opened by locutus claim.
+        # With socket reuse, only 1 connection is opened by rhizo claim.
         # In a multi-agent cluster with active background workers or parallel test suites,
         # total_connections_received may include ambient Redis connections.
         if conns_delta > 2:
@@ -3631,7 +3630,7 @@ secret = "my_inline_secret_test_555"
             self.assertLessEqual(conns_delta, 2)
 
     def test_47_blackboard_kv_append_and_snapshot(self):
-        """Test 'locutus blackboard' (set, get, append, snapshot, delete, clear) with strict schema and Redis checks."""
+        """Test 'rhizo blackboard' (set, get, append, snapshot, delete, clear) with strict schema and Redis checks."""
         room = f"room_{int(time.time() * 1000)}"
 
         kv_key = f"{TEST_PREFIX}blackboard:{{{room}}}:kv"
@@ -3639,33 +3638,33 @@ secret = "my_inline_secret_test_555"
         list_tasks_key = f"{TEST_PREFIX}blackboard:{{{room}}}:list:tasks"
 
         # 0. Argument validation negative controls
-        res_no_args = self.run_locutus(["blackboard"])
+        res_no_args = self.run_rhizo(["blackboard"])
         self.assertEqual(res_no_args.returncode, 1)
-        self.assertTrue("Usage: rhizo blackboard" in res_no_args.stderr or "Usage: locutus blackboard" in res_no_args.stderr)
+        self.assertTrue("Usage: rhizo blackboard" in res_no_args.stderr)
 
-        res_no_key = self.run_locutus(["blackboard", "set", room])
+        res_no_key = self.run_rhizo(["blackboard", "set", room])
         self.assertEqual(res_no_key.returncode, 1)
-        self.assertTrue("Usage: rhizo blackboard set" in res_no_key.stderr or "Usage: locutus blackboard set" in res_no_key.stderr)
+        self.assertTrue("Usage: rhizo blackboard set" in res_no_key.stderr)
 
-        res_no_get_key = self.run_locutus(["blackboard", "get", room])
+        res_no_get_key = self.run_rhizo(["blackboard", "get", room])
         self.assertEqual(res_no_get_key.returncode, 1)
-        self.assertTrue("Usage: rhizo blackboard get" in res_no_get_key.stderr or "Usage: locutus blackboard get" in res_no_get_key.stderr)
+        self.assertTrue("Usage: rhizo blackboard get" in res_no_get_key.stderr)
 
-        res_no_app_val = self.run_locutus(["blackboard", "append", room, "tasks"])
+        res_no_app_val = self.run_rhizo(["blackboard", "append", room, "tasks"])
         self.assertEqual(res_no_app_val.returncode, 1)
-        self.assertTrue("Usage: rhizo blackboard append" in res_no_app_val.stderr or "Usage: locutus blackboard append" in res_no_app_val.stderr)
+        self.assertTrue("Usage: rhizo blackboard append" in res_no_app_val.stderr)
 
-        res_no_del_key = self.run_locutus(["blackboard", "delete", room])
+        res_no_del_key = self.run_rhizo(["blackboard", "delete", room])
         self.assertEqual(res_no_del_key.returncode, 1)
-        self.assertTrue("Usage: rhizo blackboard delete" in res_no_del_key.stderr or "Usage: locutus blackboard delete" in res_no_del_key.stderr)
+        self.assertTrue("Usage: rhizo blackboard delete" in res_no_del_key.stderr)
 
-        res_unknown = self.run_locutus(["blackboard", "bogus_action", room])
+        res_unknown = self.run_rhizo(["blackboard", "bogus_action", room])
         self.assertEqual(res_unknown.returncode, 1)
         self.assertIn("Unknown blackboard action: bogus_action", res_unknown.stderr)
 
         try:
             # 1. Set key-value and get
-            res_set = self.run_locutus(["blackboard", "set", room, "spec", '{"version": 1, "arch": "arm64"}'])
+            res_set = self.run_rhizo(["blackboard", "set", room, "spec", '{"version": 1, "arch": "arm64"}'])
             self.assertEqual(res_set.returncode, 0)
             self.assertEqual(res_set.stdout.strip(), "OK")
 
@@ -3682,16 +3681,16 @@ secret = "my_inline_secret_test_555"
             ).stdout.strip())
             self.assertGreater(kv_ttl, 0)
 
-            res_get = self.run_locutus(["blackboard", "get", room, "spec"])
+            res_get = self.run_rhizo(["blackboard", "get", room, "spec"])
             self.assertEqual(res_get.returncode, 0)
             self.assertEqual(json.loads(res_get.stdout.strip()), {"version": 1, "arch": "arm64"})
 
             # 2. Append to list and get list
-            res_app1 = self.run_locutus(["blackboard", "append", room, "tasks", "Task A"])
+            res_app1 = self.run_rhizo(["blackboard", "append", room, "tasks", "Task A"])
             self.assertEqual(res_app1.returncode, 0)
             self.assertEqual(res_app1.stdout.strip(), "1")
 
-            res_app2 = self.run_locutus(["blackboard", "append", room, "tasks", "Task B"])
+            res_app2 = self.run_rhizo(["blackboard", "append", room, "tasks", "Task B"])
             self.assertEqual(res_app2.returncode, 0)
             self.assertEqual(res_app2.stdout.strip(), "2")
 
@@ -3708,24 +3707,24 @@ secret = "my_inline_secret_test_555"
             ).stdout.strip().splitlines()
             self.assertEqual(list_items, ["Task A", "Task B"])
 
-            res_get_list = self.run_locutus(["blackboard", "get", room, "tasks"])
+            res_get_list = self.run_rhizo(["blackboard", "get", room, "tasks"])
             self.assertEqual(res_get_list.returncode, 0)
             self.assertEqual(json.loads(res_get_list.stdout.strip()), ["Task A", "Task B"])
 
-            # 3. Snapshot whole room with LocutusPlugin schema validation
-            res_snap = self.run_locutus(["blackboard", "snapshot", room])
+            # 3. Snapshot whole room with RhizoPlugin schema validation
+            res_snap = self.run_rhizo(["blackboard", "snapshot", room])
             self.assertEqual(res_snap.returncode, 0)
-            snap = LocutusPlugin.validate_json_schema("blackboard", res_snap.stdout)
+            snap = RhizoPlugin.validate_json_schema("blackboard", res_snap.stdout)
             self.assertEqual(snap["room"], room)
             self.assertEqual(snap["kv"]["spec"], '{"version": 1, "arch": "arm64"}')
             self.assertEqual(snap["lists"]["tasks"], ["Task A", "Task B"])
 
             # Cluster slot affinity verification across all blackboard keys
-            tag = LocutusPlugin.check_cluster_affinity([kv_key, lists_index, list_tasks_key])
+            tag = RhizoPlugin.check_cluster_affinity([kv_key, lists_index, list_tasks_key])
             self.assertEqual(tag, room)
 
             # 4. Delete single key
-            res_del = self.run_locutus(["blackboard", "delete", room, "spec"])
+            res_del = self.run_rhizo(["blackboard", "delete", room, "spec"])
             self.assertEqual(res_del.returncode, 0)
             self.assertEqual(res_del.stdout.strip(), "OK")
 
@@ -3736,18 +3735,18 @@ secret = "my_inline_secret_test_555"
             ).stdout.strip()
             self.assertEqual(spec_exists, "0")
 
-            res_get_after = self.run_locutus(["blackboard", "get", room, "spec"])
+            res_get_after = self.run_rhizo(["blackboard", "get", room, "spec"])
             self.assertEqual(res_get_after.returncode, 0)
             self.assertEqual(res_get_after.stdout.strip(), "")
 
             # Re-snapshot: kv empty, list preserved
-            res_snap_mid = self.run_locutus(["blackboard", "snapshot", room])
-            snap_mid = LocutusPlugin.validate_json_schema("blackboard", res_snap_mid.stdout)
+            res_snap_mid = self.run_rhizo(["blackboard", "snapshot", room])
+            snap_mid = RhizoPlugin.validate_json_schema("blackboard", res_snap_mid.stdout)
             self.assertEqual(snap_mid["kv"], {})
             self.assertEqual(snap_mid["lists"]["tasks"], ["Task A", "Task B"])
 
             # 5. Clear entire room
-            res_clear = self.run_locutus(["blackboard", "clear", room])
+            res_clear = self.run_rhizo(["blackboard", "clear", room])
             self.assertEqual(res_clear.returncode, 0)
             self.assertEqual(res_clear.stdout.strip(), "OK")
 
@@ -3759,9 +3758,9 @@ secret = "my_inline_secret_test_555"
             chk_list = subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", list_tasks_key], capture_output=True, text=True, check=True)
             self.assertEqual(chk_list.stdout.strip(), "0")
 
-            res_snap_after = self.run_locutus(["blackboard", "snapshot", room])
+            res_snap_after = self.run_rhizo(["blackboard", "snapshot", room])
             self.assertEqual(res_snap_after.returncode, 0)
-            snap_empty = LocutusPlugin.validate_json_schema("blackboard", res_snap_after.stdout)
+            snap_empty = RhizoPlugin.validate_json_schema("blackboard", res_snap_after.stdout)
             self.assertEqual(snap_empty["room"], room)
             self.assertEqual(snap_empty["kv"], {})
             self.assertEqual(snap_empty["lists"], {})
@@ -3775,7 +3774,7 @@ secret = "my_inline_secret_test_555"
         enc_env = {"RHIZO_ENCRYPT": "1"}
 
         # 1. Set key-value with encryption
-        res_set = self.run_locutus(["blackboard", "set", room, "secret_cfg", '{"db_pass": "supersecret"}'], env_overrides=enc_env)
+        res_set = self.run_rhizo(["blackboard", "set", room, "secret_cfg", '{"db_pass": "supersecret"}'], env_overrides=enc_env)
         self.assertEqual(res_set.returncode, 0)
 
         # Verify stored value in Redis is encrypted (not plaintext) and has aes256 header
@@ -3785,14 +3784,14 @@ secret = "my_inline_secret_test_555"
         self.assertTrue(raw_in_redis.startswith("aes256:"))
 
         # Verify get transparently decrypts
-        res_get = self.run_locutus(["blackboard", "get", room, "secret_cfg"], env_overrides=enc_env)
+        res_get = self.run_rhizo(["blackboard", "get", room, "secret_cfg"], env_overrides=enc_env)
         self.assertEqual(res_get.returncode, 0)
         self.assertEqual(json.loads(res_get.stdout.strip()), {"db_pass": "supersecret"})
 
         # 2. Append to list with encryption
-        res_app1 = self.run_locutus(["blackboard", "append", room, "items", "encrypted_item_1"], env_overrides=enc_env)
+        res_app1 = self.run_rhizo(["blackboard", "append", room, "items", "encrypted_item_1"], env_overrides=enc_env)
         self.assertEqual(res_app1.returncode, 0)
-        res_app2 = self.run_locutus(["blackboard", "append", room, "items", "encrypted_item_2"], env_overrides=enc_env)
+        res_app2 = self.run_rhizo(["blackboard", "append", room, "items", "encrypted_item_2"], env_overrides=enc_env)
         self.assertEqual(res_app2.returncode, 0)
 
         # Verify Redis raw list items are encrypted
@@ -3801,12 +3800,12 @@ secret = "my_inline_secret_test_555"
         self.assertIn("aes256:", raw_list.stdout)
 
         # Verify get list decrypts items
-        res_get_list = self.run_locutus(["blackboard", "get", room, "items"], env_overrides=enc_env)
+        res_get_list = self.run_rhizo(["blackboard", "get", room, "items"], env_overrides=enc_env)
         self.assertEqual(res_get_list.returncode, 0)
         self.assertEqual(json.loads(res_get_list.stdout.strip()), ["encrypted_item_1", "encrypted_item_2"])
 
         # 3. Snapshot decrypts kv and lists
-        res_snap = self.run_locutus(["blackboard", "snapshot", room], env_overrides=enc_env)
+        res_snap = self.run_rhizo(["blackboard", "snapshot", room], env_overrides=enc_env)
         self.assertEqual(res_snap.returncode, 0)
         snap = json.loads(res_snap.stdout.strip())
         self.assertEqual(snap["kv"]["secret_cfg"], '{"db_pass": "supersecret"}')
@@ -3817,13 +3816,13 @@ secret = "my_inline_secret_test_555"
         # Corrupt the ciphertext
         corrupted = f"{parts[0]}:{parts[1]}:bad_ciphertext"
         subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}blackboard:{{{room}}}:kv", "secret_cfg", corrupted], check=True)
-        res_tampered = self.run_locutus(["blackboard", "get", room, "secret_cfg"], env_overrides=enc_env)
+        res_tampered = self.run_rhizo(["blackboard", "get", room, "secret_cfg"], env_overrides=enc_env)
         # Should fail with nonzero exit code or tamper warning
         self.assertNotEqual(res_tampered.returncode, 0)
         self.assertIn("tampered", (res_tampered.stderr + res_tampered.stdout).lower())
 
     def test_48_floor_control_ring(self):
-        """Test 'locutus floor' (request, yield, pass, status, waiter queue, and timeout dequeue)."""
+        """Test 'rhizo floor' (request, yield, pass, status, waiter queue, and timeout dequeue)."""
         room = f"floor_room_{int(time.time() * 1000)}"
         a1 = "speaker_alice"
         a2 = "speaker_bob"
@@ -3835,21 +3834,21 @@ secret = "my_inline_secret_test_555"
         waiters_key = f"{TEST_PREFIX}floor:{{{room}}}:waiters"
 
         # 0. Argument validation negative controls
-        res_no_args = self.run_locutus(["floor"])
+        res_no_args = self.run_rhizo(["floor"])
         self.assertEqual(res_no_args.returncode, 1)
-        self.assertTrue("Usage: rhizo floor" in res_no_args.stderr or "Usage: locutus floor" in res_no_args.stderr)
+        self.assertTrue("Usage: rhizo floor" in res_no_args.stderr)
 
-        res_no_room = self.run_locutus(["floor", "request"])
+        res_no_room = self.run_rhizo(["floor", "request"])
         self.assertEqual(res_no_room.returncode, 1)
-        self.assertTrue("Usage: rhizo floor" in res_no_room.stderr or "Usage: locutus floor" in res_no_room.stderr)
+        self.assertTrue("Usage: rhizo floor" in res_no_room.stderr)
 
-        res_pass_no_target = self.run_locutus(["floor", "pass", room], env_overrides={"RHIZO_AGENT_NAME": a1})
+        res_pass_no_target = self.run_rhizo(["floor", "pass", room], env_overrides={"RHIZO_AGENT_NAME": a1})
         self.assertEqual(res_pass_no_target.returncode, 1)
         self.assertIn("Error: Missing target agent for floor pass. Use --to <agent>.", res_pass_no_target.stderr)
 
         try:
             # 1. Initial status: room floor is free
-            res_st0 = self.run_locutus(["floor", "status", room])
+            res_st0 = self.run_rhizo(["floor", "status", room])
             self.assertEqual(res_st0.returncode, 0)
             st0 = json.loads(res_st0.stdout.strip())
             self.assertEqual(st0["room"], room)
@@ -3857,7 +3856,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(st0["waiters"], [])
 
             # 2. Alice acquires the floor
-            res_req1 = self.run_locutus(["floor", "request", room, "--lease", "10"], env_overrides={"RHIZO_AGENT_NAME": a1})
+            res_req1 = self.run_rhizo(["floor", "request", room, "--lease", "10"], env_overrides={"RHIZO_AGENT_NAME": a1})
             self.assertEqual(res_req1.returncode, 0)
             self.assertIn(f"ACQUIRED: {a1} holds floor in {room}", res_req1.stdout)
 
@@ -3875,12 +3874,12 @@ secret = "my_inline_secret_test_555"
             self.assertTrue(7 <= ttl_in_redis <= 10, f"Expected floor lease TTL between 7 and 10, got {ttl_in_redis}")
 
             # 3. Bob tries to acquire immediately without waiting -> negative control: must fail (BUSY)
-            res_req2 = self.run_locutus(["floor", "request", room], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_req2 = self.run_rhizo(["floor", "request", room], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_req2.returncode, 1)
             self.assertIn(f"Floor in {room} is held by {a1}", res_req2.stderr)
 
             # Unauthorized yield negative control: Bob cannot yield floor held by Alice
-            res_unauth_yield = self.run_locutus(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_unauth_yield = self.run_rhizo(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_unauth_yield.returncode, 1)
             self.assertIn(f"Floor is held by {a1}", res_unauth_yield.stderr)
 
@@ -3888,7 +3887,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", holder_key], capture_output=True, text=True, check=True).stdout.strip(), a1)
 
             # 4. Check status while held
-            res_st = self.run_locutus(["floor", "status", room])
+            res_st = self.run_rhizo(["floor", "status", room])
             self.assertEqual(res_st.returncode, 0)
             st = json.loads(res_st.stdout.strip())
             self.assertEqual(st["holder"], a1)
@@ -3897,14 +3896,14 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(st["waiters"], [])
 
             # 5. Alice explicitly passes the floor to Bob
-            res_pass = self.run_locutus(["floor", "pass", room, "--to", a2], env_overrides={"RHIZO_AGENT_NAME": a1})
+            res_pass = self.run_rhizo(["floor", "pass", room, "--to", a2], env_overrides={"RHIZO_AGENT_NAME": a1})
             self.assertEqual(res_pass.returncode, 0)
             self.assertIn(f"PASSED:{a2}", res_pass.stdout)
 
             # Direct Redis inspection: holder is now Bob
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", holder_key], capture_output=True, text=True, check=True).stdout.strip(), a2)
 
-            res_st2 = self.run_locutus(["floor", "status", room])
+            res_st2 = self.run_rhizo(["floor", "status", room])
             st2 = json.loads(res_st2.stdout.strip())
             self.assertEqual(st2["holder"], a2)
 
@@ -3914,11 +3913,11 @@ secret = "my_inline_secret_test_555"
             dana_res = []
 
             def charlie_waiter():
-                r = self.run_locutus(["floor", "request", room, "5", "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": charlie})
+                r = self.run_rhizo(["floor", "request", room, "5", "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": charlie})
                 charlie_res.append(r)
 
             def dana_waiter():
-                r = self.run_locutus(["floor", "request", room, "5", "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": dana})
+                r = self.run_rhizo(["floor", "request", room, "5", "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": dana})
                 dana_res.append(r)
 
             t_c = threading.Thread(target=charlie_waiter)
@@ -3936,7 +3935,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(waiters, [charlie, dana], f"Expected waiters [{charlie}, {dana}], got {waiters}")
 
             # Bob yields -> floor passes to Charlie (first in FIFO queue)
-            res_y_bob = self.run_locutus(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_y_bob = self.run_rhizo(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_y_bob.returncode, 0)
             t_c.join(timeout=5)
 
@@ -3950,7 +3949,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(waiters_rem, [dana])
 
             # Charlie yields -> floor passes to Dana
-            res_y_charlie = self.run_locutus(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": charlie})
+            res_y_charlie = self.run_rhizo(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": charlie})
             self.assertEqual(res_y_charlie.returncode, 0)
             t_d.join(timeout=5)
 
@@ -3964,7 +3963,7 @@ secret = "my_inline_secret_test_555"
 
             # 7. Waiter timeout dequeue under load:
             # While Dana holds floor, Evan waits 1s, times out, and is cleanly dequeued
-            res_evan_timeout = self.run_locutus(["floor", "request", room, "1", "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": evan})
+            res_evan_timeout = self.run_rhizo(["floor", "request", room, "1", "--lease", "5"], env_overrides={"RHIZO_AGENT_NAME": evan})
             self.assertEqual(res_evan_timeout.returncode, 1)
             self.assertIn("Timeout waiting for floor", res_evan_timeout.stderr)
 
@@ -3972,7 +3971,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "LLEN", waiters_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
 
             # Dana yields -> no remaining waiters, so floor becomes FREE / YIELDED
-            res_y_dana = self.run_locutus(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": dana})
+            res_y_dana = self.run_rhizo(["floor", "yield", room], env_overrides={"RHIZO_AGENT_NAME": dana})
             self.assertEqual(res_y_dana.returncode, 0)
             self.assertIn("YIELDED", res_y_dana.stdout)
 
@@ -3980,14 +3979,14 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", holder_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
 
             # Verify Redis Cluster hash tag slot affinity between holder and waiters keys
-            tag = LocutusPlugin.check_cluster_affinity([holder_key, waiters_key])
+            tag = RhizoPlugin.check_cluster_affinity([holder_key, waiters_key])
             self.assertEqual(tag, room)
 
         finally:
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", holder_key, waiters_key], capture_output=True)
 
     def test_49_cancellation_tokens(self):
-        """Test global run cancellation tokens ('locutus cancel') with PubSub broadcast verification."""
+        """Test global run cancellation tokens ('rhizo cancel') with PubSub broadcast verification."""
         run_id = f"run_{int(time.time() * 1000)}"
         cancel_key = f"{TEST_PREFIX}cancel:{run_id}"
         global_chan = f"{TEST_PREFIX}channel:cancellations"
@@ -3995,22 +3994,22 @@ secret = "my_inline_secret_test_555"
         forged_run = f"forged_{int(time.time() * 1000)}"
 
         # 0. Missing argument negative controls
-        res_no_args = self.run_locutus(["cancel"])
+        res_no_args = self.run_rhizo(["cancel"])
         self.assertEqual(res_no_args.returncode, 1)
         self.assertIn("Error: Missing run_id or cancel subcommand.", res_no_args.stderr)
 
-        res_no_check_id = self.run_locutus(["cancel", "check"])
+        res_no_check_id = self.run_rhizo(["cancel", "check"])
         self.assertEqual(res_no_check_id.returncode, 1)
         self.assertIn("Error: Missing run_id.", res_no_check_id.stderr)
 
         try:
             # 1. Uncancelled run check: returns empty stdout and code 0
-            res_chk_empty = self.run_locutus(["cancel", "check", run_id])
+            res_chk_empty = self.run_rhizo(["cancel", "check", run_id])
             self.assertEqual(res_chk_empty.returncode, 0)
             self.assertEqual(res_chk_empty.stdout.strip(), "")
 
             # 2. Check with --exit-code on uncancelled run: returns exit code 1
-            res_chk_exit1 = self.run_locutus(["cancel", "check", run_id, "--exit-code"])
+            res_chk_exit1 = self.run_rhizo(["cancel", "check", run_id, "--exit-code"])
             self.assertEqual(res_chk_exit1.returncode, 1)
 
             # 3. Subscribe to Redis broadcast channels
@@ -4024,7 +4023,7 @@ secret = "my_inline_secret_test_555"
                     break
 
             # 4. Cancel the run with a reason
-            res_cancel = self.run_locutus([
+            res_cancel = self.run_rhizo([
                 "cancel", run_id,
                 "--reason", "User requested abort",
                 "--by", "lead_agent"
@@ -4070,7 +4069,7 @@ secret = "my_inline_secret_test_555"
             self.assertGreater(key_ttl, 0)
 
             # 6. Check on cancelled run: returns JSON and code 0
-            res_chk = self.run_locutus(["cancel", "check", run_id])
+            res_chk = self.run_rhizo(["cancel", "check", run_id])
             self.assertEqual(res_chk.returncode, 0)
             chk_data = json.loads(res_chk.stdout.strip())
             self.assertTrue(chk_data.get("cancelled"))
@@ -4078,12 +4077,12 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(chk_data.get("sig"), c_data["sig"])
 
             # 7. Check with --raw: prints bare reason
-            res_raw = self.run_locutus(["cancel", "check", run_id, "--raw"])
+            res_raw = self.run_rhizo(["cancel", "check", run_id, "--raw"])
             self.assertEqual(res_raw.returncode, 0)
             self.assertEqual(res_raw.stdout.strip(), "User requested abort")
 
             # 8. Check with --exit-code on cancelled run: returns code 0
-            res_chk_exit0 = self.run_locutus(["cancel", "check", run_id, "--exit-code"])
+            res_chk_exit0 = self.run_rhizo(["cancel", "check", run_id, "--exit-code"])
             self.assertEqual(res_chk_exit0.returncode, 0)
 
             # 9. Test rejection of tampered/forged cancellation token
@@ -4097,19 +4096,19 @@ secret = "my_inline_secret_test_555"
                 "cancelled": True
             })
             subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", f"{TEST_PREFIX}cancel:{forged_run}", forged_payload], check=True)
-            res_chk_forged = self.run_locutus(["cancel", "check", forged_run, "--exit-code"])
+            res_chk_forged = self.run_rhizo(["cancel", "check", forged_run, "--exit-code"])
             self.assertEqual(res_chk_forged.returncode, 1)
             self.assertIn("tampered", (res_chk_forged.stderr + res_chk_forged.stdout).lower())
 
             # 10. Clear the cancellation token and verify deletion in Redis
-            res_clear = self.run_locutus(["cancel", "clear", run_id])
+            res_clear = self.run_rhizo(["cancel", "clear", run_id])
             self.assertEqual(res_clear.returncode, 0)
 
             chk_deleted = subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", cancel_key], capture_output=True, text=True, check=True).stdout.strip()
             self.assertEqual(chk_deleted, "0", f"Cancellation key {cancel_key} was not deleted by clear")
 
             # 11. Check after clear: returns empty
-            res_chk_after = self.run_locutus(["cancel", "check", run_id])
+            res_chk_after = self.run_rhizo(["cancel", "check", run_id])
             self.assertEqual(res_chk_after.returncode, 0)
             self.assertEqual(res_chk_after.stdout.strip(), "")
 
@@ -4117,25 +4116,25 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", cancel_key, f"{TEST_PREFIX}cancel:{forged_run}"], capture_output=True)
 
     def test_50_blind_voting_ballot(self):
-        """Test blind voting and ballot consensus ('locutus ballot') asserting vote secrecy and tamper resistance."""
+        """Test blind voting and ballot consensus ('rhizo ballot') asserting vote secrecy and tamper resistance."""
         ballot_id = f"ballot_{int(time.time() * 1000)}"
         meta_key = f"{TEST_PREFIX}ballot:{{{ballot_id}}}"
         votes_key = f"{TEST_PREFIX}ballot:votes:{{{ballot_id}}}"
         sigs_key = f"{TEST_PREFIX}ballot:votes_sig:{{{ballot_id}}}"
 
         # 0. Argument validation negative controls
-        res_no_args = self.run_locutus(["ballot"])
+        res_no_args = self.run_rhizo(["ballot"])
         self.assertEqual(res_no_args.returncode, 1)
         self.assertIn("Error: Missing ballot subcommand or ballot_id.", res_no_args.stderr)
 
-        res_no_opts = self.run_locutus(["ballot", "open", ballot_id])
+        res_no_opts = self.run_rhizo(["ballot", "open", ballot_id])
         self.assertEqual(res_no_opts.returncode, 1)
         self.assertIn("Error: Missing --options for ballot open.", res_no_opts.stderr)
 
         ballot_id2 = None
         try:
             # 1. Open ballot with options and restricted voters
-            res_open = self.run_locutus([
+            res_open = self.run_rhizo([
                 "ballot", "open", ballot_id,
                 "--options", "postgres,sqlite,redis",
                 "--voters", "voter_a,voter_b,voter_c"
@@ -4150,7 +4149,7 @@ secret = "my_inline_secret_test_555"
             )
 
             # 2. Check status while open: voted_count is 0
-            res_st = self.run_locutus(["ballot", "status", ballot_id])
+            res_st = self.run_rhizo(["ballot", "status", ballot_id])
             self.assertEqual(res_st.returncode, 0)
             st_data = json.loads(res_st.stdout.strip())
             self.assertEqual(st_data["status"], "open")
@@ -4158,18 +4157,18 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(st_data["options"], ["postgres", "sqlite", "redis"])
 
             # 3. Cast legitimate votes
-            res_v1 = self.run_locutus(["ballot", "cast", ballot_id, "--vote", "sqlite", "--voter", "voter_a"])
+            res_v1 = self.run_rhizo(["ballot", "cast", ballot_id, "--vote", "sqlite", "--voter", "voter_a"])
             self.assertEqual(res_v1.returncode, 0)
             self.assertIn("VOTED", res_v1.stdout)
 
-            res_v2 = self.run_locutus(["ballot", "cast", ballot_id, "--vote", "postgres", "--voter", "voter_b"])
+            res_v2 = self.run_rhizo(["ballot", "cast", ballot_id, "--vote", "postgres", "--voter", "voter_b"])
             self.assertEqual(res_v2.returncode, 0)
 
-            res_v3 = self.run_locutus(["ballot", "cast", ballot_id, "--vote", "sqlite", "--voter", "voter_c"])
+            res_v3 = self.run_rhizo(["ballot", "cast", ballot_id, "--vote", "sqlite", "--voter", "voter_c"])
             self.assertEqual(res_v3.returncode, 0)
 
             # 4. Vote Secrecy verification: during voting, 'ballot status' MUST NOT leak individual votes or intermediate tallies
-            res_st_mid = self.run_locutus(["ballot", "status", ballot_id])
+            res_st_mid = self.run_rhizo(["ballot", "status", ballot_id])
             self.assertEqual(res_st_mid.returncode, 0)
             st_mid = json.loads(res_st_mid.stdout.strip())
             self.assertEqual(st_mid["voted_count"], 3)
@@ -4178,17 +4177,17 @@ secret = "my_inline_secret_test_555"
             self.assertNotIn("winner", st_mid, "Blind ballot status must not reveal winner before tally")
 
             # 5. Negative control: Ineligible voter cannot vote
-            res_unauth_voter = self.run_locutus(["ballot", "cast", ballot_id, "--vote", "sqlite", "--voter", "intruder_bot"])
+            res_unauth_voter = self.run_rhizo(["ballot", "cast", ballot_id, "--vote", "sqlite", "--voter", "intruder_bot"])
             self.assertEqual(res_unauth_voter.returncode, 1)
             self.assertIn("not eligible", res_unauth_voter.stderr)
 
             # 6. Negative control: Invalid option rejected
-            res_inv = self.run_locutus(["ballot", "cast", ballot_id, "--vote", "oracle", "--voter", "voter_a"])
+            res_inv = self.run_rhizo(["ballot", "cast", ballot_id, "--vote", "oracle", "--voter", "voter_a"])
             self.assertEqual(res_inv.returncode, 1)
             self.assertIn("Invalid vote choice 'oracle'", res_inv.stderr)
 
             # 7. Tally votes and close ballot
-            res_tally = self.run_locutus(["ballot", "tally", ballot_id, "--close"])
+            res_tally = self.run_rhizo(["ballot", "tally", ballot_id, "--close"])
             self.assertEqual(res_tally.returncode, 0)
             tally_data = json.loads(res_tally.stdout.strip())
             self.assertEqual(tally_data["total_votes"], 3)
@@ -4201,29 +4200,29 @@ secret = "my_inline_secret_test_555"
             self.assertNotIn("votes", tally_data, "Tally report must not reveal voter choices")
 
             # 8. Tally with --raw prints winner
-            res_tally_raw = self.run_locutus(["ballot", "tally", ballot_id, "--raw"])
+            res_tally_raw = self.run_rhizo(["ballot", "tally", ballot_id, "--raw"])
             self.assertEqual(res_tally_raw.returncode, 0)
             self.assertEqual(res_tally_raw.stdout.strip(), "sqlite")
 
             # 9. Negative control: Casting vote after close is rejected
-            res_post_close = self.run_locutus(["ballot", "cast", ballot_id, "--vote", "redis", "--voter", "voter_a"])
+            res_post_close = self.run_rhizo(["ballot", "cast", ballot_id, "--vote", "redis", "--voter", "voter_a"])
             self.assertEqual(res_post_close.returncode, 1)
             self.assertIn("Ballot is not open", res_post_close.stderr)
 
             # 10. Cluster slot affinity verification
-            tag = LocutusPlugin.check_cluster_affinity([meta_key, votes_key, sigs_key])
+            tag = RhizoPlugin.check_cluster_affinity([meta_key, votes_key, sigs_key])
             self.assertEqual(tag, ballot_id)
 
             # 11. Tamper verification on a second ballot
             ballot_id2 = f"ballot_sec_{int(time.time() * 1000)}"
-            self.run_locutus(["ballot", "open", ballot_id2, "--options", "a,b"])
+            self.run_rhizo(["ballot", "open", ballot_id2, "--options", "a,b"])
             # Cast legitimate vote for 'a'
-            res_legit = self.run_locutus(["ballot", "cast", ballot_id2, "--voter", "agent1", "--vote", "a"])
+            res_legit = self.run_rhizo(["ballot", "cast", ballot_id2, "--voter", "agent1", "--vote", "a"])
             self.assertEqual(res_legit.returncode, 0)
             # Attacker forges an unauthenticated vote for 'b' in Redis
             subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}ballot:votes:{{{ballot_id2}}}", "rogue_voter", "b"], check=True)
             # Tally should discard the forged vote from rogue_voter
-            res_tally2 = self.run_locutus(["ballot", "tally", ballot_id2])
+            res_tally2 = self.run_rhizo(["ballot", "tally", ballot_id2])
             self.assertEqual(res_tally2.returncode, 0)
             self.assertIn("tampered", (res_tally2.stderr + res_tally2.stdout).lower())
             tally2_data = json.loads(res_tally2.stdout.strip())
@@ -4237,19 +4236,19 @@ secret = "my_inline_secret_test_555"
                 subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}ballot:{{{ballot_id2}}}", f"{TEST_PREFIX}ballot:votes:{{{ballot_id2}}}"], capture_output=True)
 
     def test_51_leader_election(self):
-        """Test leader election via lease preemption ('locutus leader') asserting automatic failover and HMAC security."""
+        """Test leader election via lease preemption ('rhizo leader') asserting automatic failover and HMAC security."""
         role = f"role_{int(time.time() * 1000)}"
         leader_key = f"{TEST_PREFIX}leader:{{{role}}}"
         leader_chan = f"{TEST_PREFIX}channel:leader:{{{role}}}"
 
         # 0. Argument validation negative controls
-        res_no_args = self.run_locutus(["leader"])
+        res_no_args = self.run_rhizo(["leader"])
         self.assertEqual(res_no_args.returncode, 1)
         self.assertIn("Error: Missing leader action or role name.", res_no_args.stderr)
 
         try:
             # 1. Initial status: role is vacant
-            res_st0 = self.run_locutus(["leader", "status", role])
+            res_st0 = self.run_rhizo(["leader", "status", role])
             self.assertEqual(res_st0.returncode, 0)
             st0 = json.loads(res_st0.stdout.strip())
             self.assertEqual(st0["role"], role)
@@ -4257,7 +4256,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(st0["leader"], "")
 
             # 2. Lead 1 acquires leadership
-            res_acq = self.run_locutus([
+            res_acq = self.run_rhizo([
                 "leader", "acquire", role,
                 "--agent", "lead1",
                 "--lease", "10"
@@ -4277,7 +4276,7 @@ secret = "my_inline_secret_test_555"
             self.assertTrue(7 <= lead_ttl <= 10)
 
             # 3. Lead 2 attempts to acquire same role: exits with code 1, reports HELD:lead1
-            res_acq_busy = self.run_locutus([
+            res_acq_busy = self.run_rhizo([
                 "leader", "acquire", role,
                 "--agent", "lead2",
                 "--lease", "10"
@@ -4286,7 +4285,7 @@ secret = "my_inline_secret_test_555"
             self.assertIn("HELD:lead1", res_acq_busy.stdout + res_acq_busy.stderr)
 
             # 4. Status check
-            res_st = self.run_locutus(["leader", "status", role])
+            res_st = self.run_rhizo(["leader", "status", role])
             self.assertEqual(res_st.returncode, 0)
             st = json.loads(res_st.stdout.strip())
             self.assertEqual(st["role"], role)
@@ -4295,7 +4294,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(st["sig"], lead_obj["sig"])
 
             # 5. Lead 1 renews lease
-            res_ren = self.run_locutus([
+            res_ren = self.run_rhizo([
                 "leader", "renew", role,
                 "--agent", "lead1",
                 "--lease", "15"
@@ -4304,7 +4303,7 @@ secret = "my_inline_secret_test_555"
             self.assertIn("RENEWED", res_ren.stdout)
 
             # Lead 2 fails to renew
-            res_ren_bad = self.run_locutus([
+            res_ren_bad = self.run_rhizo([
                 "leader", "renew", role,
                 "--agent", "lead2",
                 "--lease", "15"
@@ -4316,11 +4315,11 @@ secret = "my_inline_secret_test_555"
             fo_key = f"{TEST_PREFIX}leader:{{{failover_role}}}"
 
             # Acquire leadership with short 2s lease
-            res_fo_lead = self.run_locutus(["leader", "acquire", failover_role, "--agent", "primary_node", "--lease", "2"])
+            res_fo_lead = self.run_rhizo(["leader", "acquire", failover_role, "--agent", "primary_node", "--lease", "2"])
             self.assertEqual(res_fo_lead.returncode, 0)
 
             # Backup immediately tries to acquire -> rejected (HELD:primary_node)
-            res_fo_backup_early = self.run_locutus(["leader", "acquire", failover_role, "--agent", "backup_node", "--lease", "5"])
+            res_fo_backup_early = self.run_rhizo(["leader", "acquire", failover_role, "--agent", "backup_node", "--lease", "5"])
             self.assertEqual(res_fo_backup_early.returncode, 1)
             self.assertIn("HELD:primary_node", res_fo_backup_early.stdout + res_fo_backup_early.stderr)
 
@@ -4330,18 +4329,18 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(chk_expired, "0", "Leader lease key should have expired in Redis after primary crashed")
 
             # Backup node detects failure, acquires leadership upon lease expiry -> SUCCESS
-            res_fo_backup_late = self.run_locutus(["leader", "acquire", failover_role, "--agent", "backup_node", "--lease", "5"])
+            res_fo_backup_late = self.run_rhizo(["leader", "acquire", failover_role, "--agent", "backup_node", "--lease", "5"])
             self.assertEqual(res_fo_backup_late.returncode, 0)
             self.assertIn("ELECTED", res_fo_backup_late.stdout)
 
-            res_fo_st = self.run_locutus(["leader", "status", failover_role])
+            res_fo_st = self.run_rhizo(["leader", "status", failover_role])
             self.assertEqual(res_fo_st.returncode, 0)
             fo_st = json.loads(res_fo_st.stdout.strip())
             self.assertEqual(fo_st["leader"], "backup_node")
             self.assertEqual(fo_st["status"], "active")
 
             # 7. Lead 1 resigns on original role
-            res_res = self.run_locutus([
+            res_res = self.run_rhizo([
                 "leader", "resign", role,
                 "--agent", "lead1"
             ])
@@ -4349,7 +4348,7 @@ secret = "my_inline_secret_test_555"
             self.assertIn("RESIGNED", res_res.stdout)
 
             # 8. Now Lead 2 can acquire
-            res_acq2 = self.run_locutus([
+            res_acq2 = self.run_rhizo([
                 "leader", "acquire", role,
                 "--agent", "lead2",
                 "--lease", "10"
@@ -4367,14 +4366,14 @@ secret = "my_inline_secret_test_555"
                 "sig": "0000000000000000000000000000000000000000000000000000000000000000"
             })
             subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", f"{TEST_PREFIX}leader:{{{forged_role}}}", forged_payload], check=True)
-            res_st_forged = self.run_locutus(["leader", "status", forged_role])
+            res_st_forged = self.run_rhizo(["leader", "status", forged_role])
             self.assertEqual(res_st_forged.returncode, 0)
             self.assertIn("tampered", (res_st_forged.stderr + res_st_forged.stdout).lower())
             st_forged = json.loads(res_st_forged.stdout.strip())
             self.assertEqual(st_forged["status"], "vacant")
 
             # Legitimate agent can preempt/evict forged leader
-            res_preempt = self.run_locutus([
+            res_preempt = self.run_rhizo([
                 "leader", "acquire", forged_role,
                 "--agent", "legit_leader",
                 "--lease", "10"
@@ -4383,29 +4382,29 @@ secret = "my_inline_secret_test_555"
             self.assertIn("ELECTED", res_preempt.stdout)
 
             # 10. Cluster slot affinity verification
-            tag = LocutusPlugin.check_cluster_affinity([leader_key, leader_chan])
+            tag = RhizoPlugin.check_cluster_affinity([leader_key, leader_chan])
             self.assertEqual(tag, role)
 
         finally:
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", leader_key, f"{TEST_PREFIX}leader:{{{failover_role}}}", f"{TEST_PREFIX}leader:{{{forged_role}}}"], capture_output=True)
 
     def test_52_workflow_dag_engine(self):
-        """Test DAG workflow engine ('locutus workflow') asserting parallel diamond DAG step unlocking and cycle prevention."""
+        """Test DAG workflow engine ('rhizo workflow') asserting parallel diamond DAG step unlocking and cycle prevention."""
         flow_id = f"flow_cli_{int(time.time() * 1000)}"
         flow_key = f"{TEST_PREFIX}workflow:{{{flow_id}}}"
         flow_chan = f"{TEST_PREFIX}channel:workflow:{{{flow_id}}}"
 
         # 0. Argument validation negative controls
-        res_no_args = self.run_locutus(["workflow"])
+        res_no_args = self.run_rhizo(["workflow"])
         self.assertEqual(res_no_args.returncode, 1)
         self.assertIn("Error: Missing workflow action or flow ID.", res_no_args.stderr)
 
-        res_no_steps = self.run_locutus(["workflow", "define", flow_id])
+        res_no_steps = self.run_rhizo(["workflow", "define", flow_id])
         self.assertEqual(res_no_steps.returncode, 1)
         self.assertIn("Missing steps", res_no_steps.stderr)
 
         # Negative control: cycle detection in dependency graph
-        res_cycle = self.run_locutus([
+        res_cycle = self.run_rhizo([
             "workflow", "define", f"flow_cyc_{int(time.time()*1000)}",
             "--steps", "a,b",
             "--deps", "a:b;b:a"
@@ -4414,7 +4413,7 @@ secret = "my_inline_secret_test_555"
         self.assertIn("Cycle detected", res_cycle.stderr + res_cycle.stdout)
 
         # Negative control: dangling undeclared parent step
-        res_dangle = self.run_locutus([
+        res_dangle = self.run_rhizo([
             "workflow", "define", f"flow_dan_{int(time.time()*1000)}",
             "--steps", "build",
             "--deps", "build:compile"
@@ -4424,7 +4423,7 @@ secret = "my_inline_secret_test_555"
 
         try:
             # 1. Define diamond DAG: lint -> [test, build] -> deploy
-            res_def = self.run_locutus([
+            res_def = self.run_rhizo([
                 "workflow", "define", flow_id,
                 "--steps", "lint,test,build,deploy",
                 "--deps", "test:lint;build:lint;deploy:test,build"
@@ -4442,19 +4441,19 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(flow_obj["steps"]["deploy"]["status"], "pending")
 
             # 2. Next: only root step 'lint' is ready
-            res_next = self.run_locutus(["workflow", "next", flow_id])
+            res_next = self.run_rhizo(["workflow", "next", flow_id])
             self.assertEqual(res_next.returncode, 0)
             next_data = json.loads(res_next.stdout.strip())
             self.assertEqual(next_data["ready"], ["lint"])
 
             # Next with --raw: prints bare step names
-            res_next_raw = self.run_locutus(["workflow", "next", flow_id, "--raw"])
+            res_next_raw = self.run_rhizo(["workflow", "next", flow_id, "--raw"])
             self.assertEqual(res_next_raw.returncode, 0)
             self.assertEqual(res_next_raw.stdout.strip(), "lint")
 
             # 3. Resolve 'lint' -> diamond DAG parallel step unlocking:
             # Both 'test' and 'build' must be unlocked simultaneously
-            res_res1 = self.run_locutus([
+            res_res1 = self.run_rhizo([
                 "workflow", "resolve", flow_id, "lint",
                 "--output", "all checks passed"
             ])
@@ -4464,54 +4463,54 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(set(r1_data["unlocked"]), {"test", "build"})
 
             # workflow next must now return both 'test' and 'build' as ready
-            res_next_mid = self.run_locutus(["workflow", "next", flow_id])
+            res_next_mid = self.run_rhizo(["workflow", "next", flow_id])
             self.assertEqual(res_next_mid.returncode, 0)
             next_mid = json.loads(res_next_mid.stdout.strip())
             self.assertEqual(set(next_mid["ready"]), {"test", "build"}, "Diamond DAG must unlock test and build simultaneously")
 
             # 4. Resolve 'test' -> 'deploy' still depends on 'build', so unlocked is empty
-            res_res2 = self.run_locutus(["workflow", "resolve", flow_id, "test"])
+            res_res2 = self.run_rhizo(["workflow", "resolve", flow_id, "test"])
             self.assertEqual(res_res2.returncode, 0)
             r2_data = json.loads(res_res2.stdout.strip())
             self.assertEqual(r2_data["unlocked"], [])
 
             # Only 'build' remains ready
-            res_next_build = self.run_locutus(["workflow", "next", flow_id])
+            res_next_build = self.run_rhizo(["workflow", "next", flow_id])
             self.assertEqual(res_next_build.returncode, 0)
             self.assertEqual(json.loads(res_next_build.stdout.strip())["ready"], ["build"])
 
             # 5. Resolve 'build' -> should unlock 'deploy'
-            res_res3 = self.run_locutus(["workflow", "resolve", flow_id, "build", "--raw"])
+            res_res3 = self.run_rhizo(["workflow", "resolve", flow_id, "build", "--raw"])
             self.assertEqual(res_res3.returncode, 0)
             self.assertEqual(res_res3.stdout.strip(), "deploy")
 
             # Now 'deploy' is ready
-            res_next_deploy = self.run_locutus(["workflow", "next", flow_id])
+            res_next_deploy = self.run_rhizo(["workflow", "next", flow_id])
             self.assertEqual(res_next_deploy.returncode, 0)
             self.assertEqual(json.loads(res_next_deploy.stdout.strip())["ready"], ["deploy"])
 
             # 6. Resolve 'deploy' -> complete workflow
-            res_res4 = self.run_locutus(["workflow", "resolve", flow_id, "deploy"])
+            res_res4 = self.run_rhizo(["workflow", "resolve", flow_id, "deploy"])
             self.assertEqual(res_res4.returncode, 0)
             r4_data = json.loads(res_res4.stdout.strip())
             self.assertEqual(r4_data["status"], "completed")
 
-            # 7. Status check with LocutusPlugin schema validation
-            res_st = self.run_locutus(["workflow", "status", flow_id])
+            # 7. Status check with RhizoPlugin schema validation
+            res_st = self.run_rhizo(["workflow", "status", flow_id])
             self.assertEqual(res_st.returncode, 0)
-            st_data = LocutusPlugin.validate_json_schema("workflow", res_st.stdout)
+            st_data = RhizoPlugin.validate_json_schema("workflow", res_st.stdout)
             self.assertEqual(st_data["status"], "completed")
             self.assertEqual(st_data["steps"]["lint"]["output"], "all checks passed")
             for step in ["lint", "test", "build", "deploy"]:
                 self.assertEqual(st_data["steps"][step]["status"], "completed")
 
             # Status with --raw
-            res_st_raw = self.run_locutus(["workflow", "status", flow_id, "--raw"])
+            res_st_raw = self.run_rhizo(["workflow", "status", flow_id, "--raw"])
             self.assertEqual(res_st_raw.returncode, 0)
             self.assertEqual(res_st_raw.stdout.strip(), "completed")
 
             # 8. Cluster slot affinity verification
-            tag = LocutusPlugin.check_cluster_affinity([flow_key, flow_chan])
+            tag = RhizoPlugin.check_cluster_affinity([flow_key, flow_chan])
             self.assertEqual(tag, flow_id)
 
         finally:
@@ -4523,7 +4522,7 @@ secret = "my_inline_secret_test_555"
         enc_env = {"RHIZO_ENCRYPT": "1"}
 
         # Define DAG
-        res_def = self.run_locutus([
+        res_def = self.run_rhizo([
             "workflow", "define", flow_id,
             "--steps", "step1,step2",
             "--deps", "step2:step1"
@@ -4532,7 +4531,7 @@ secret = "my_inline_secret_test_555"
 
         # Resolve step1 with sensitive output
         secret_output = "confidential_api_token_9999"
-        res_res = self.run_locutus([
+        res_res = self.run_rhizo([
             "workflow", "resolve", flow_id, "step1",
             "--output", secret_output
         ], env_overrides=enc_env)
@@ -4545,13 +4544,13 @@ secret = "my_inline_secret_test_555"
         self.assertIn("aes256:", raw_in_redis)
 
         # Verify workflow status transparently decrypts the step output
-        res_st = self.run_locutus(["workflow", "status", flow_id], env_overrides=enc_env)
+        res_st = self.run_rhizo(["workflow", "status", flow_id], env_overrides=enc_env)
         self.assertEqual(res_st.returncode, 0)
         st_data = json.loads(res_st.stdout.strip())
         self.assertEqual(st_data["steps"]["step1"]["output"], secret_output)
 
     def test_53_cluster_sweep(self):
-        """Test cluster health watchdog and sweeper ('locutus sweep') asserting tag reverse index cleanup."""
+        """Test cluster health watchdog and sweeper ('rhizo sweep') asserting tag reverse index cleanup."""
         dead_bot = f"dead_sweep_{int(time.time() * 1000)}"
         stale_listener_bot = f"stale_listen_{int(time.time() * 1000)}"
         foreign_listener_bot = f"foreign_listen_{int(time.time() * 1000)}"
@@ -4580,9 +4579,9 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", foreign_lis_key, foreign_rec, "EX", "120"], check=True)
 
             # 4. Dry run
-            res_dry = self.run_locutus(["sweep", "--dry-run"])
+            res_dry = self.run_rhizo(["sweep", "--dry-run"])
             self.assertEqual(res_dry.returncode, 0)
-            dry_data = LocutusPlugin.validate_json_schema("sweep", res_dry.stdout)
+            dry_data = RhizoPlugin.validate_json_schema("sweep", res_dry.stdout)
             self.assertTrue(dry_data["dry_run"])
             self.assertIn(dead_bot, dry_data["pruned_agents"])
             self.assertIn(stale_listener_bot, dry_data["pruned_listeners"])
@@ -4597,9 +4596,9 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", foreign_lis_key], capture_output=True, text=True, check=True).stdout.strip(), "1")
 
             # 5. Actual sweep
-            res_sweep = self.run_locutus(["sweep"])
+            res_sweep = self.run_rhizo(["sweep"])
             self.assertEqual(res_sweep.returncode, 0)
-            sweep_data = LocutusPlugin.validate_json_schema("sweep", res_sweep.stdout)
+            sweep_data = RhizoPlugin.validate_json_schema("sweep", res_sweep.stdout)
             self.assertFalse(sweep_data["dry_run"])
             self.assertIn(dead_bot, sweep_data["pruned_agents"])
             self.assertIn(stale_listener_bot, sweep_data["pruned_listeners"])
@@ -4620,7 +4619,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", foreign_lis_key], capture_output=True, text=True, check=True).stdout.strip(), "1", "Foreign listener was deleted by local node sweep")
 
             # 6. Sweep with --raw produces clean summary line
-            res_raw = self.run_locutus(["sweep", "--raw"])
+            res_raw = self.run_rhizo(["sweep", "--raw"])
             self.assertEqual(res_raw.returncode, 0)
             self.assertIn("Pruned", res_raw.stdout)
 
@@ -4631,31 +4630,31 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", dead_agent_key, stale_lis_key, foreign_lis_key], capture_output=True)
 
     def test_54_lock_fencing_tokens(self):
-        """Test distributed lock acquisition with monotonic fencing tokens ('locutus lock --fencing')."""
+        """Test distributed lock acquisition with monotonic fencing tokens ('rhizo lock --fencing')."""
         lock_name = f"file:db_migration_{int(time.time() * 1000)}"
         a1 = "agent_fence_1"
         a2 = "agent_fence_2"
         a3 = "agent_fence_3"
-        self.run_locutus(["open", a1, "dev"])
-        self.run_locutus(["open", a2, "dev"])
-        self.run_locutus(["open", a3, "dev"])
+        self.run_rhizo(["open", a1, "dev"])
+        self.run_rhizo(["open", a2, "dev"])
+        self.run_rhizo(["open", a3, "dev"])
 
         scoped_lock = f"test_project:{lock_name}"
         lock_key = f"{TEST_PREFIX}lock:{{{scoped_lock}}}"
         fencing_key = f"{TEST_PREFIX}lock:fencing:{{{scoped_lock}}}"
 
         # 0. Argument validation negative controls
-        res_no_name = self.run_locutus(["lock"])
+        res_no_name = self.run_rhizo(["lock"])
         self.assertEqual(res_no_name.returncode, 1)
         self.assertIn("Error: Missing lock name.", res_no_name.stderr)
 
-        res_no_unlock = self.run_locutus(["unlock"])
+        res_no_unlock = self.run_rhizo(["unlock"])
         self.assertEqual(res_no_unlock.returncode, 1)
         self.assertIn("Error: Missing lock name.", res_no_unlock.stderr)
 
         try:
             # 1. Iteration 1: Agent 1 acquires lock with --fencing
-            res_acq1 = self.run_locutus(["lock", lock_name, "10", "--fencing"], env_overrides={"RHIZO_AGENT_NAME": a1})
+            res_acq1 = self.run_rhizo(["lock", lock_name, "10", "--fencing"], env_overrides={"RHIZO_AGENT_NAME": a1})
             self.assertEqual(res_acq1.returncode, 0)
             self.assertIn(f"LOCKED {scoped_lock} by {a1}", res_acq1.stdout)
             self.assertIn("fencing: 1", res_acq1.stdout)
@@ -4667,17 +4666,17 @@ secret = "my_inline_secret_test_555"
             self.assertTrue(7 <= ttl1 <= 10)
 
             # Negative control: Agent 2 tries to acquire held lock -> fails (code 1)
-            res_acq_fail = self.run_locutus(["lock", lock_name, "10", "--fencing"], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_acq_fail = self.run_rhizo(["lock", lock_name, "10", "--fencing"], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_acq_fail.returncode, 1)
             self.assertIn(f"Error: Lock '{scoped_lock}' is already held.", res_acq_fail.stderr)
 
             # Negative control: Agent 2 unauthorized unlock fails
-            res_unauth = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_unauth = self.run_rhizo(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_unauth.returncode, 1)
             self.assertIn("not owner or lock not found", res_unauth.stderr)
 
             # Agent 1 unlocks
-            res_un1 = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a1})
+            res_un1 = self.run_rhizo(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a1})
             self.assertEqual(res_un1.returncode, 0)
             self.assertIn(f"UNLOCKED {scoped_lock}", res_un1.stdout)
 
@@ -4686,7 +4685,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", fencing_key], capture_output=True, text=True, check=True).stdout.strip(), "1")
 
             # 2. Iteration 2: Agent 2 acquires with --fencing and --raw -> prints bare monotonic token "2"
-            res_acq2_raw = self.run_locutus(["lock", lock_name, "10", "--fencing", "--raw"], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_acq2_raw = self.run_rhizo(["lock", lock_name, "10", "--fencing", "--raw"], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_acq2_raw.returncode, 0)
             token_2 = int(res_acq2_raw.stdout.strip())
             self.assertEqual(token_2, 2, f"Expected fencing token 2, got {token_2}")
@@ -4695,11 +4694,11 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", fencing_key], capture_output=True, text=True, check=True).stdout.strip(), "2")
 
             # Agent 2 unlocks
-            res_un2 = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a2})
+            res_un2 = self.run_rhizo(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_un2.returncode, 0)
 
             # 3. Iteration 3: Agent 3 acquires with --fencing and --raw -> prints bare monotonic token "3"
-            res_acq3_raw = self.run_locutus(["lock", lock_name, "10", "--fencing", "--raw"], env_overrides={"RHIZO_AGENT_NAME": a3})
+            res_acq3_raw = self.run_rhizo(["lock", lock_name, "10", "--fencing", "--raw"], env_overrides={"RHIZO_AGENT_NAME": a3})
             self.assertEqual(res_acq3_raw.returncode, 0)
             token_3 = int(res_acq3_raw.stdout.strip())
             self.assertEqual(token_3, 3, f"Expected fencing token 3, got {token_3}")
@@ -4708,25 +4707,25 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", fencing_key], capture_output=True, text=True, check=True).stdout.strip(), "3")
 
             # Agent 3 unlocks
-            res_un3 = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a3})
+            res_un3 = self.run_rhizo(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a3})
             self.assertEqual(res_un3.returncode, 0)
 
             # 4. Strict monotonicity assertion across all 3 iterations
             self.assertEqual([1, token_2, token_3], [1, 2, 3], "Fencing tokens must be strictly monotonic consecutive integers")
 
             # 5. Re-unlock negative control: unlocking an already unlocked lock fails
-            res_reunlock = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a3})
+            res_reunlock = self.run_rhizo(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a3})
             self.assertEqual(res_reunlock.returncode, 1)
             self.assertIn("not owner or lock not found", res_reunlock.stderr)
 
             # 6. Cluster slot affinity verification
-            tag = LocutusPlugin.check_cluster_affinity([lock_key, fencing_key])
+            tag = RhizoPlugin.check_cluster_affinity([lock_key, fencing_key])
             self.assertEqual(tag, scoped_lock)
 
         finally:
-            self.run_locutus(["close", a1])
-            self.run_locutus(["close", a2])
-            self.run_locutus(["close", a3])
+            self.run_rhizo(["close", a1])
+            self.run_rhizo(["close", a2])
+            self.run_rhizo(["close", a3])
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", lock_key, fencing_key], capture_output=True)
 
     def test_55_large_payload_blackboard_and_resp_guard(self):
@@ -4736,11 +4735,11 @@ secret = "my_inline_secret_test_555"
         large_json = json.dumps({"data": large_content})
 
         # 1. Blackboard set 100KB payload
-        res_set = self.run_locutus(["blackboard", "set", room, "big_key", large_json])
+        res_set = self.run_rhizo(["blackboard", "set", room, "big_key", large_json])
         self.assertEqual(res_set.returncode, 0)
 
         # 2. Blackboard get 100KB payload
-        res_get = self.run_locutus(["blackboard", "get", room, "big_key"])
+        res_get = self.run_rhizo(["blackboard", "get", room, "big_key"])
         self.assertEqual(res_get.returncode, 0)
         parsed = json.loads(res_get.stdout.strip())
         self.assertEqual(len(parsed["data"]), 100000)
@@ -4749,10 +4748,10 @@ secret = "my_inline_secret_test_555"
         # 3. Verify large multi-chunk 500KB payload roundtrip through native nim-redis driver
         large_content_500k = "Y" * 500000
         large_json_500k = json.dumps({"data": large_content_500k})
-        res_set_500k = self.run_locutus(["blackboard", "set", room, "big_key_500k", large_json_500k])
+        res_set_500k = self.run_rhizo(["blackboard", "set", room, "big_key_500k", large_json_500k])
         self.assertEqual(res_set_500k.returncode, 0)
 
-        res_get_500k = self.run_locutus(["blackboard", "get", room, "big_key_500k"])
+        res_get_500k = self.run_rhizo(["blackboard", "get", room, "big_key_500k"])
         self.assertEqual(res_get_500k.returncode, 0)
         parsed_500k = json.loads(res_get_500k.stdout.strip())
         self.assertEqual(len(parsed_500k["data"]), 500000)
@@ -4808,7 +4807,7 @@ secret = "my_inline_secret_test_555"
         subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", foreign_key, foreign_rec, "EX", "120"], check=True)
 
         try:
-            res_sweep = self.run_locutus(["sweep", "--dry-run"])
+            res_sweep = self.run_rhizo(["sweep", "--dry-run"])
             self.assertEqual(res_sweep.returncode, 0)
             data = json.loads(res_sweep.stdout.strip())
 
@@ -4833,12 +4832,12 @@ secret = "my_inline_secret_test_555"
             snap_file = os.path.join(tmpdir, "snapshot.json")
 
             # 1. Populate blackboard
-            self.run_locutus(["blackboard", "set", room, "version", "1.0.0"])
-            self.run_locutus(["blackboard", "append", room, "todos", "write tests"])
-            self.run_locutus(["blackboard", "append", room, "todos", "ship feature"])
+            self.run_rhizo(["blackboard", "set", room, "version", "1.0.0"])
+            self.run_rhizo(["blackboard", "append", room, "todos", "write tests"])
+            self.run_rhizo(["blackboard", "append", room, "todos", "ship feature"])
 
             # 2. Export snapshot to file
-            res_snap = self.run_locutus(["blackboard", "snapshot", room, snap_file])
+            res_snap = self.run_rhizo(["blackboard", "snapshot", room, snap_file])
             self.assertEqual(res_snap.returncode, 0)
             self.assertEqual(res_snap.stdout.strip(), "OK")
             self.assertTrue(os.path.isfile(snap_file))
@@ -4850,22 +4849,22 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(data["lists"]["todos"], ["write tests", "ship feature"])
 
             # 3. Clear room
-            res_clr = self.run_locutus(["blackboard", "clear", room])
+            res_clr = self.run_rhizo(["blackboard", "clear", room])
             self.assertEqual(res_clr.returncode, 0)
-            res_get = self.run_locutus(["blackboard", "get", room, "version"])
+            res_get = self.run_rhizo(["blackboard", "get", room, "version"])
             self.assertEqual(res_get.stdout.strip(), "")
 
             # 4. Restore from snapshot file
-            res_load = self.run_locutus(["blackboard", "load", room, snap_file])
+            res_load = self.run_rhizo(["blackboard", "load", room, snap_file])
             self.assertEqual(res_load.returncode, 0)
             self.assertEqual(res_load.stdout.strip(), "OK")
 
             # 5. Verify restored state
-            res_ver = self.run_locutus(["blackboard", "get", room, "version"])
+            res_ver = self.run_rhizo(["blackboard", "get", room, "version"])
             self.assertEqual(res_ver.returncode, 0)
             self.assertEqual(res_ver.stdout.strip(), "1.0.0")
 
-            res_snap_again = self.run_locutus(["blackboard", "snapshot", room])
+            res_snap_again = self.run_rhizo(["blackboard", "snapshot", room])
             self.assertEqual(res_snap_again.returncode, 0)
             data2 = json.loads(res_snap_again.stdout.strip())
             self.assertEqual(data2["lists"]["todos"], ["write tests", "ship feature"])
@@ -4874,12 +4873,12 @@ secret = "my_inline_secret_test_555"
             bad_file = os.path.join(tmpdir, "bad.json")
             with open(bad_file, "w") as f:
                 f.write("not-valid-json")
-            res_bad = self.run_locutus(["blackboard", "load", room, bad_file])
+            res_bad = self.run_rhizo(["blackboard", "load", room, bad_file])
             self.assertEqual(res_bad.returncode, 1)
             self.assertIn("ERR: Invalid JSON snapshot", res_bad.stderr)
 
             # Cleanup
-            self.run_locutus(["blackboard", "clear", room])
+            self.run_rhizo(["blackboard", "clear", room])
 
     def test_59_workflow_export_and_import(self):
         """Test workflow export to file and import from file (DAG state persistence)."""
@@ -4889,14 +4888,14 @@ secret = "my_inline_secret_test_555"
             export_file = os.path.join(tmpdir, "flow_export.json")
 
             # 1. Define and partially execute workflow
-            res_def = self.run_locutus(["workflow", "define", flow_id, "--steps", "build,test,deploy", "--deps", "test:build;deploy:test"])
+            res_def = self.run_rhizo(["workflow", "define", flow_id, "--steps", "build,test,deploy", "--deps", "test:build;deploy:test"])
             self.assertEqual(res_def.returncode, 0)
 
-            res_resolve = self.run_locutus(["workflow", "resolve", flow_id, "build", "--output", "binary compiled"])
+            res_resolve = self.run_rhizo(["workflow", "resolve", flow_id, "build", "--output", "binary compiled"])
             self.assertEqual(res_resolve.returncode, 0)
 
             # 2. Export workflow to file
-            res_exp = self.run_locutus(["workflow", "export", flow_id, export_file])
+            res_exp = self.run_rhizo(["workflow", "export", flow_id, export_file])
             self.assertEqual(res_exp.returncode, 0)
             self.assertEqual(res_exp.stdout.strip(), "OK")
             self.assertTrue(os.path.isfile(export_file))
@@ -4910,61 +4909,61 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(flow_data["steps"]["test"]["status"], "ready")
 
             # 3. Import into a new workflow instance
-            res_imp = self.run_locutus(["workflow", "import", restored_flow, export_file])
+            res_imp = self.run_rhizo(["workflow", "import", restored_flow, export_file])
             self.assertEqual(res_imp.returncode, 0)
             self.assertEqual(res_imp.stdout.strip(), "OK")
 
             # 4. Verify unblocked progression on the imported flow
-            res_next = self.run_locutus(["workflow", "next", restored_flow, "--raw"])
+            res_next = self.run_rhizo(["workflow", "next", restored_flow, "--raw"])
             self.assertEqual(res_next.returncode, 0)
             self.assertEqual(res_next.stdout.strip(), "test")
 
             # Negative control: missing import file or invalid payload
-            res_missing = self.run_locutus(["workflow", "import", "bogus_flow"])
+            res_missing = self.run_rhizo(["workflow", "import", "bogus_flow"])
             self.assertEqual(res_missing.returncode, 1)
 
             bad_flow_file = os.path.join(tmpdir, "bad_flow.json")
             with open(bad_flow_file, "w") as f:
                 f.write('{"random": "payload"}')
-            res_bad = self.run_locutus(["workflow", "import", "bogus_flow", bad_flow_file])
+            res_bad = self.run_rhizo(["workflow", "import", "bogus_flow", bad_flow_file])
             self.assertEqual(res_bad.returncode, 1)
             self.assertIn("ERR: Invalid JSON workflow payload", res_bad.stderr)
 
     def test_60_parse_required_int_validation(self):
         """Test strict integer validation across CLI commands with immediate failure (no silent swallows)."""
         # lock ttl
-        res = self.run_locutus(["lock", "test_lock", "not_a_number"])
+        res = self.run_rhizo(["lock", "test_lock", "not_a_number"])
         self.assertEqual(res.returncode, 1)
         self.assertIn("Error: Invalid integer for lock ttl: 'not_a_number'", res.stderr)
 
         # claim --lease
-        res = self.run_locutus(["claim", "test_q", "--lease", "bad_lease"])
+        res = self.run_rhizo(["claim", "test_q", "--lease", "bad_lease"])
         self.assertEqual(res.returncode, 1)
         self.assertIn("Error: Invalid integer for --lease: 'bad_lease'", res.stderr)
 
         # scatter --quorum
-        res = self.run_locutus(["scatter", "--targets", "a", "--subject", "s", "--body", "b", "--quorum", "bad_quorum"])
+        res = self.run_rhizo(["scatter", "--targets", "a", "--subject", "s", "--body", "b", "--quorum", "bad_quorum"])
         self.assertEqual(res.returncode, 1)
         self.assertIn("Error: Invalid integer for --quorum: 'bad_quorum'", res.stderr)
 
         # sub timeout
-        res = self.run_locutus(["sub", "test_chan", "bad_timeout"])
+        res = self.run_rhizo(["sub", "test_chan", "bad_timeout"])
         self.assertEqual(res.returncode, 1)
         self.assertIn("Error: Invalid integer for sub timeout: 'bad_timeout'", res.stderr)
 
         # anonymous agent rejection on leader acquire without open or identity
         with tempfile.TemporaryDirectory() as empty_dir:
-            res_lead = self.run_locutus(["leader", "acquire", "test_role"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            res_lead = self.run_rhizo(["leader", "acquire", "test_role"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(res_lead.returncode, 1)
             self.assertIn("Error: No agent name specified.", res_lead.stderr)
 
             # anonymous agent rejection on floor request without open or identity
-            res_floor = self.run_locutus(["floor", "request", "test_room"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            res_floor = self.run_rhizo(["floor", "request", "test_room"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(res_floor.returncode, 1)
             self.assertIn("Error: No agent name specified.", res_floor.stderr)
 
             # anonymous agent rejection on ballot cast without open or identity
-            res_ballot = self.run_locutus(["ballot", "cast", "test_ballot", "--vote", "opt1"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
+            res_ballot = self.run_rhizo(["ballot", "cast", "test_ballot", "--vote", "opt1"], cwd=empty_dir, env_overrides={"RHIZO_AGENT_NAME": ""})
             self.assertEqual(res_ballot.returncode, 1)
             self.assertIn("Error: No voter name specified.", res_ballot.stderr)
 
@@ -4978,22 +4977,22 @@ secret = "my_inline_secret_test_555"
 
         try:
             # 1. Register agent over valkey:// via --valkey-url
-            res_open = self.run_locutus(["open", agent, "worker", "--valkey-url", valkey_url])
+            res_open = self.run_rhizo(["open", agent, "worker", "--valkey-url", valkey_url])
             self.assertEqual(res_open.returncode, 0)
 
             # 2. Test who with --valkey-url flag
-            res_flag = self.run_locutus(["who", "--valkey-url", valkey_url])
+            res_flag = self.run_rhizo(["who", "--valkey-url", valkey_url])
             self.assertEqual(res_flag.returncode, 0)
             self.assertIn("AGENT", res_flag.stdout)
             self.assertIn(agent, res_flag.stdout)
 
             # 3. Test who with -u alias with valkey://
-            res_alias = self.run_locutus(["who", "-u", valkey_url])
+            res_alias = self.run_rhizo(["who", "-u", valkey_url])
             self.assertEqual(res_alias.returncode, 0)
             self.assertIn(agent, res_alias.stdout)
 
             # 4. Test VALKEY_URL env override
-            res_env = self.run_locutus(
+            res_env = self.run_rhizo(
                 ["who"],
                 env_overrides={
                     "RHIZO_REDIS_URL": "",
@@ -5006,7 +5005,7 @@ secret = "my_inline_secret_test_555"
             self.assertIn(agent, res_env.stdout)
 
             # 5. Test RHIZO_VALKEY_URL precedence over VALKEY_URL and REDIS_URL
-            res_prec = self.run_locutus(
+            res_prec = self.run_rhizo(
                 ["who"],
                 env_overrides={
                     "RHIZO_REDIS_URL": "",
@@ -5020,20 +5019,20 @@ secret = "my_inline_secret_test_555"
 
             # 6. Test blackboard operations over valkey://
             room = f"valkey_bb_{int(time.time() * 1000)}"
-            res_bb_set = self.run_locutus(["blackboard", "set", room, "state", "valkey_ok", "--valkey-url", valkey_url])
+            res_bb_set = self.run_rhizo(["blackboard", "set", room, "state", "valkey_ok", "--valkey-url", valkey_url])
             self.assertEqual(res_bb_set.returncode, 0)
-            res_bb_get = self.run_locutus(["blackboard", "get", room, "state", "--valkey-url", valkey_url])
+            res_bb_get = self.run_rhizo(["blackboard", "get", room, "state", "--valkey-url", valkey_url])
             self.assertEqual(res_bb_get.returncode, 0)
             self.assertEqual(res_bb_get.stdout.strip(), "valkey_ok")
         finally:
-            self.run_locutus(["close", agent], env_overrides={"RHIZO_REDIS_URL": valkey_url})
+            self.run_rhizo(["close", agent], env_overrides={"RHIZO_REDIS_URL": valkey_url})
 
         # 7. Negative controls: invalid scheme and bad port formatting fail fast with code 1
-        res_bad_scheme = self.run_locutus(["who", "--valkey-url", "http://127.0.0.1:6379"])
+        res_bad_scheme = self.run_rhizo(["who", "--valkey-url", "http://127.0.0.1:6379"])
         self.assertEqual(res_bad_scheme.returncode, 1)
         self.assertIn("Invalid Redis/Valkey URL scheme 'http'", res_bad_scheme.stderr)
 
-        res_bad_port = self.run_locutus(["who", "--valkey-url", "valkey://127.0.0.1:not_a_port"])
+        res_bad_port = self.run_rhizo(["who", "--valkey-url", "valkey://127.0.0.1:not_a_port"])
         self.assertEqual(res_bad_port.returncode, 1)
         self.assertIn("Invalid port in Redis/Valkey URL: 'not_a_port'", res_bad_port.stderr)
 
@@ -5045,9 +5044,9 @@ secret = "my_inline_secret_test_555"
         list_key = "l1"
 
         # 1. Blackboard set keys and append to list
-        self.run_locutus(["blackboard", "set", room, key1, '{"v": 1}'])
-        self.run_locutus(["blackboard", "set", room, key2, '{"v": 2}'])
-        self.run_locutus(["blackboard", "append", room, list_key, "item1"])
+        self.run_rhizo(["blackboard", "set", room, key1, '{"v": 1}'])
+        self.run_rhizo(["blackboard", "set", room, key2, '{"v": 2}'])
+        self.run_rhizo(["blackboard", "append", room, list_key, "item1"])
 
         # Direct Redis check: keys exist
         kv_key = f"{TEST_PREFIX}blackboard:{{{room}}}:kv"
@@ -5061,13 +5060,13 @@ secret = "my_inline_secret_test_555"
         self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "SISMEMBER", lists_idx, list_key], capture_output=True, text=True, check=True).stdout.strip(), "1")
 
         # 2. Blackboard delete list key (uses UNLINK)
-        res_del = self.run_locutus(["blackboard", "delete", room, list_key])
+        res_del = self.run_rhizo(["blackboard", "delete", room, list_key])
         self.assertEqual(res_del.returncode, 0)
         self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", list_redis_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
         self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "SISMEMBER", lists_idx, list_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
 
         # 3. Blackboard clear room (uses UNLINK across multi-key expansion)
-        res_clear = self.run_locutus(["blackboard", "clear", room])
+        res_clear = self.run_rhizo(["blackboard", "clear", room])
         self.assertEqual(res_clear.returncode, 0)
         self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", kv_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
         self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", rev_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
@@ -5075,7 +5074,7 @@ secret = "my_inline_secret_test_555"
 
         # 4. Sweep dead-agent pruning via UNLINK
         dead_agent = f"dead_unlink_{int(time.time() * 1000)}"
-        self.run_locutus(["open", dead_agent, "worker"])
+        self.run_rhizo(["open", dead_agent, "worker"])
 
         agent_key = f"{TEST_PREFIX}agent:{dead_agent}"
         hb_key = f"{TEST_PREFIX}heartbeat:{dead_agent}"
@@ -5085,9 +5084,9 @@ secret = "my_inline_secret_test_555"
         subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", hb_key], check=True, capture_output=True)
 
         # Run sweep
-        res_sweep = self.run_locutus(["sweep"])
+        res_sweep = self.run_rhizo(["sweep"])
         self.assertEqual(res_sweep.returncode, 0)
-        sweep_data = LocutusPlugin.validate_json_schema("sweep", res_sweep.stdout)
+        sweep_data = RhizoPlugin.validate_json_schema("sweep", res_sweep.stdout)
         self.assertIn(dead_agent, sweep_data["pruned_agents"])
 
         # Verify direct Redis state: agent hash was unlinked and removed from active_agents
@@ -5126,7 +5125,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(0.6)
 
             # 5. Send message to the agent
-            res_send = self.run_locutus([
+            res_send = self.run_rhizo([
                 "send",
                 "--to", agent,
                 "--from", "reconn_tester",
@@ -5140,7 +5139,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(p.returncode, 0, f"Listener failed with code {p.returncode}:\nSTDERR: {stderr}\nSTDOUT: {stdout}")
 
             # 7. Assert message received and diagnostic log emitted
-            envelope = LocutusPlugin.validate_wire_envelope(stdout.strip())
+            envelope = RhizoPlugin.validate_wire_envelope(stdout.strip())
             self.assertEqual(envelope["body"], "Payload delivered after disconnect")
             self.assertIn("Connection severed. Reconnecting", stderr)
             self.assertIn("Connection re-established successfully.", stderr)
@@ -5183,7 +5182,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(0.6)
 
             # 5. Enqueue a task to the queue
-            res_enq = self.run_locutus([
+            res_enq = self.run_rhizo([
                 "enqueue", q, "Sever Resilience Task", "Claimed post-sever task",
                 "--from", "dispatcher"
             ])
@@ -5200,7 +5199,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(p.returncode, 0, f"Claim worker failed with code {p.returncode}:\nSTDERR: {stderr}\nSTDOUT: {stdout}")
 
             # 7. Assert task claimed and diagnostic log emitted
-            envelope = LocutusPlugin.validate_wire_envelope(stdout.strip())
+            envelope = RhizoPlugin.validate_wire_envelope(stdout.strip())
             self.assertEqual(envelope["body"], "Claimed post-sever task")
             self.assertIn("Connection severed. Reconnecting", stderr)
             self.assertIn("Connection re-established successfully.", stderr)
@@ -5217,60 +5216,60 @@ secret = "my_inline_secret_test_555"
 
         try:
             # 1. Default send should set urgency to 'soon'
-            res_default = self.run_locutus([
+            res_default = self.run_rhizo([
                 "send", "--to", agent, "--from", "dispatcher",
                 "--subject", "Normal task", "--body", "Do this soon"
             ])
             self.assertEqual(res_default.returncode, 0)
-            res_listen = self.run_locutus(["listen", agent, "2"])
+            res_listen = self.run_rhizo(["listen", agent, "2"])
             self.assertEqual(res_listen.returncode, 0)
             msg1 = json.loads(res_listen.stdout.strip())
             self.assertEqual(msg1.get("urgency"), "soon")
 
             # 2. --immediate flag sets urgency to 'immediate'
-            res_imm = self.run_locutus([
+            res_imm = self.run_rhizo([
                 "send", "--to", agent, "--from", "dispatcher",
                 "--subject", "Urgent stop", "--body", "Stop immediately",
                 "--immediate"
             ])
             self.assertEqual(res_imm.returncode, 0)
-            res_listen = self.run_locutus(["listen", agent, "2"])
+            res_listen = self.run_rhizo(["listen", agent, "2"])
             self.assertEqual(res_listen.returncode, 0)
             msg2 = json.loads(res_listen.stdout.strip())
             self.assertEqual(msg2.get("urgency"), "immediate")
 
             # 3. Explicit --soon flag sets urgency to 'soon'
-            res_soon = self.run_locutus([
+            res_soon = self.run_rhizo([
                 "send", "--to", agent, "--from", "dispatcher",
                 "--subject", "Queued review", "--body", "Review when convenient",
                 "--soon"
             ])
             self.assertEqual(res_soon.returncode, 0)
-            res_listen = self.run_locutus(["listen", agent, "2"])
+            res_listen = self.run_rhizo(["listen", agent, "2"])
             self.assertEqual(res_listen.returncode, 0)
             msg3 = json.loads(res_listen.stdout.strip())
             self.assertEqual(msg3.get("urgency"), "soon")
 
             # 4. --delivery=immediate and --urgency=immediate work
-            res_deliv = self.run_locutus([
+            res_deliv = self.run_rhizo([
                 "send", "--to", agent, "--from", "dispatcher",
                 "--subject", "Delivery param", "--body", "Param test",
                 "--delivery=immediate"
             ])
             self.assertEqual(res_deliv.returncode, 0)
-            res_listen = self.run_locutus(["listen", agent, "2"])
+            res_listen = self.run_rhizo(["listen", agent, "2"])
             self.assertEqual(res_listen.returncode, 0)
             msg4 = json.loads(res_listen.stdout.strip())
             self.assertEqual(msg4.get("urgency"), "immediate")
 
             # 5. reply supports --immediate
-            res_reply = self.run_locutus([
+            res_reply = self.run_rhizo([
                 "reply", "--to", agent, "--from", "worker",
                 "--subject", "Re: Urgent stop", "--body", "Acknowledged and stopped",
                 "--immediate"
             ])
             self.assertEqual(res_reply.returncode, 0)
-            res_listen = self.run_locutus(["listen", agent, "2"])
+            res_listen = self.run_rhizo(["listen", agent, "2"])
             self.assertEqual(res_listen.returncode, 0)
             msg5 = json.loads(res_listen.stdout.strip())
             self.assertEqual(msg5.get("type"), "reply")
@@ -5279,19 +5278,19 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
 
     def test_66_check_inbox_and_enhanced_drain(self):
-        """Test locutus check-inbox exit codes and drain --hook/--json with encryption and auth."""
+        """Test rhizo check-inbox exit codes and drain --hook/--json with encryption and auth."""
         agent = "test_drain_agent"
         inbox_key = f"{TEST_PREFIX}inbox:{agent}"
         subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
 
         try:
             # 1. Empty inbox: check-inbox must output 0 and exit code 1
-            res_empty = self.run_locutus(["check-inbox", agent])
+            res_empty = self.run_rhizo(["check-inbox", agent])
             self.assertEqual(res_empty.returncode, 1)
             self.assertEqual(res_empty.stdout.strip(), "0")
 
             # 2. Send plain message
-            res_send1 = self.run_locutus([
+            res_send1 = self.run_rhizo([
                 "send", "--to", agent, "--from", "alice",
                 "--subject", "Code Review", "--body", "Please review PR #42",
                 "--urgency=soon"
@@ -5299,7 +5298,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(res_send1.returncode, 0)
 
             # 3. Send encrypted message
-            res_send2 = self.run_locutus([
+            res_send2 = self.run_rhizo([
                 "send", "--to", agent, "--from", "security_lead",
                 "--subject", "API Key Rotate", "--body", "Secret rotation required immediately",
                 "--immediate", "--encrypt"
@@ -5307,37 +5306,37 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(res_send2.returncode, 0)
 
             # 4. Check inbox: count must be 2 and exit code 0
-            res_count = self.run_locutus(["check-inbox", agent])
+            res_count = self.run_rhizo(["check-inbox", agent])
             self.assertEqual(res_count.returncode, 0)
             self.assertEqual(res_count.stdout.strip(), "2")
 
             # 5. Drain with --hook: must return formatted continuation block
-            res_hook = self.run_locutus(["drain", "50", agent, "--hook"])
+            res_hook = self.run_rhizo(["drain", "50", agent, "--hook"])
             self.assertEqual(res_hook.returncode, 0)
             hook_text = res_hook.stdout.strip()
 
-            self.assertTrue(f"[RHIZO BUS] 2 new messages received on inbox for '{agent}':" in hook_text or f"[LOCUTUS BUS] 2 new messages received on inbox for '{agent}':" in hook_text)
+            self.assertTrue(f"[RHIZO BUS] 2 new messages received on inbox for '{agent}':" in hook_text)
             self.assertRegex(hook_text, r"- From @alice( \[host: [^\]]+\])? \(subject: \"Code Review\"\) \[type: task, urgency: soon\]:")
             self.assertIn("Please review PR #42", hook_text)
             self.assertRegex(hook_text, r"- From @security_lead( \[host: [^\]]+\])? \(subject: \"API Key Rotate\"\) \[type: task, urgency: immediate\]:")
             self.assertIn("Secret rotation required immediately", hook_text)
 
             # 6. Verify inbox is now empty
-            res_after = self.run_locutus(["check-inbox", agent])
+            res_after = self.run_rhizo(["check-inbox", agent])
             self.assertEqual(res_after.returncode, 1)
             self.assertEqual(res_after.stdout.strip(), "0")
 
             # Drain on empty inbox with --hook should return empty string
-            res_hook_empty = self.run_locutus(["drain", "50", agent, "--hook"])
+            res_hook_empty = self.run_rhizo(["drain", "50", agent, "--hook"])
             self.assertEqual(res_hook_empty.returncode, 0)
             self.assertEqual(res_hook_empty.stdout.strip(), "")
 
             # 7. Test drain with --json on a single message
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent, "--from", "bob",
                 "--subject", "JSON Drain Test", "--body", "Payload content",
             ])
-            res_json = self.run_locutus(["drain", "50", agent, "--json"])
+            res_json = self.run_rhizo(["drain", "50", agent, "--json"])
             self.assertEqual(res_json.returncode, 0)
             drained_list = json.loads(res_json.stdout.strip())
             self.assertIsInstance(drained_list, list)
@@ -5364,19 +5363,19 @@ secret = "my_inline_secret_test_555"
 
         try:
             # 1. Register session mappings
-            self.run_locutus(["session", "set", pi_sid, pi_agent])
-            self.run_locutus(["session", "set", cursor_sid, cursor_agent])
-            self.run_locutus(["session", "set", copilot_sid, copilot_agent])
+            self.run_rhizo(["session", "set", pi_sid, pi_agent])
+            self.run_rhizo(["session", "set", cursor_sid, cursor_agent])
+            self.run_rhizo(["session", "set", copilot_sid, copilot_agent])
 
             # 2. Pi sends urgent task to Cursor
-            res_pi_send = self.run_locutus(
+            res_pi_send = self.run_rhizo(
                 ["send", "--to", cursor_agent, "--subject", "Build Check", "--body", "Halt build #10", "--immediate"],
                 env_overrides={"RHIZO_SESSION_ID": pi_sid, "RHIZO_AGENT_NAME": ""}
             )
             self.assertEqual(res_pi_send.returncode, 0)
 
             # 3. Cursor drains task and verifies metadata
-            res_cur_drain = self.run_locutus(
+            res_cur_drain = self.run_rhizo(
                 ["drain", "1", cursor_agent, "--json"],
                 env_overrides={"RHIZO_SESSION_ID": cursor_sid, "RHIZO_AGENT_NAME": ""}
             )
@@ -5388,14 +5387,14 @@ secret = "my_inline_secret_test_555"
             self.assertIn("host", task_msg)
 
             # 4. Cursor replies to Pi
-            res_cur_reply = self.run_locutus(
+            res_cur_reply = self.run_rhizo(
                 ["reply", "--to", pi_agent, "--subject", "Re: Build Check", "--body", "Build halted successfully", "--reply-to", task_msg["id"]],
                 env_overrides={"RHIZO_SESSION_ID": cursor_sid, "RHIZO_AGENT_NAME": ""}
             )
             self.assertEqual(res_cur_reply.returncode, 0)
 
             # Verify Pi inbox received reply
-            res_pi_drain = self.run_locutus(
+            res_pi_drain = self.run_rhizo(
                 ["drain", "1", pi_agent, "--json"],
                 env_overrides={"RHIZO_SESSION_ID": pi_sid, "RHIZO_AGENT_NAME": ""}
             )
@@ -5406,12 +5405,12 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(reply_msg["reply_to"], task_msg["id"])
 
             # 5. Pi enqueues task; Copilot claims and acknowledges it
-            self.run_locutus(
+            self.run_rhizo(
                 ["enqueue", queue_name, "--subject", "Process Data", "--body", "data_payload"],
                 env_overrides={"RHIZO_SESSION_ID": pi_sid, "RHIZO_AGENT_NAME": ""}
             )
 
-            res_claim = self.run_locutus(
+            res_claim = self.run_rhizo(
                 ["claim", queue_name, "10", "--lease", "30"],
                 env_overrides={"RHIZO_SESSION_ID": copilot_sid, "RHIZO_AGENT_NAME": ""}
             )
@@ -5419,22 +5418,22 @@ secret = "my_inline_secret_test_555"
             claimed = json.loads(res_claim.stdout.strip())
             self.assertEqual(claimed["subject"], "Process Data")
 
-            res_ack = self.run_locutus(
+            res_ack = self.run_rhizo(
                 ["ack", queue_name, claimed["id"]],
                 env_overrides={"RHIZO_SESSION_ID": copilot_sid, "RHIZO_AGENT_NAME": ""}
             )
             self.assertEqual(res_ack.returncode, 0)
 
         finally:
-            self.run_locutus(["session", "remove", pi_sid])
-            self.run_locutus(["session", "remove", cursor_sid])
-            self.run_locutus(["session", "remove", copilot_sid])
+            self.run_rhizo(["session", "remove", pi_sid])
+            self.run_rhizo(["session", "remove", cursor_sid])
+            self.run_rhizo(["session", "remove", copilot_sid])
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}inbox:{cursor_agent}"], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}inbox:{pi_agent}"], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}queue:{queue_name}"], capture_output=True)
 
     def test_68_listen_with_notify_flag(self):
-        """Verify that 'locutus listen --notify' and '-n' block, trigger notification logic safely, and exit 0 with JSON payload."""
+        """Verify that 'rhizo listen --notify' and '-n' block, trigger notification logic safely, and exit 0 with JSON payload."""
         agent_name = f"notif_agent_{int(time.time() * 1000)}"
         inbox_key = f"{TEST_PREFIX}inbox:{agent_name}"
 
@@ -5452,7 +5451,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(0.4)
 
             # 2. Dispatch a message to the agent
-            res_send = self.run_locutus([
+            res_send = self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Critical Notification",
                 "--body", "Database migration complete",
@@ -5472,7 +5471,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(payload["urgency"], "immediate")
 
             # 5. Verify short flag -n argument parsing on a timed out wait
-            res_timed = self.run_locutus(["listen", agent_name, "1", "-n"])
+            res_timed = self.run_rhizo(["listen", agent_name, "1", "-n"])
             self.assertEqual(res_timed.returncode, 0)
             self.assertEqual(res_timed.stdout.strip(), "")
 
@@ -5480,7 +5479,7 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
 
     def test_69_listen_lifecycle_postamble_and_quiet_flag(self):
-        """Verify that locutus listen emits lifecycle guidance to stderr upon exit, and that --quiet/-q/RHIZO_QUIET suppresses it."""
+        """Verify that rhizo listen emits lifecycle guidance to stderr upon exit, and that --quiet/-q/RHIZO_QUIET suppresses it."""
         agent_name = f"lifecycle_agent_{int(time.time() * 1000)}"
         inbox_key = f"{TEST_PREFIX}inbox:{agent_name}"
         base_env = self.env.copy()
@@ -5496,7 +5495,7 @@ secret = "my_inline_secret_test_555"
             time.sleep(0.4)
 
             # 2. Send a task
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Build Feature",
                 "--body", "Implement user billing API",
@@ -5511,11 +5510,11 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(payload["subject"], "Build Feature")
 
             # Stderr must contain lifecycle notice and re-arm instructions
-            self.assertTrue("[LOCU LIFECYCLE NOTICE]" in stderr or "[RHIZO LIFECYCLE NOTICE]" in stderr or "[LOCUTUS LIFECYCLE NOTICE]" in stderr)
-            self.assertTrue("rhizo reply --to" in stderr or "locutus reply --to" in stderr)
+            self.assertTrue("[RHIZO LIFECYCLE NOTICE]" in stderr)
+            self.assertTrue("rhizo reply --to" in stderr)
             self.assertIn("--listen", stderr)
-            self.assertTrue(f"rhizo listen {agent_name}" in stderr or f"locutus listen {agent_name}" in stderr)
-            self.assertTrue(f"rhizo close {agent_name}" in stderr or f"locutus close {agent_name}" in stderr)
+            self.assertTrue(f"rhizo listen {agent_name}" in stderr)
+            self.assertTrue(f"rhizo close {agent_name}" in stderr)
 
             # 3. Test --quiet flag: lifecycle notice must be suppressed
             proc_q = subprocess.Popen(
@@ -5527,7 +5526,7 @@ secret = "my_inline_secret_test_555"
             )
             time.sleep(0.4)
 
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Quiet Task",
                 "--body", "Should not print notice",
@@ -5550,7 +5549,7 @@ secret = "my_inline_secret_test_555"
             )
             time.sleep(0.4)
 
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Env Quiet Task",
                 "--body", "Env should suppress",
@@ -5562,20 +5561,20 @@ secret = "my_inline_secret_test_555"
             self.assertNotIn("LIFECYCLE NOTICE", stderr_env)
 
             # 5. Test drain with --hook includes NEXT-STEP ACTION block
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Hook Action Test",
                 "--body", "Follow next step instructions",
                 "--soon"
             ])
-            res_hook = self.run_locutus(["drain", "50", agent_name, "--hook"])
+            res_hook = self.run_rhizo(["drain", "50", agent_name, "--hook"])
             self.assertEqual(res_hook.returncode, 0)
-            self.assertTrue("[RHIZO NEXT-STEP ACTION]:" in res_hook.stdout or "[LOCUTUS NEXT-STEP ACTION]:" in res_hook.stdout)
-            self.assertTrue("rhizo reply ... --listen" in res_hook.stdout or "locutus reply ... --listen" in res_hook.stdout)
-            self.assertTrue(f"rhizo close {agent_name}" in res_hook.stdout or f"locutus close {agent_name}" in res_hook.stdout)
+            self.assertTrue("[RHIZO NEXT-STEP ACTION]:" in res_hook.stdout)
+            self.assertTrue("rhizo reply ... --listen" in res_hook.stdout)
+            self.assertTrue(f"rhizo close {agent_name}" in res_hook.stdout)
 
-            # 6. Test clean unregister via locutus close
-            res_close = self.run_locutus(["close", agent_name])
+            # 6. Test clean unregister via rhizo close
+            res_close = self.run_rhizo(["close", agent_name])
             self.assertEqual(res_close.returncode, 0)
 
         finally:
@@ -5583,7 +5582,7 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}listener:{agent_name}"], capture_output=True)
 
     def test_70_harness_specific_lifecycle_notices(self):
-        """Verify that locutus listen and drain --hook emit harness-tailored playbooks based on environment variables."""
+        """Verify that rhizo listen and drain --hook emit harness-tailored playbooks based on environment variables."""
         agent_name = f"harness_agent_{int(time.time() * 1000)}"
         inbox_key = f"{TEST_PREFIX}inbox:{agent_name}"
         base_env = self.env.copy()
@@ -5598,7 +5597,7 @@ secret = "my_inline_secret_test_555"
                 env={**base_env, "OPENCODE_SESSION_ID": "ses_opencode_123"}
             )
             time.sleep(0.4)
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Task for OpenCode",
                 "--body", "Run test suite",
@@ -5610,7 +5609,7 @@ secret = "my_inline_secret_test_555"
             self.assertTrue("In-process extension fiber is active. DO NOT run a blocking" in stderr_opencode)
 
             # 2. OpenCode drain --hook next-step action
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Another OpenCode Task",
                 "--body", "Refactor module",
@@ -5635,7 +5634,7 @@ secret = "my_inline_secret_test_555"
                 env={**base_env, "CODEX_SESSION_ID": "codex_session_456"}
             )
             time.sleep(0.4)
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Task for Codex",
                 "--body", "Investigate logs",
@@ -5655,7 +5654,7 @@ secret = "my_inline_secret_test_555"
                 env={**base_env, "ANTIGRAVITY_APP_DIR": "/tmp/agy"}
             )
             time.sleep(0.4)
-            self.run_locutus([
+            self.run_rhizo([
                 "send", "--to", agent_name,
                 "--subject", "Task for Antigravity",
                 "--body", "Pair program",
@@ -5669,49 +5668,48 @@ secret = "my_inline_secret_test_555"
         finally:
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}listener:{agent_name}"], capture_output=True)
-            self.run_locutus(["close", agent_name])
+            self.run_rhizo(["close", agent_name])
 
     def test_71_guide_lifecycle_and_config(self):
-        """Verify locutus guide install, check, and uninstall subcommands."""
-        with tempfile.TemporaryDirectory(prefix="locutus_guide_test_") as tmpdir:
+        """Verify rhizo guide install, check, and uninstall subcommands."""
+        with tempfile.TemporaryDirectory(prefix="rhizo_guide_test_") as tmpdir:
             agents_file = os.path.join(tmpdir, "AGENTS.md")
             
             # 1. Check on missing file
-            check_res = self.run_locutus(["guide", "check", agents_file])
+            check_res = self.run_rhizo(["guide", "check", agents_file])
             self.assertEqual(check_res.returncode, 0)
             self.assertIn("[MISSING]", check_res.stdout)
 
             # 2. Install guide into new file
-            inst_res = self.run_locutus(["guide", "install", agents_file])
+            inst_res = self.run_rhizo(["guide", "install", agents_file])
             self.assertEqual(inst_res.returncode, 0)
             self.assertIn("Created", inst_res.stdout)
             self.assertTrue(os.path.isfile(agents_file))
             with open(agents_file) as f:
                 content = f.read()
-            self.assertTrue("BEGIN RHIZO GUIDE" in content or "BEGIN LOCUTUS GUIDE" in content)
-            self.assertTrue("END RHIZO GUIDE" in content or "END LOCUTUS GUIDE" in content)
+            self.assertTrue("BEGIN RHIZO GUIDE" in content)
+            self.assertTrue("END RHIZO GUIDE" in content)
 
             # 3. Check installed status
-            check_res2 = self.run_locutus(["guide", "check", agents_file])
+            check_res2 = self.run_rhizo(["guide", "check", agents_file])
             self.assertEqual(check_res2.returncode, 0)
             self.assertTrue("Guide is installed" in check_res2.stdout)
 
             # 4. Uninstall guide
-            uninst_res = self.run_locutus(["guide", "uninstall", agents_file])
+            uninst_res = self.run_rhizo(["guide", "uninstall", agents_file])
             self.assertEqual(uninst_res.returncode, 0)
             self.assertIn("Successfully uninstalled", uninst_res.stdout)
             with open(agents_file) as f:
                 content2 = f.read()
             self.assertNotIn("BEGIN RHIZO GUIDE", content2)
-            self.assertNotIn("BEGIN LOCUTUS GUIDE", content2)
-
+            
     def test_72_inflight_lease_liveness_and_task_heartbeat(self):
         """Verify WISM in-flight lease prevents STALE status in rhizo who and claim/progress auto-refreshes heartbeat."""
         r = redis.from_url(REDIS_URL, protocol=2)
 
         # Part 1: Auto-Heartbeat Refresh on claim and progress
         worker = f"worker_liveness_{os.getpid()}"
-        res = self.run_locutus(["open", worker, "tester"])
+        res = self.run_rhizo(["open", worker, "tester"])
         self.assertEqual(res.returncode, 0)
 
         # Artificially delete heartbeat key to simulate expiry
@@ -5719,11 +5717,11 @@ secret = "my_inline_secret_test_555"
         self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 0)
 
         # Create task
-        t_create = self.run_locutus(["task", "create", "task-hb-test", "--title", "Heartbeat Test Task"])
+        t_create = self.run_rhizo(["task", "create", "task-hb-test", "--title", "Heartbeat Test Task"])
         self.assertEqual(t_create.returncode, 0)
 
         # Claim task: should refresh heartbeat:<worker> and update last_seen
-        t_claim = self.run_locutus(["task", "claim", "task-hb-test", "--worker", worker, "--lease", "3600", "--no-vine"])
+        t_claim = self.run_rhizo(["task", "claim", "task-hb-test", "--worker", worker, "--lease", "3600", "--no-vine"])
         self.assertEqual(t_claim.returncode, 0)
         self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 1)
         ttl = r.ttl(f"{TEST_PREFIX}heartbeat:{worker}")
@@ -5734,7 +5732,7 @@ secret = "my_inline_secret_test_555"
         self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 0)
 
         # Progress update: should also refresh heartbeat:<worker> and update last_seen
-        t_prog = self.run_locutus(["task", "progress", "task-hb-test", "--progress", "50% done", "--worker", worker, "--renew", "1800"])
+        t_prog = self.run_rhizo(["task", "progress", "task-hb-test", "--progress", "50% done", "--worker", worker, "--renew", "1800"])
         self.assertEqual(t_prog.returncode, 0)
         self.assertEqual(r.exists(f"{TEST_PREFIX}heartbeat:{worker}"), 1)
         ttl2 = r.ttl(f"{TEST_PREFIX}heartbeat:{worker}")
@@ -5746,7 +5744,7 @@ secret = "my_inline_secret_test_555"
         r.hset(f"{TEST_PREFIX}agent:{worker}", "last_seen", 1000)
 
         # Query directory via rhizo who --json
-        who_res = self.run_locutus(["who", "--json"])
+        who_res = self.run_rhizo(["who", "--json"])
         self.assertEqual(who_res.returncode, 0)
         agents = json.loads(who_res.stdout)
         worker_entry = next((a for a in agents if a["agent"] == worker), None)
@@ -5757,15 +5755,23 @@ secret = "my_inline_secret_test_555"
         self.assertIn("BUSY (TASK-HB-TEST)", worker_entry["state"])
 
         # Also verify tabular rhizo who output
-        who_table = self.run_locutus(["who"])
+        who_table = self.run_rhizo(["who"])
         self.assertEqual(who_table.returncode, 0)
         self.assertIn(worker, who_table.stdout)
         self.assertIn("ACTIVE", who_table.stdout)
         self.assertIn("BUSY (TASK-HB-TEST)", who_table.stdout)
 
+        # Part 3: Verify 'rhizo probe' surfaces in-flight task state, progress, and lease TTL
+        probe_res = self.run_rhizo(["probe", worker, "--json"])
+        self.assertEqual(probe_res.returncode, 0)
+        probe_json = json.loads(probe_res.stdout)
+        self.assertTrue(probe_json["in_flight_active"])
+        self.assertTrue(probe_json["heartbeat_active"])
+        self.assertEqual(probe_json["current_task"], "task-hb-test")
+        self.assertEqual(probe_json["task_state"], "IN_PROGRESS")
+        self.assertEqual(probe_json["task_progress"], "50% done")
+        self.assertGreater(probe_json["task_lease_remaining_sec"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

@@ -37,7 +37,6 @@ cd rhizo
 
 # 2. Build native Nim binary (1 second)
 nim c -d:release -o:bin/rhizo src/rhizo.nim
-ln -sf rhizo bin/locutus 2>/dev/null || true
 
 # 3. Set up Python virtual environment & dependencies
 python3 -m venv .venv
@@ -93,11 +92,11 @@ Rhizo coordinates autonomous coding assistants across heterogeneous terminal, ed
 ### Supported Harnesses & Runtime Behaviors
 
 #### 1. OpenCode
-- **Integration Mechanism**: Native JavaScript/TypeScript plugin runtime (`skills/rhizo/opencode-ear.js`) loaded from `~/.config/opencode/plugins/rhizo.js` (or legacy `locutus.js`).
+- **Integration Mechanism**: Native JavaScript/TypeScript plugin runtime (`skills/rhizo/opencode-ear.js`) loaded from `~/.config/opencode/plugins/rhizo.js`.
 - **Lifecycle & Session Hooks**:
-  - `shell.env`: Injects `RHIZO_SESSION_ID=opencode:<sessionId>` and `RHIZO_AGENT_NAME=<agent>` (with `LOCUTUS_*` aliases) into the shell environment before every bash tool execution. This guarantees that CLI subcommands executed inside OpenCode inherit identity without manual configuration.
+  - `shell.env`: Injects `RHIZO_SESSION_ID=opencode:<sessionId>` and `RHIZO_AGENT_NAME=<agent>` into the shell environment before every bash tool execution. This guarantees that CLI subcommands executed inside OpenCode inherit identity without manual configuration.
   - `event`: Subscribes to `session.created` to provision an agent identity and arm an active listener; subscribes to `session.deleted` to clean up session mappings and unregister the agent.
-- **Session Mapping**: Automatically persists `opencode:<sessionId>` mappings in `~/.config/rhizo/sessions.json` (fallback `~/.config/locutus/sessions.json`) and synchronizes with Redis hash `${PREFIX}sessions`.
+- **Session Mapping**: Automatically persists `opencode:<sessionId>` mappings in `~/.config/rhizo/sessions.json` and synchronizes with Redis hash `${PREFIX}sessions`.
 - **Idle Wakeup & In-Flight Interruption**:
   - Runs an asynchronous generator over `rhizo listen <agent> 0` in an unblocked fiber.
   - **Idle State**: Injects incoming tasks directly into the agent's turn loop using `client.session.promptAsync({ path: { id: sessionId }, body: { parts: [{ type: "text", text }] } })`.
@@ -207,7 +206,7 @@ Every new coding harness integration must be validated across 5 distinct test ti
   2. **Formatted Continuation Blocks**: When messages are pending, verify that `rhizo drain 50 <agent> --hook` outputs a structured Markdown block (`[RHIZO BUS] N new messages received on inbox for '<agent>':`).
   3. **Metadata Formatting**: Verify that sender (`- From @<agent>`), subject line, urgency tag (`[type: task, urgency: <soon|immediate>]`), and origin host (`[host: <origin>]`) are formatted accurately.
   4. **Cryptographic Validation in Hook**: Verify that messages with invalid HMAC signatures are dropped and omitted from the hook output.
-- **Reference Example**: Inspect `TestLocutusHooks` in [`tests/test_hooks.py`](tests/test_hooks.py).
+- **Reference Example**: Inspect `TestRhizoHooks` in [`tests/test_hooks.py`](tests/test_hooks.py).
 
 #### Tier 3: Active Ear & In-Flight Interruption Tests
 - **File Location**: `tests/test_<harness>_ear.test.js`

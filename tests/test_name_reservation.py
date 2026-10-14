@@ -6,15 +6,15 @@ import redis
 
 import sys
 
-REDIS_URL = os.environ.get("RHIZO_REDIS_URL", os.environ.get("LOCUTUS_REDIS_URL", "redis://127.0.0.1:6379"))
+REDIS_URL = os.environ.get("RHIZO_REDIS_URL", "redis://127.0.0.1:6379")
 if sys.platform == "win32":
     BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
     if not os.path.isfile(BIN_PATH):
-        BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "locutus.exe"))
+        BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
 else:
     BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo"))
     if not os.path.isfile(BIN_PATH):
-        BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "locutus"))
+        BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo"))
 
 TEST_PREFIX = "test_rhizo_name:"
 

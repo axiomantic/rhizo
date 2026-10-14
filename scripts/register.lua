@@ -1,9 +1,9 @@
 -- scripts/register.lua
 -- Registers an agent, records tags and metadata, and arms an expiring heartbeat.
 -- Cleans up previously indexed tags if re-registering with a new tag set.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: agent name (e.g. "alice")
--- ARGV[3]: tags comma-separated (e.g. "locutus,backend,ticket-104")
+-- ARGV[3]: tags comma-separated (e.g. "rhizo,backend,ticket-104")
 -- ARGV[4]: heartbeat TTL seconds (default 150)
 
 local prefix = ARGV[1]

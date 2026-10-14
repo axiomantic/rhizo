@@ -1,6 +1,6 @@
 -- scripts/floor.lua
 -- Exclusive speaker lease & floor control ring for roundtable brainstorming.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: action ("request", "enqueue_waiter", "yield", "pass", "status")
 -- ARGV[3]: room (e.g. "roundtable_1")
 -- ARGV[4]: agent name

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# scripts/ci/install-deps.sh: Install build and test dependencies for Locutus CI
+# scripts/ci/install-deps.sh: Install build and test dependencies for Rhizo CI
 # Suitable for containerized CI (Forgejo / GitHub Actions) and local environments.
 
-echo "=== Installing Locutus CI dependencies ==="
+echo "=== Installing Rhizo CI dependencies ==="
 
 # Install system packages (Python, Redis, Git) if on Debian/Ubuntu and not present
 if command -v apt-get >/dev/null 2>&1; then
@@ -71,4 +71,4 @@ else
   echo "Warning: pip not found. Ensure python packages are installed."
 fi
 
-echo "=== Locutus CI dependencies ready ==="
+echo "=== Rhizo CI dependencies ready ==="

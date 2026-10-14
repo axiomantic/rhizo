@@ -1,5 +1,5 @@
 """
-Formal Pydantic Data Validation Model for Locutus Redis Agent Communication Messages.
+Formal Pydantic Data Validation Model for Rhizo Redis Agent Communication Messages.
 Provides strict schema validation, type checking, and ISO timestamp verification.
 """
 
@@ -8,7 +8,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class LocutusMessage(BaseModel):
+class RhizoMessage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(..., min_length=3, description="Unique message ID (e.g. msg_1710789000_alice_9f8a)")
@@ -45,4 +45,4 @@ class LocutusMessage(BaseModel):
 
 
 # Backwards compatibility alias
-A2AMessage = LocutusMessage
+A2AMessage = RhizoMessage

@@ -1,5 +1,5 @@
 # tests/test_routing_unit.nim
-# Unit test suite for Locutus native task routing engine and route config linter.
+# Unit test suite for Rhizo native task routing engine and route config linter.
 
 import std/[unittest, json, tables, os, strutils]
 import ../src/routing

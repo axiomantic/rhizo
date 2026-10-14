@@ -1,7 +1,7 @@
 -- scripts/claim.lua
 -- Non-destructively claims a task from a work queue with a lease TTL.
 -- Automatically reclaims expired leases and routes to DLQ after max_retries.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: queue name (e.g. "render_jobs")
 -- ARGV[3]: agent name (e.g. "worker-1")
 -- ARGV[4]: lease duration in seconds (default 120)

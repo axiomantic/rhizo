@@ -1,7 +1,7 @@
 -- scripts/scatter.lua
 -- Fans out a task message to target agents (either by comma-separated names, @tag, or *)
 -- and returns the number of inboxes the task was delivered to.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: targets (e.g. "worker1,worker2" or "@qa" or "*")
 -- ARGV[3]: message JSON string
 -- ARGV[4]: inbox TTL seconds (default 300)

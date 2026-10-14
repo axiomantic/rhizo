@@ -1,6 +1,6 @@
 -- scripts/unregister.lua
 -- Removes agent from active roster, clears tags, and deletes heartbeat.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: agent name (e.g. "alice")
 
 local prefix = ARGV[1]

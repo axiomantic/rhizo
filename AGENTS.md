@@ -1,4 +1,4 @@
-# AGENTS.md — Locutus & Multi-Agent Workspace Guide
+# AGENTS.md — Rhizo & Multi-Agent Workspace Guide
 
 This repository guide establishes the runtime invariants, directory hygiene, and coordination protocols for AI coding agents operating across projects.
 

@@ -1,6 +1,6 @@
 -- scripts/send_o2o.lua
 -- Pushes a direct message to a recipient's inbox and sets/refreshes inbox TTL.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: recipient agent name (e.g. "bob")
 -- Dual Mode:
 -- Mode A (Raw JSON string):
@@ -11,7 +11,7 @@
 --   ARGV[4]: from (e.g. "alice")
 --   ARGV[5]: subject (e.g. "Math Task")
 --   ARGV[6]: body (e.g. "Please compute 25 * 4.")
---   ARGV[7]: tags_csv (optional, e.g. "locutus")
+--   ARGV[7]: tags_csv (optional, e.g. "rhizo")
 --   ARGV[8]: reply_to (optional, or "")
 --   ARGV[9]: id (optional, auto-generated if empty)
 --   ARGV[10]: timestamp (ISO timestamp string, e.g. from $(date -u +"%Y-%m-%dT%H:%M:%SZ"))

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Integration test using a local Ollama model to test the Redis Locutus Skill end-to-end.
+Integration test using a local Ollama model to test the Redis Rhizo Skill end-to-end.
 Tests that a local LLM given SKILL.md and a bash tool can:
 1. Register on Redis with tags using register.lua
 2. Send a structured JSON task message via send_o2o.lua
-3. Validate envelope and content strictly via Pydantic LocutusMessage
+3. Validate envelope and content strictly via Pydantic RhizoMessage
 """
 
 import json
@@ -14,10 +14,10 @@ import sys
 import unittest
 import pytest
 import tripwire
-from tests.tripwire_locutus import LocutusPlugin, LocutusSchemaError
+from tests.tripwire_rhizo import RhizoPlugin, RhizoSchemaError
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from tests.schema import LocutusMessage, A2AMessage
+from tests.schema import RhizoMessage, A2AMessage
 from tests.llm_client import call_llm, is_llm_available, MODEL_NAME, TOOLS
 
 SKILL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "skills", "rhizo", "SKILL.md"))
@@ -42,7 +42,7 @@ def run_bash(cmd: str) -> str:
         local_bin = os.path.expanduser("~/.local/bin")
         env["PATH"] = f"{bin_dir}:{local_bin}:{env.get('PATH', '')}"
         env.setdefault("RHIZO_REDIS_PREFIX", "rhizo:")
-        env.setdefault("RHIZO_PROJECT", "locutus")
+        env.setdefault("RHIZO_PROJECT", "rhizo")
         env.setdefault("RHIZO_ALLOW_DRIFT", "1")
         env.setdefault("RHIZO_SCRIPTS_DIR", os.path.abspath("scripts"))
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, env=env)
@@ -61,7 +61,7 @@ def redis_cmd(*args):
 
 @pytest.mark.llm
 @pytest.mark.e2e
-class TestLocutusLLMAgent(unittest.TestCase):
+class TestRhizoLLMAgent(unittest.TestCase):
     def test_llm_agent_e2e(self):
         """Test LLM agent registration and messaging end-to-end with deterministic fallback and wire validation."""
         # 1. Negative control on unknown tool rejection
@@ -70,11 +70,11 @@ class TestLocutusLLMAgent(unittest.TestCase):
         self.assertIn("Error: unknown tool", unknown_resp)
 
         # 2. Negative control on wire envelope validator
-        with self.assertRaises(LocutusSchemaError):
-            LocutusPlugin.validate_wire_envelope({"id": "msg_001", "from": "alice"})  # missing to, type, body, ts
+        with self.assertRaises(RhizoSchemaError):
+            RhizoPlugin.validate_wire_envelope({"id": "msg_001", "from": "alice"})  # missing to, type, body, ts
 
-        with self.assertRaises(LocutusSchemaError):
-            LocutusPlugin.validate_wire_envelope("not_json_string")
+        with self.assertRaises(RhizoSchemaError):
+            RhizoPlugin.validate_wire_envelope("not_json_string")
 
         # Flush test recipient inbox and keys
         redis_cmd(
@@ -83,7 +83,7 @@ class TestLocutusLLMAgent(unittest.TestCase):
             "rhizo:heartbeat:alice",
             "rhizo:agent:alice",
             "rhizo:tag:calc",
-            "rhizo:tag:locutus",
+            "rhizo:tag:rhizo",
             "rhizo:active_agents"
         )
 
@@ -180,8 +180,8 @@ class TestLocutusLLMAgent(unittest.TestCase):
         self.assertTrue(bool(raw_msg), "Failed to retrieve raw message from Bob inbox")
 
         # Validate with both Pydantic schema and custom Tripwire wire envelope validator
-        msg = LocutusMessage.model_validate_json(raw_msg)
-        wire_envelope = LocutusPlugin.validate_wire_envelope(raw_msg)
+        msg = RhizoMessage.model_validate_json(raw_msg)
+        wire_envelope = RhizoPlugin.validate_wire_envelope(raw_msg)
 
         # Semantic Content Validation
         self.assertEqual(msg.from_agent, "alice")

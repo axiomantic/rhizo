@@ -1,7 +1,7 @@
 -- scripts/status.lua
 -- Updates an agent's operational state (idle, busy, error) and current activity description.
 -- Also refreshes the agent's heartbeat.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: agent name (e.g. "alice")
 -- ARGV[3]: state ("idle", "busy", "error", "offline")
 -- ARGV[4]: activity text (e.g. "Running unit tests")

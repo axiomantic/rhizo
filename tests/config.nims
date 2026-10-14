@@ -1,4 +1,4 @@
-# locutus/tests/config.nims
+# rhizo/tests/config.nims
 switch("path", "/Users/eek/Development/tripwire/src")
 switch("path", "../src")
 switch("path", "plugins")

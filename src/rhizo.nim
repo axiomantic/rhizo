@@ -2173,7 +2173,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
       if isTask:
         try:
-          discard doTask(cfg, "deliver", [id, name, "180", subject, body])
+          discard doTask(cfg, "deliver", [id, name, "900", subject, body])
         except CatchableError:
           discard
 
@@ -2214,8 +2214,13 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
         stderr.writeLine("   operator in this chat window ALWAYS takes absolute precedence over cluster tasks.")
         stderr.writeLine("   If the operator gives an instruction, execute it immediately; NEVER ignore the operator.")
-        stderr.writeLine("2. ARM NOW DISCIPLINE: The listener is an ARM NOW imperative, not an 'arm when I'm done'")
-        stderr.writeLine("   afterthought. If the operator says to listen, arm immediately in that turn.")
+        stderr.writeLine("2. ARM NOW & IMMEDIATE ACK DISCIPLINE: The listener is an ARM NOW imperative.")
+        stderr.writeLine("   - Upon receiving a task, immediately claim/ACK it ('rhizo task claim " & id & " --lease 900'")
+        stderr.writeLine("     or send an immediate ACK reply) AND in Tier 2 async harnesses (Antigravity) re-arm")
+        stderr.writeLine("     your background listener ('" & exactCmd & "') RIGHT NOW so you remain reachable")
+        stderr.writeLine("     during multi-file edits and long test runs.")
+        stderr.writeLine("   - For tasks taking >2 minutes (e.g. E2E/Playwright/builds), emit periodic progress:")
+        stderr.writeLine("     rhizo task progress " & id & " \"Step X/Y: ...\"")
         stderr.writeLine("3. EXECUTE NOW: You are an autonomous cluster worker. A directive has been delivered.")
         stderr.writeLine("   DO NOT wait for operator prompt. DO NOT yield your turn with a passive acknowledgment.")
         stderr.writeLine("   Immediately read the message payload above, claim the task, and begin implementation.")
@@ -3883,6 +3888,43 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
   let listenerVal = client.get(cfg.prefix & "listener:" & probeTarget)
   let inboxDepth = try: client.lLen(cfg.prefix & "inbox:" & probeTarget) except CatchableError: 0
 
+  var curTask = try: client.hGet(cfg.prefix & "agent:" & probeTarget, "current_task") except CatchableError: redisNil
+  if curTask == redisNil or curTask.len == 0:
+    curTask = try: client.get(cfg.prefix & "current_task:" & probeTarget) except CatchableError: redisNil
+  if curTask == redisNil or curTask.len == 0:
+    curTask = try: client.get(cfg.prefix & "agent_task:" & probeTarget) except CatchableError: redisNil
+  if curTask == redisNil:
+    curTask = ""
+
+  var taskState = ""
+  var taskProgress = ""
+  var taskLeaseRemaining = 0
+  var inFlightActive = false
+
+  if curTask.len > 0:
+    try:
+      let tKey = cfg.prefix & "task:" & curTask.toLowerAscii()
+      taskState = client.hGet(tKey, "state")
+      if taskState == redisNil: taskState = ""
+      taskProgress = client.hGet(tKey, "progress")
+      if taskProgress == redisNil: taskProgress = ""
+      let leaseStr = client.hGet(tKey, "lease_until")
+      let delivStr = client.hGet(tKey, "delivery_until")
+      let tLease = if leaseStr != redisNil and leaseStr.len > 0: (try: parseInt(leaseStr) except ValueError: 0) else: 0
+      let tDeliv = if delivStr != redisNil and delivStr.len > 0: (try: parseInt(delivStr) except ValueError: 0) else: 0
+      let mockOff = try:
+        let v = client.get(cfg.prefix & "mock_time_offset")
+        if v != redisNil and v.len > 0: parseInt(v) else: 0
+      except CatchableError: 0
+      let nowSec = int(getTime().toUnix()) + mockOff
+      let activeUntil = max(tLease, tDeliv)
+      if ((taskState in ["IN_PROGRESS", "CLAIMED"] and nowSec < tLease) or
+          (taskState == "DELIVERED" and nowSec < activeUntil)):
+        inFlightActive = true
+        taskLeaseRemaining = max(0, activeUntil - nowSec)
+    except CatchableError:
+      discard
+
   var hasListener = false
   var listenerPid = 0
   var listenerHost = ""
@@ -3904,17 +3946,20 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
   var status = "HEALTHY"
   var issues: seq[string] = @[]
 
-  if not isAlive:
+  if not isAlive and not inFlightActive:
     status = "OFFLINE"
     issues.add("Heartbeat expired (process not reporting heartbeat)")
   elif not hasListener:
     status = "NO_LISTENER"
-    issues.add("No listener registered in Redis")
+    if inFlightActive:
+      issues.add("No listener registered while executing in-flight task '" & curTask & "' (" & taskState & ", lease: " & $taskLeaseRemaining & "s remaining)")
+    else:
+      issues.add("No listener registered in Redis")
   elif not pidAlive:
     status = "STALLED"
     issues.add("Listener PID " & $listenerPid & " is dead on host " & listenerHost)
 
-  if inboxDepth > 0 and (not hasListener or not pidAlive or not isAlive):
+  if inboxDepth > 0 and (not hasListener or not pidAlive or (not isAlive and not inFlightActive)):
     status = "STALLED"
     issues.add("Inbox has " & $inboxDepth & " unread messages waiting with no active listener")
 
@@ -3924,14 +3969,19 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
     if isAlias:
       j["alias_of"] = %probeTarget
     j["status"] = %status
-    j["heartbeat_active"] = %isAlive
-    j["heartbeat_ttl_sec"] = %hbTtl
+    j["heartbeat_active"] = %(isAlive or inFlightActive)
+    j["heartbeat_ttl_sec"] = %(if isAlive: hbTtl elif inFlightActive: taskLeaseRemaining else: -1)
     j["last_seen"] = %(if lastSeen != redisNil: lastSeen else: "")
     j["listener_registered"] = %hasListener
     j["listener_pid"] = %listenerPid
     j["listener_host"] = %listenerHost
     j["listener_pid_alive"] = %pidAlive
     j["inbox_depth"] = %inboxDepth
+    j["current_task"] = %curTask
+    j["task_state"] = %taskState
+    j["task_progress"] = %taskProgress
+    j["task_lease_remaining_sec"] = %taskLeaseRemaining
+    j["in_flight_active"] = %inFlightActive
     var jIssues = newJArray()
     for iss in issues: jIssues.add(%iss)
     j["issues"] = jIssues
@@ -3944,9 +3994,13 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
     outStr.add("RHIZO AGENT HEALTH PROBE: @" & normName & "\n")
   outStr.add("====================================================\n")
   outStr.add("Health Status      : " & status & "\n")
-  outStr.add("Heartbeat Active   : " & (if isAlive: "YES (TTL: " & $hbTtl & "s)" else: "NO (OFFLINE)") & "\n")
+  outStr.add("Heartbeat Active   : " & (if isAlive: "YES (TTL: " & $hbTtl & "s)" elif inFlightActive: "YES (In-Flight Lease: " & $taskLeaseRemaining & "s)" else: "NO (OFFLINE)") & "\n")
   if lastSeen != redisNil and lastSeen.len > 0:
     outStr.add("Last Seen          : " & lastSeen & "\n")
+  if curTask.len > 0:
+    outStr.add("Active Task        : " & curTask & " [" & (if taskState.len > 0: taskState else: "UNKNOWN") & "]" & (if taskLeaseRemaining > 0: " (lease: " & $taskLeaseRemaining & "s)" else: "") & "\n")
+    if taskProgress.len > 0:
+      outStr.add("Task Progress      : " & taskProgress & "\n")
   outStr.add("Listener Registered: " & (if hasListener: "YES (Host: " & listenerHost & ", PID: " & $listenerPid & ")" else: "NO") & "\n")
   if hasListener and listenerHost == getHostNameStr():
     outStr.add("Listener Process   : " & (if pidAlive: "ALIVE (PID " & $listenerPid & ")" else: "DEAD / ZOMBIE (PID " & $listenerPid & ")") & "\n")
@@ -3959,7 +4013,7 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
     outStr.add("RECOMMENDED ACTION:\n")
     if not hasListener or not pidAlive:
       outStr.add("  Run: rhizo listen " & normName & "\n")
-    if not isAlive:
+    if not isAlive and not inFlightActive:
       outStr.add("  Run: rhizo open " & normName & "\n")
   outStr.add("====================================================")
   return outStr

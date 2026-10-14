@@ -300,7 +300,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Replaced naive chained string replacements with a character-by-character escape parser in `unquote()`, preventing escaped backslashes in Windows file paths (e.g. `\\tmp`, `\\tests`) from collapsing into tab or newline control characters.
 - **Workflow & Runner Environment Alignment**:
   - Aligned all CI workflows (`ci.yml`, `llm-ci.yml`) and test scripts (`scripts/ci/test.sh`) to `RHIZO_REDIS_URL`.
-  - Replaced remaining `LOCUTUS_VERSION` variables in universal install scripts (`install.sh`, `install.ps1`) with `RHIZO_VERSION`.
+  - Replaced remaining `RHIZO_VERSION` variables in universal install scripts (`install.sh`, `install.ps1`) with `RHIZO_VERSION`.
 
 ## [0.1.11] - 2026-09-30
 
@@ -317,12 +317,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added embedded fallback routing configuration (`defaultFallbackRoutingConfig()`) so routing commands function out of the box without requiring explicit project configuration files.
 
 ### Removed
-- **Complete Purge of Legacy Locutus Backwards-Compatibility Fallbacks**:
-  - Purged all `LOCUTUS_*` environment variable fallbacks in favor of canonical `RHIZO_*` (`RHIZO_REDIS_URL`, `RHIZO_PREFIX`, `RHIZO_PROJECT`, `RHIZO_AGENT_NAME`, `RHIZO_SESSION_ID`, `RHIZO_SECRET`, `RHIZO_ENCRYPT`, `RHIZO_CLUSTER`, `RHIZO_QUIET`).
-  - Purged legacy `.locutus.toml`, `locutus.toml`, `.locutus.json`, and `~/.config/locutus` config search paths from `src/config.nim`.
-  - Removed legacy `bin/locutus` and `bin/locu` binary symlinks and `packaging/scoop/locutus.json`.
+- **Complete Purge of Legacy Rhizo Backwards-Compatibility Fallbacks**:
+  - Purged all `RHIZO_*` environment variable fallbacks in favor of canonical `RHIZO_*` (`RHIZO_REDIS_URL`, `RHIZO_PREFIX`, `RHIZO_PROJECT`, `RHIZO_AGENT_NAME`, `RHIZO_SESSION_ID`, `RHIZO_SECRET`, `RHIZO_ENCRYPT`, `RHIZO_CLUSTER`, `RHIZO_QUIET`).
+  - Purged legacy `.rhizo.toml`, `rhizo.toml`, `.rhizo.json`, and `~/.config/rhizo` config search paths from `src/config.nim`.
+  - Removed legacy `bin/rhizo` and `bin/locu` binary symlinks and `packaging/scoop/rhizo.json`.
   - Updated package names to `rhizo` across `pyproject.toml`, `package.json`, and `rhizo.nimble`.
-  - Purged all legacy `LocutusEar` class aliases and `[locutus-ear]` logs across OpenCode and Pi agent extensions.
+  - Purged all legacy `RhizoEar` class aliases and `[rhizo-ear]` logs across OpenCode and Pi agent extensions.
 
 ### Changed
 - **Harness Modernization & Rhizo Brand Alignment**:
@@ -346,7 +346,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Windows Path Escaping in Test Generator**:
-  - Escaped Windows backslashes in `.locutus.toml` file generator (`tests/test_nim_binary.py`) to prevent TOML escape character parsing errors.
+  - Escaped Windows backslashes in `.rhizo.toml` file generator (`tests/test_nim_binary.py`) to prevent TOML escape character parsing errors.
 - **LLM CI Dependencies**:
   - Aligned `.github/workflows/llm-ci.yml` dependency installation with project definitions.
 
@@ -404,7 +404,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Legacy Environment Variable Compatibility**:
-  - Updated `src/config.nim` to transparently fall back to legacy `LOCUTUS_*` environment variables (`LOCUTUS_REDIS_URL`, `LOCUTUS_REDIS_PREFIX`, `LOCUTUS_PROJECT`, `LOCUTUS_AGENT_NAME`, `LOCUTUS_SESSION_ID`, `LOCUTUS_SECRET`, `LOCUTUS_SECRET_FILE`, `LOCUTUS_ENCRYPT`), ensuring backward compatibility with older test harnesses and CI environments.
+  - Updated `src/config.nim` to transparently fall back to legacy `RHIZO_*` environment variables (`RHIZO_REDIS_URL`, `RHIZO_REDIS_PREFIX`, `RHIZO_PROJECT`, `RHIZO_AGENT_NAME`, `RHIZO_SESSION_ID`, `RHIZO_SECRET`, `RHIZO_SECRET_FILE`, `RHIZO_ENCRYPT`), ensuring backward compatibility with older test harnesses and CI environments.
 
 ## [0.1.7] - 2026-09-29
 
@@ -425,20 +425,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Native Task Routing Engine (`locu route`)**:
-  - Declarative routing schema (`locu-routes.yaml` or `.locutus/routes.yaml`) dispatching unstructured task prompts directly to agent queues with matched tags and lease durations.
+  - Declarative routing schema (`locu-routes.yaml` or `.rhizo/routes.yaml`) dispatching unstructured task prompts directly to agent queues with matched tags and lease durations.
   - Integration with Laya System 1 decision models supporting `choice`, `score`, and `noul` (trigger) questions over HTTP.
   - Intelligent chunking and sliding-window aggregation strategies (`max_confidence`, `max`, `min`, `average`, `all`, `any`, `threshold`) with fail-fast limits.
   - Route configuration linter (`locu route lint [--check-service]`) validating question references, aggregation strategies, and endpoint availability.
 - **Rule Compilation & Verification Pipeline (`scripts/compile_rules.py`)**:
-  - Automated single-source rule generator compiling Cursor rules (`skills/locutus/rules/cursor-rules.mdc`) and GitHub Copilot instructions (`skills/locutus/rules/copilot-instructions.md` and `.github/copilot-instructions.md`) directly from canonical `AGENTS.md`.
-  - Added strict dual-copy verification and synchronization between root `SKILL.md` and `skills/locutus/SKILL.md` in both compile and `--check` modes.
+  - Automated single-source rule generator compiling Cursor rules (`skills/rhizo/rules/cursor-rules.mdc`) and GitHub Copilot instructions (`skills/rhizo/rules/copilot-instructions.md` and `.github/copilot-instructions.md`) directly from canonical `AGENTS.md`.
+  - Added strict dual-copy verification and synchronization between root `SKILL.md` and `skills/rhizo/SKILL.md` in both compile and `--check` modes.
   - Added pre-commit hook in `.githooks/pre-commit` and CI drift assertion (`--check`) in `.github/workflows/ci.yml` and `scripts/ci/test.sh`.
 - **Coding Harness Ear Verification Playbook**:
   - Dedicated 4-phase verification playbook (`docs/playbooks/coding-harness-ear-verification/SKILL.md`) using Computer Use / macOS-MCP to verify zero-touch idle listening, autonomous task acceptance, in-flight preemption, and turn-end re-arming.
 
 ### Changed
 - **CLI & Runtime Telemetry Alignment**:
-  - Standardized CLI `--help` text, subcommand usage examples, and table references to `locu` (preserving `locuti` and `locutus` as backward-compatible aliases).
+  - Standardized CLI `--help` text, subcommand usage examples, and table references to `locu` (preserving `locuti` and `rhizo` as backward-compatible aliases).
   - Added `-a|--all` and `--json` flags to `locu who` CLI help text.
   - Annotated positional `[timeout_sec]` in CLI help to explicitly document `0` as the infinite wait default and discourage bounded polling timeouts.
   - Modernized `stderr` lifecycle post-amble upon listener exit to output clean capability-based re-arming instructions, and eliminated stale `SKILL.md Step 2/2b/2d` references.
@@ -462,29 +462,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.3] - 2026-09-26
 
 ### Added
-- **Primary CLI Command `locu`**: Renamed primary CLI executable to `locu` (with `locuti` and `locutus` preserved as 100% backward-compatible aliases).
-- **GitHub Repository Migration**: Repository moved to `https://github.com/axiomantic/locu`.
-- **NPM Package `@axiomantic/locu`**: Official distribution via npm with cross-platform native binaries for macOS (Apple Silicon & Intel), Linux (x86_64 & aarch64), and Windows.
-- **Distributed Fencing Tokens for Locks (`locutus lock --fencing`)**: Concurrency guard against delayed zombie writes (`locutus lock <lock_name> [ttl_sec] [--fencing] [--raw]`). Automatically increments and returns a monotonic integer sequence counter stored at `${prefix}lock:fencing:<lock_name>` via `scripts/lock.lua`. Allows downstream storage, databases, and peer agents to detect and reject out-of-order writes from delayed processes whose lock leases have expired.
-- **Cluster Health Watchdog & Sweeper (`locutus sweep`)**: Proactive cluster cleanup utility (`locutus sweep [--dry-run] [--raw]`). Scans active agent directories in Redis to prune entries whose heartbeats have lapsed, inspects listener locks across the cluster, and automatically removes orphaned listener locks tied to dead local PIDs via `scripts/sweep.lua` and host process verification.
-- **Directed Acyclic Graph (DAG) Workflow Engine (`locutus workflow`)**: Declarative multi-stage pipeline coordination (`locutus workflow <define|next|resolve|fail|status> <flow_id>`). Supports complex DAG dependencies (`--deps "test:lint;build:lint;deploy:test,build"`), automatic dependency resolution, instant stage unlocking upon step completion, and failure handling via `scripts/workflow.lua`.
-- **Leader Election via Lease Preemption (`locutus leader`)**: Fault-tolerant coordinator election (`locutus leader <acquire|renew|resign|status> <role>`). Employs lease TTLs and instant failover promotion via `scripts/leader.lua`, eliminating single points of failure across decentralized multi-agent meshes and orchestrator clusters.
-- **Blind Voting & Ballot Consensus (`locutus ballot`)**: Unbiased consensus voting protocol (`locutus ballot <open|cast|tally|status> <ballot_id>`). Keeps individual agent votes sealed and hidden until officially tallied, eliminating anchoring bias and LLM sycophancy in multi-agent panels, architectural roundtables, and design decisions via `scripts/ballot.lua`.
-- **Global Run Cancellation Tokens (`locutus cancel`)**: Coordinated run cancellation mechanism (`locutus cancel <run_id> [--reason ...]`, `locutus cancel check <run_id> [--exit-code|--raw]`, `locutus cancel clear <run_id>`). Sets an atomic cancellation token in Redis with reason, timestamp, and emitter metadata via `scripts/cancel.lua`, broadcasts to cancellation channels (`channel:cancellations` and `channel:cancel:<run_id>`), and enables background worker agents to cleanly abort runaway workflows before burning expensive AI tokens.
-- **Floor Control & Speaker Ring (`locutus floor`)**: Turn-taking protocol for agent roundtables and collaborative meetings (`locutus floor <request|yield|pass|status> <room>`). Employs atomic FIFO waiter queues with auto-expiring speaker leases via `scripts/floor.lua` to prevent agents from interrupting or talking over one another.
-- **Shared Blackboard & Scratchpad Memory (`locutus blackboard`)**: Room-scoped shared memory providing atomic key-value storage (`set`, `get`), append lists (`append`), key deletion (`delete`, `clear`), and complete room state snapshots (`snapshot`) in Redis via `scripts/blackboard.lua`. Eliminates massive token waste from re-transmitting large file bodies and conversational state across multi-turn agent chats.
-- **Reliable Task Leases, Acking & Dead-Letter Queue (`locutus claim` / `locutus ack`)**: Non-destructive queue consumption using leases (`locutus claim <queue> [--lease 120]`) and explicit acknowledgment (`locutus ack <queue> <task_id>`). If a worker agent terminates or crashes before completion, the lease expiration triggers automatic retry or escalation to `dlq:<queue>` after 3 attempts via atomic `scripts/claim.lua`.
-- **Scatter-Gather & Quorum Consensus (`locutus scatter`)**: Native orchestrator primitive for multicasting tasks across specialist pools (`--targets <@tag|agents|*>`) and gathering replies into a unified JSON array until a configurable quorum (`--quorum N`) is reached or timeout expires. Supports `--raw` output for shell piping and atomic target resolution via `scripts/scatter.lua`.
-- **In-Flight Claim Lease Renewal (`locutus claim renew`)**: Safe lease extension primitive (`locutus claim renew <queue> <task_id> [--lease 120]`). Extends worker execution deadlines atomically via `scripts/claim_renew.lua` before long-running tasks expire and get reassigned to other workers.
-- **Worker Cancellation Awareness (`--run-id`)**: Added `--run-id <run_id>` support to `locutus work` and `locutus claim`. Workers check cryptographic cancellation tokens on each iteration and post-claim, discarding aborted work and exiting cleanly in under 0.5s without burning expensive AI tokens.
-- **Graceful Signal Trapping (`SIGINT` / `SIGTERM`)**: Added POSIX and Windows signal handlers in `src/locutus.nim` that automatically trap process termination signals and clean up active listener registrations, held floor locks, and waiter queues before exit, preventing orphaned locks.
-- **Multi-Host Sweeper Provenance Reporting (`locutus sweep`)**: Added `foreign_listeners` metadata array to `locutus sweep` JSON output detailing foreign host listeners (`agent`, `host`, `pid`, `status: "foreign_active"`), preventing blind skipping across multi-node or multi-container clusters.
+- **Primary CLI Command `locu`**: Renamed primary CLI executable to `locu` (with `locuti` and `rhizo` preserved as 100% backward-compatible aliases).
+- **GitHub Repository Migration**: Repository moved to `https://github.com/axiomantic/rhizo`.
+- **NPM Package `@axiomantic/rhizo`**: Official distribution via npm with cross-platform native binaries for macOS (Apple Silicon & Intel), Linux (x86_64 & aarch64), and Windows.
+- **Distributed Fencing Tokens for Locks (`rhizo lock --fencing`)**: Concurrency guard against delayed zombie writes (`rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw]`). Automatically increments and returns a monotonic integer sequence counter stored at `${prefix}lock:fencing:<lock_name>` via `scripts/lock.lua`. Allows downstream storage, databases, and peer agents to detect and reject out-of-order writes from delayed processes whose lock leases have expired.
+- **Cluster Health Watchdog & Sweeper (`rhizo sweep`)**: Proactive cluster cleanup utility (`rhizo sweep [--dry-run] [--raw]`). Scans active agent directories in Redis to prune entries whose heartbeats have lapsed, inspects listener locks across the cluster, and automatically removes orphaned listener locks tied to dead local PIDs via `scripts/sweep.lua` and host process verification.
+- **Directed Acyclic Graph (DAG) Workflow Engine (`rhizo workflow`)**: Declarative multi-stage pipeline coordination (`rhizo workflow <define|next|resolve|fail|status> <flow_id>`). Supports complex DAG dependencies (`--deps "test:lint;build:lint;deploy:test,build"`), automatic dependency resolution, instant stage unlocking upon step completion, and failure handling via `scripts/workflow.lua`.
+- **Leader Election via Lease Preemption (`rhizo leader`)**: Fault-tolerant coordinator election (`rhizo leader <acquire|renew|resign|status> <role>`). Employs lease TTLs and instant failover promotion via `scripts/leader.lua`, eliminating single points of failure across decentralized multi-agent meshes and orchestrator clusters.
+- **Blind Voting & Ballot Consensus (`rhizo ballot`)**: Unbiased consensus voting protocol (`rhizo ballot <open|cast|tally|status> <ballot_id>`). Keeps individual agent votes sealed and hidden until officially tallied, eliminating anchoring bias and LLM sycophancy in multi-agent panels, architectural roundtables, and design decisions via `scripts/ballot.lua`.
+- **Global Run Cancellation Tokens (`rhizo cancel`)**: Coordinated run cancellation mechanism (`rhizo cancel <run_id> [--reason ...]`, `rhizo cancel check <run_id> [--exit-code|--raw]`, `rhizo cancel clear <run_id>`). Sets an atomic cancellation token in Redis with reason, timestamp, and emitter metadata via `scripts/cancel.lua`, broadcasts to cancellation channels (`channel:cancellations` and `channel:cancel:<run_id>`), and enables background worker agents to cleanly abort runaway workflows before burning expensive AI tokens.
+- **Floor Control & Speaker Ring (`rhizo floor`)**: Turn-taking protocol for agent roundtables and collaborative meetings (`rhizo floor <request|yield|pass|status> <room>`). Employs atomic FIFO waiter queues with auto-expiring speaker leases via `scripts/floor.lua` to prevent agents from interrupting or talking over one another.
+- **Shared Blackboard & Scratchpad Memory (`rhizo blackboard`)**: Room-scoped shared memory providing atomic key-value storage (`set`, `get`), append lists (`append`), key deletion (`delete`, `clear`), and complete room state snapshots (`snapshot`) in Redis via `scripts/blackboard.lua`. Eliminates massive token waste from re-transmitting large file bodies and conversational state across multi-turn agent chats.
+- **Reliable Task Leases, Acking & Dead-Letter Queue (`rhizo claim` / `rhizo ack`)**: Non-destructive queue consumption using leases (`rhizo claim <queue> [--lease 120]`) and explicit acknowledgment (`rhizo ack <queue> <task_id>`). If a worker agent terminates or crashes before completion, the lease expiration triggers automatic retry or escalation to `dlq:<queue>` after 3 attempts via atomic `scripts/claim.lua`.
+- **Scatter-Gather & Quorum Consensus (`rhizo scatter`)**: Native orchestrator primitive for multicasting tasks across specialist pools (`--targets <@tag|agents|*>`) and gathering replies into a unified JSON array until a configurable quorum (`--quorum N`) is reached or timeout expires. Supports `--raw` output for shell piping and atomic target resolution via `scripts/scatter.lua`.
+- **In-Flight Claim Lease Renewal (`rhizo claim renew`)**: Safe lease extension primitive (`rhizo claim renew <queue> <task_id> [--lease 120]`). Extends worker execution deadlines atomically via `scripts/claim_renew.lua` before long-running tasks expire and get reassigned to other workers.
+- **Worker Cancellation Awareness (`--run-id`)**: Added `--run-id <run_id>` support to `rhizo work` and `rhizo claim`. Workers check cryptographic cancellation tokens on each iteration and post-claim, discarding aborted work and exiting cleanly in under 0.5s without burning expensive AI tokens.
+- **Graceful Signal Trapping (`SIGINT` / `SIGTERM`)**: Added POSIX and Windows signal handlers in `src/rhizo.nim` that automatically trap process termination signals and clean up active listener registrations, held floor locks, and waiter queues before exit, preventing orphaned locks.
+- **Multi-Host Sweeper Provenance Reporting (`rhizo sweep`)**: Added `foreign_listeners` metadata array to `rhizo sweep` JSON output detailing foreign host listeners (`agent`, `host`, `pid`, `status: "foreign_active"`), preventing blind skipping across multi-node or multi-container clusters.
 - **End-to-End Cryptography & Cryptographic Authentication**:
-  - **Shared Blackboard Transparent AES-256 Encryption & HMAC Signatures**: Blackboard entries and snapshots are transparently encrypted with AES-256-CBC when `--encrypt` or `LOCUTUS_ENCRYPT=1` is active, and verified with HMAC-SHA256 signatures to detect and drop tampered entries.
+  - **Shared Blackboard Transparent AES-256 Encryption & HMAC Signatures**: Blackboard entries and snapshots are transparently encrypted with AES-256-CBC when `--encrypt` or `RHIZO_ENCRYPT=1` is active, and verified with HMAC-SHA256 signatures to detect and drop tampered entries.
   - **Cryptographic Cancellation Tokens**: Cancellation tokens embed canonical HMAC signatures (`run_id|reason|by|ts`) to prevent unauthenticated/forged denial-of-service aborts.
-  - **Cryptographic Ballot Authentication**: Individual votes cast via `locutus ballot cast` embed voter HMAC signatures, ensuring untampered and unforgeable tally verification.
+  - **Cryptographic Ballot Authentication**: Individual votes cast via `rhizo ballot cast` embed voter HMAC signatures, ensuring untampered and unforgeable tally verification.
   - **Leader Election Authority Authentication**: Leader leases and renewals embed HMAC signatures (`role|leader|ts|lease_sec`), with automatic eviction and preemption of unauthenticated/forged rogue leader keys.
-- **Custom Tripwire Plugin & Protocol Verifiers (`tests/tripwire_locutus.py`)**: Dedicated `tripwire.plugins` entry point (`locutus = "tests.tripwire_locutus:LocutusPlugin"`) implementing strict CLI command mocking and assertions, Redis Cluster slot affinity linter (`check_cluster_affinity`), canonical HMAC-SHA256 wire envelope validation (`validate_wire_envelope`), and complete JSON schema verifiers for all Locutus subcommands.
+- **Custom Tripwire Plugin & Protocol Verifiers (`tests/tripwire_rhizo.py`)**: Dedicated `tripwire.plugins` entry point (`rhizo = "tests.tripwire_rhizo:RhizoPlugin"`) implementing strict CLI command mocking and assertions, Redis Cluster slot affinity linter (`check_cluster_affinity`), canonical HMAC-SHA256 wire envelope validation (`validate_wire_envelope`), and complete JSON schema verifiers for all Rhizo subcommands.
 - **Comprehensive Green Mirage Audit & Tripwire Migration (TASK-GM-001 to TASK-GM-092 across 92 Tests)**:
   - **Group 2.1: Installer Test Suite (TASK-GM-001 to TASK-GM-009)**: Upgraded all 9 installer tests (`tests/test_installer.py`) with Level 5 assertion rigor, exact binary permissions (`0755`), byte-for-byte skill content equality, home directory snapshot immutability, complete Scoop/Homebrew/Release DAG schemas, negative controls, and tripwire sandbox verification.
   - **Group 2.2: LLM Agent & Multi-Agent PingPong (TASK-GM-010, TASK-GM-011)**: Upgraded end-to-end integration tests (`tests/test_llm_agent.py`, `tests/test_multi_agent_pingpong.py`) with exact prompt injection firewall assertions, negative control drops, wire envelope schema validation, multi-turn conversational sequencing, and tripwire environment sandboxing.
@@ -494,47 +494,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Optimistic Concurrency Control (OCC) for Blackboard (`scripts/blackboard.lua`)**: Added atomic revision token counter tracking (`blackboard:{room}:rev`) with an optional `expected_rev` argument on mutations, rejecting stale concurrent writes with `ERR: OCC revision mismatch` while preserving existing room data.
 
 ### Fixed
-- **Installer Local Skill Prioritization**: In `scripts/install.sh`, local skills directory (`skills/locutus`) is now preferentially resolved from the local repository or release payload before falling back to curling GitHub remote, enabling seamless offline and local development branch installation.
-- **Socket Connection Reuse & Adaptive Backoff in `locutus claim`**: Replaced per-poll socket creation and teardown in `doClaim` with persistent client reuse and dynamic exponential backoff (250ms scaling up to 2000ms), eliminating `TIME_WAIT` socket exhaustion during empty queue polling.
+- **Installer Local Skill Prioritization**: In `scripts/install.sh`, local skills directory (`skills/rhizo`) is now preferentially resolved from the local repository or release payload before falling back to curling GitHub remote, enabling seamless offline and local development branch installation.
+- **Socket Connection Reuse & Adaptive Backoff in `rhizo claim`**: Replaced per-poll socket creation and teardown in `doClaim` with persistent client reuse and dynamic exponential backoff (250ms scaling up to 2000ms), eliminating `TIME_WAIT` socket exhaustion during empty queue polling.
 - **Buffered RESP2 Stream Reading & 32MB Safety Guard**: Introduced internal 8KB buffer reading in `src/resp.nim` for high-throughput CRLF framing and bulk transfers, guarded against excessive allocations with a 32MB payload limit, and added an empty bulk string (`$0\r\n\r\n`) fast-path.
 - **Poison Pill Head-of-Line Jamming Prevention**: In `scripts/claim.lua`, re-queued expired retries now use `LPUSH` to the tail instead of `RPUSH` to the front, preventing failing tasks from immediately blocking subsequent healthy queue items.
-- **Scatter Quorum Clamping Safety**: In `src/locutus.nim` `doScatter`, `effectiveQuorum` is automatically clamped to `min(quorum, delivered)` when targets are reached, or `0` when `delivered == 0`, preventing workers from hanging when configured quorum exceeds available participants.
+- **Scatter Quorum Clamping Safety**: In `src/rhizo.nim` `doScatter`, `effectiveQuorum` is automatically clamped to `min(quorum, delivered)` when targets are reached, or `0` when `delivered == 0`, preventing workers from hanging when configured quorum exceeds available participants.
 - **Sweeper Non-Blocking SCAN Protocol**: Replaced O(N) blocking `KEYS` command in `scripts/sweep.lua` with non-blocking cursor-based `SCAN` loops across active agents and listener keys to prevent Redis main-thread blocking.
 - **Workflow DAG Validation & Cycle Detection**: Added topological sort cycle detection and dangling dependency checks in `scripts/workflow.lua` to fail fast with actionable error messages when cyclic or invalid dependencies are declared.
 - **Redis Cluster Slot Affinity**: Enclosed shared entity keys in Redis cluster hash tags (`{...}`) across all multi-key Lua scripts (`claim.lua`, `ack.lua`, `floor.lua`, `ballot.lua`, `workflow.lua`, `blackboard.lua`, `leader.lua`, `lock.lua`, `unlock.lua`, `enqueue.lua`) and Nim queue/DLQ/floor resolution procs, ensuring single-slot affinity across Redis cluster deployments.
 - **Sweeper Dead Agent Metadata & Tag Pruning**: In `scripts/sweep.lua`, corrected key references to extract agent tags from `agent:<name>` and delete reverse indexes from `tag:<tag>` sets alongside deleting the `agent:<name>` hash when pruning dead agents.
-- **Floor Waiter Timeout Queue Dequeue**: In `src/locutus.nim` `doFloorRequest`, added automatic `LREM` cleanup to dequeue agents from `floor:<room>:waiters` when `--wait` timeout expires, preventing abandoned requests from hijacking subsequent speaker yields.
+- **Floor Waiter Timeout Queue Dequeue**: In `src/rhizo.nim` `doFloorRequest`, added automatic `LREM` cleanup to dequeue agents from `floor:<room>:waiters` when `--wait` timeout expires, preventing abandoned requests from hijacking subsequent speaker yields.
 - **Workflow State Machine Failure Preservation**: In `scripts/workflow.lua`, ensured step resolution (`resolve`) only transitions pipeline status to `"running"` if `flow.status` is not already `"failed"`, preventing subsequent step resolutions from masking earlier step failures in DAG pipelines.
 - **Floor Control JSON Serialization**: In `scripts/floor.lua`, corrected empty `waiters` list serialization from JSON `{}` (empty map) to `[]` (empty array) for strict API schema conformance.
-- **Request O2O Routing to Target Agent**: Fixed regression in `doSend` destination queue routing where messages with `replyTo` keys (such as `locutus request`) routed directly to the ephemeral reply channel instead of `toAgent`. DestQueue routing now strictly checks that `msgType == "reply"` before routing to a reply channel.
+- **Request O2O Routing to Target Agent**: Fixed regression in `doSend` destination queue routing where messages with `replyTo` keys (such as `rhizo request`) routed directly to the ephemeral reply channel instead of `toAgent`. DestQueue routing now strictly checks that `msgType == "reply"` before routing to a reply channel.
 
 ## [0.1.2] - 2026-09-19
 
 ### Added
-- **`locutus reply` First-Class Command**: Native CLI subcommand for replying directly to messages (`locutus reply --to <sender> --subject <subj> --body <body> [--reply-to <id>]`), automatically tagging the message with `type = reply`.
-- **Atomic Listener Piggybacking (`--listen` / `-l`)**: Added `--listen` and `--listen-timeout` flags to `locutus send` and `locutus reply`. When enabled, Locutus delivers the outbound message, logs status to `stderr`, and seamlessly transitions the same running process into blocking wait on the agent's inbox. This prevents coding assistants from dropping background listeners during multi-turn work.
-- **Singleton Listener Invariant & Anti-Stacking Guard**: Added strict singleton listener enforcement via Redis `${prefix}listener:${agent}` with process PID and hostname tracking. If `--listen` is called while another listener is already active for that agent, Locutus delivers the message and skips listening (exits 0) to prevent stacked background processes and Redis `BRPOP` competing-consumer queue splitting. Standalone `locutus listen` fails fast with code 1 unless `--force` / `-f` is specified. Stale locks from terminated processes on the same host are detected and self-healed instantly via `kill(pid, 0)`.
-- **Expanded Skill Discovery & Distributed File Locking Guidance**: Enhanced the `locutus` skill frontmatter with explicit trigger phrases (`lock file`, `mutex lock`, `prevent concurrent edits`, `work queue`, `coordinate with the other terminal/agent`) to enable automatic skill invocation during parallel editing and multi-terminal operations. Added concrete file locking protocols (`locutus lock file:schema.prisma 60` / `locutus unlock file:schema.prisma`) to Section 1 and Section 3.C.
+- **`rhizo reply` First-Class Command**: Native CLI subcommand for replying directly to messages (`rhizo reply --to <sender> --subject <subj> --body <body> [--reply-to <id>]`), automatically tagging the message with `type = reply`.
+- **Atomic Listener Piggybacking (`--listen` / `-l`)**: Added `--listen` and `--listen-timeout` flags to `rhizo send` and `rhizo reply`. When enabled, Rhizo delivers the outbound message, logs status to `stderr`, and seamlessly transitions the same running process into blocking wait on the agent's inbox. This prevents coding assistants from dropping background listeners during multi-turn work.
+- **Singleton Listener Invariant & Anti-Stacking Guard**: Added strict singleton listener enforcement via Redis `${prefix}listener:${agent}` with process PID and hostname tracking. If `--listen` is called while another listener is already active for that agent, Rhizo delivers the message and skips listening (exits 0) to prevent stacked background processes and Redis `BRPOP` competing-consumer queue splitting. Standalone `rhizo listen` fails fast with code 1 unless `--force` / `-f` is specified. Stale locks from terminated processes on the same host are detected and self-healed instantly via `kill(pid, 0)`.
+- **Expanded Skill Discovery & Distributed File Locking Guidance**: Enhanced the `rhizo` skill frontmatter with explicit trigger phrases (`lock file`, `mutex lock`, `prevent concurrent edits`, `work queue`, `coordinate with the other terminal/agent`) to enable automatic skill invocation during parallel editing and multi-terminal operations. Added concrete file locking protocols (`rhizo lock file:schema.prisma 60` / `rhizo unlock file:schema.prisma`) to Section 1 and Section 3.C.
 - **Capability-Based Dual-Strategy Ear Architecture in Skills**: Updated `SKILL.md` to instruct assistants to self-select their listener strategy based on native runtime tool capabilities rather than assistant brand names:
   - **Strategy A (Dedicated Ear Subagent)**: For runtimes supporting asynchronous subagent-to-parent messaging.
   - **Strategy B (Atomic Piggybacked Re-Arm)**: For single-agent / linear shell runtimes using `--listen`.
 
 ### Fixed
-- **Conditional Listener Ownership Deletion on Exit**: Updated `doListen`'s cleanup block to verify that `locutus:listener:<name>` in Redis matches the terminating process's PID and hostname before deleting it. Prevents preempted or replaced listeners from having their locks wiped by an earlier process exiting.
-- **Worker Heartbeat Starvation Prevention in `locutus work`**: Added automatic heartbeat and `active_agents` renewal during `doWork` chunked polling timeouts when an agent identity is resolved. Prevents idle worker processes waiting on task queues from expiring and being pruned from `locutus who`.
+- **Conditional Listener Ownership Deletion on Exit**: Updated `doListen`'s cleanup block to verify that `rhizo:listener:<name>` in Redis matches the terminating process's PID and hostname before deleting it. Prevents preempted or replaced listeners from having their locks wiped by an earlier process exiting.
+- **Worker Heartbeat Starvation Prevention in `rhizo work`**: Added automatic heartbeat and `active_agents` renewal during `doWork` chunked polling timeouts when an agent identity is resolved. Prevents idle worker processes waiting on task queues from expiring and being pruned from `rhizo who`.
 - **Directory Consistency in `status.lua`**: Added `SADD active_agents <name>` to `scripts/status.lua` to ensure that setting state or activity restores pruned agents to directory listings.
 - **Cryptographic Error Handling**: Added null pointer check on OpenSSL `HMAC()` return value in `computeHmacSha256` to raise explicit `ValueError` on calculation failure.
 
 ## [0.1.1] - 2026-09-19
 
 ### Added
-- **Silent Indefinite Blocking Listener**: `locutus listen` now defaults to indefinite blocking wait (`listenTimeout = 0`) with 60-second chunked internal polling and silent Redis heartbeat renewal (`SET heartbeat:<name> 1 EX 150`). Receivers now stay continuously registered in `locutus who` without exiting to the OS shell or waking the assistant.
+- **Silent Indefinite Blocking Listener**: `rhizo listen` now defaults to indefinite blocking wait (`listenTimeout = 0`) with 60-second chunked internal polling and silent Redis heartbeat renewal (`SET heartbeat:<name> 1 EX 150`). Receivers now stay continuously registered in `rhizo who` without exiting to the OS shell or waking the assistant.
 - **Rule of Silence for Zero Token Churn**: Commands that timeout (`listen`, `work`, and `sub`) now return returncode `0` with 0 bytes on stdout (`""`), permanently eliminating token waste and death-by-a-thousand-tokencuts in AI context windows.
-- **Indefinite Worker Queue**: `locutus work <queue>` now defaults to indefinite wait when no timeout is supplied, allowing worker pools to sit silently on Redis queues with zero token overhead.
+- **Indefinite Worker Queue**: `rhizo work <queue>` now defaults to indefinite wait when no timeout is supplied, allowing worker pools to sit silently on Redis queues with zero token overhead.
 
 ### Changed
-- **Continuous Ear Invariant in Skills**: Updated canonical `SKILL.md` (and synchronized mirrors) to strictly forbid wrapping shell loops (`while true; do ... done`). Assistants now launch bare `locutus listen` directly in the background and re-arm immediately only upon receipt of an authenticated message.
-- **Ephemeral Pub/Sub Silence**: `locutus sub` now outputs 0 bytes on timeout instead of printing `(nil)`.
+- **Continuous Ear Invariant in Skills**: Updated canonical `SKILL.md` (and synchronized mirrors) to strictly forbid wrapping shell loops (`while true; do ... done`). Assistants now launch bare `rhizo listen` directly in the background and re-arm immediately only upon receipt of an authenticated message.
+- **Ephemeral Pub/Sub Silence**: `rhizo sub` now outputs 0 bytes on timeout instead of printing `(nil)`.
 
 ## [0.1.0] - 2026-09-19
 
@@ -543,41 +543,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Out-of-Band Cryptographic Security**:
   - HMAC-SHA256 signature verification over all inter-agent messages, acting as an air-gap prompt-injection firewall to drop forged and tampered packets.
   - In-memory AES-256-CBC envelope encryption via native OpenSSL EVP C-bindings (`EVP_aes_256_cbc`, PBKDF2 SHA-256 with 10,000 iterations) with zero temporary files on disk.
-  - Zero-friction key storage at `~/.config/locutus/secret` (`0600` permissions) with auto-generated 256-bit entropy.
-- **Peer Discovery & Directory Service (`locutus who`)**:
+  - Zero-friction key storage at `~/.config/rhizo/secret` (`0600` permissions) with auto-generated 256-bit entropy.
+- **Peer Discovery & Directory Service (`rhizo who`)**:
   - Real-time active agent registry backed by Redis hashes and sets.
   - Automatic on-query dead-agent pruning for expired heartbeats.
   - Cluster-wide discovery flags (`-a`, `--all`, `*`) and structured JSON output (`--json`, `-j`).
 - **Core Messaging Protocols**:
-  - Direct point-to-point (O2O) task, query, reply, and status delivery (`locutus send`).
-  - Multicast (O2M) messaging with multi-tag filtering (`locutus broadcast`).
-  - Keyspace isolation via `LOCUTUS_PROJECT` and `{...}` hash tags for Redis Cluster compatibility.
-  - Offline message queuing and ordered inbox backlog recovery (`locutus drain`).
+  - Direct point-to-point (O2O) task, query, reply, and status delivery (`rhizo send`).
+  - Multicast (O2M) messaging with multi-tag filtering (`rhizo broadcast`).
+  - Keyspace isolation via `RHIZO_PROJECT` and `{...}` hash tags for Redis Cluster compatibility.
+  - Offline message queuing and ordered inbox backlog recovery (`rhizo drain`).
 - **Distributed Coordination Primitives**:
-  - Synchronous RPC (`locutus request`) with blocking timeout and raw payload piping (`--raw`).
-  - Competing-consumers work queues (`locutus enqueue` and `locutus work`) for parallel worker teams.
-  - Distributed mutual exclusion locks (`locutus lock` and `locutus unlock`) with TTL lease hygiene.
-  - Ephemeral real-time streaming (`locutus pub` and `locutus sub`).
-  - Live agent operational state and activity tracking (`locutus status`).
+  - Synchronous RPC (`rhizo request`) with blocking timeout and raw payload piping (`--raw`).
+  - Competing-consumers work queues (`rhizo enqueue` and `rhizo work`) for parallel worker teams.
+  - Distributed mutual exclusion locks (`rhizo lock` and `rhizo unlock`) with TTL lease hygiene.
+  - Ephemeral real-time streaming (`rhizo pub` and `rhizo sub`).
+  - Live agent operational state and activity tracking (`rhizo status`).
 - **Host & Multi-Terminal Isolation**:
-  - Multi-tiered agent identity resolution prioritizing CLI arguments, `LOCUTUS_AGENT_NAME` process environment variables, session ID mappings, and user-level fallbacks.
+  - Multi-tiered agent identity resolution prioritizing CLI arguments, `RHIZO_AGENT_NAME` process environment variables, session ID mappings, and user-level fallbacks.
   - Automatic listener auto-registration into live directory sets.
 - **Universal Assistant Integration**:
-  - Canonical agent skill specification in `skills/locutus/SKILL.md` compatible with Claude Code, Antigravity, Cursor, OpenCode, Codex, and Hermes via `npx skills` and `skilz`.
+  - Canonical agent skill specification in `skills/rhizo/SKILL.md` compatible with Claude Code, Antigravity, Cursor, OpenCode, Codex, and Hermes via `npx skills` and `skilz`.
   - Zero-CPU, zero-token background listener discipline via Redis `BRPOP`.
 - **Cascading Configuration System**:
-  - Configuration hierarchy: CLI Flags -> Env Vars -> Workspace Config (`.locutus.toml`) -> User Config (`~/.config/locutus/locutus.toml`) -> Defaults.
+  - Configuration hierarchy: CLI Flags -> Env Vars -> Workspace Config (`.rhizo.toml`) -> User Config (`~/.config/rhizo/rhizo.toml`) -> Defaults.
   - Multiple environment profiles (`dev`, `staging`, `prod`).
-  - Configuration inspection and initialization CLI (`locutus config show|get|path|init`).
+  - Configuration inspection and initialization CLI (`rhizo config show|get|path|init`).
 - **Cross-Platform Distribution & Packaging**:
-  - Official Homebrew formula in `axiomantic/homebrew-tap` (`brew install axiomantic/tap/locutus`).
+  - Official Homebrew formula in `axiomantic/homebrew-tap` (`brew install axiomantic/tap/rhizo`).
   - Official Debian/Ubuntu APT repository deployed on GitHub Pages.
-  - Windows Scoop manifest in `packaging/scoop/locutus.json`.
+  - Windows Scoop manifest in `packaging/scoop/rhizo.json`.
   - Universal 1-line installer and uninstaller scripts (`scripts/install.sh`, `scripts/install.ps1`).
   - Cross-compilation release pipeline generating standalone binaries and tarballs for Linux (amd64, arm64), macOS (Apple Silicon, Intel), and Windows (x64).
 
-[Unreleased]: https://github.com/axiomantic/locu/compare/v0.1.3...HEAD
-[0.1.3]: https://github.com/axiomantic/locu/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/axiomantic/locu/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/axiomantic/locu/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/axiomantic/locu/releases/tag/v0.1.0
+[Unreleased]: https://github.com/axiomantic/rhizo/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/axiomantic/rhizo/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/axiomantic/rhizo/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/axiomantic/rhizo/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/axiomantic/rhizo/releases/tag/v0.1.0

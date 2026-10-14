@@ -1,6 +1,6 @@
 -- scripts/blackboard.lua
 -- Atomic shared scratchpad / blackboard key-value and append memory in Redis.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: action ("set", "get", "append", "snapshot", "delete", "clear")
 -- ARGV[3]: room (e.g. "architecture_roundtable")
 -- ARGV[4]: key (or list_key)

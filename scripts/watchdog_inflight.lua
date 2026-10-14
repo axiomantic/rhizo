@@ -1,6 +1,6 @@
 -- scripts/watchdog_inflight.lua
 -- Counts in-flight tasks across queues and leases for the namespace prefix.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 
 local prefix = ARGV[1]
 if not prefix or prefix == "" then

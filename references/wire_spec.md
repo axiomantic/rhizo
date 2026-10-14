@@ -71,7 +71,7 @@ Every message stored in an agent inbox (`${RHIZO_REDIS_PREFIX}inbox:<recipient>`
 Rhizo employs an out-of-band cryptographic security model to protect coding assistants from forged tasks, unauthorized cluster access, and prompt injection attacks:
 
 ### Secret Key Storage
-- Secret key stored at `~/.config/rhizo/secret` (or `~/.config/locutus/secret`) with `0600` permissions (read/write by owner only).
+- Secret key stored at `~/.config/rhizo/secret` with `0600` permissions (read/write by owner only).
 - Auto-generated on first run with 256-bit cryptographically secure entropy (`openssl rand -hex 32`).
 - The secret key **never enters the assistant's LLM context window**, is never passed as a prompt argument, and is never transmitted across Redis.
 
@@ -106,7 +106,7 @@ flowchart TD
 ```
 
 ### Optional End-to-End Encryption (E2EE)
-- Setting `RHIZO_ENCRYPT=1` (or `LOCUTUS_ENCRYPT=1`) encrypts the `body` using AES-256-CBC PBKDF2.
+- Setting `RHIZO_ENCRYPT=1` encrypts the `body` using AES-256-CBC PBKDF2.
 - Plaintext payload never touches the Redis keyspace.
 - `rhizo listen` automatically detects `encrypted: true` and decrypts before delivering to the agent.
 
@@ -154,8 +154,7 @@ class RhizoMessage(BaseModel):
         return v
 
 
-# Backwards compatibility aliases
-LocutusMessage = RhizoMessage
+# Backwards compatibility alias
 A2AMessage = RhizoMessage
 ```
 

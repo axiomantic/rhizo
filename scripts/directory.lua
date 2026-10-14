@@ -1,8 +1,8 @@
 -- scripts/directory.lua
 -- Lists registered agents, their liveness heartbeat (1 or 0), tags, state, activity, listener attachment, and elapsed seconds since last seen.
 -- Pure query: NEVER prunes or mutates state on read.
--- ARGV[1]: prefix (e.g. "locutus:")
--- ARGV[2]: optional filter tag (e.g. "locutus", or "*" / nil for all)
+-- ARGV[1]: prefix (e.g. "rhizo:")
+-- ARGV[2]: optional filter tag (e.g. "rhizo", or "*" / nil for all)
 
 local prefix = ARGV[1]
 if not prefix or prefix == "" then
@@ -67,15 +67,20 @@ for _, agent in ipairs(agents) do
     end
 
     -- In-Flight Task Lease Liveness:
-    -- If agent holds an active task lease (state IN_PROGRESS or CLAIMED and now < lease_until),
+    -- If agent holds an active task lease (state IN_PROGRESS, CLAIMED, or DELIVERED within active window),
     -- treat agent as alive and state as busy (<cur_task>), preventing STALE during long work.
     if cur_task ~= "" then
-        local t_meta = redis.call('HMGET', prefix .. 'task:' .. string.lower(cur_task), 'state', 'lease_until')
+        local t_meta = redis.call('HMGET', prefix .. 'task:' .. string.lower(cur_task), 'state', 'lease_until', 'delivery_until', 'progress')
         local t_state = t_meta[1]
         local t_lease = tonumber(t_meta[2]) or 0
-        if (t_state == "IN_PROGRESS" or t_state == "CLAIMED") and now < t_lease then
+        local t_delivery = tonumber(t_meta[3]) or 0
+        local t_progress = t_meta[4] or ""
+        if ((t_state == "IN_PROGRESS" or t_state == "CLAIMED") and now < t_lease) or (t_state == "DELIVERED" and (now < t_delivery or now < t_lease)) then
             alive = 1
             state = "busy (" .. cur_task .. ")"
+            if activity == "" and t_progress ~= "" then
+                activity = t_progress
+            end
         end
     end
 

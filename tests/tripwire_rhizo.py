@@ -1,8 +1,8 @@
-"""Tripwire Custom Plugin for Locutus Multi-Agent Coordination & Mesh Bus.
+"""Tripwire Custom Plugin for Rhizo Multi-Agent Coordination & Mesh Bus.
 
 Provides:
-1. LocutusPlugin: Strict verification for Locutus CLI commands, exit codes, and JSON schemas.
-2. WireProtocolValidator: Cryptographic envelope and HMAC verification per skills/locutus/references/wire_spec.md.
+1. RhizoPlugin: Strict verification for Rhizo CLI commands, exit codes, and JSON schemas.
+2. WireProtocolValidator: Cryptographic envelope and HMAC verification per skills/rhizo/references/wire_spec.md.
 3. ClusterAffinityChecker: Enforces Redis Cluster {...} hash-tag slot affinity on multi-key commands.
 """
 
@@ -19,8 +19,8 @@ from tripwire._base_plugin import BasePlugin
 from tripwire._timeline import Interaction
 
 
-class LocutusSchemaError(Exception):
-    """Raised when a Locutus CLI JSON output or wire envelope violates its specification."""
+class RhizoSchemaError(Exception):
+    """Raised when a Rhizo CLI JSON output or wire envelope violates its specification."""
 
 
 class ClusterSlotAffinityError(Exception):
@@ -28,7 +28,7 @@ class ClusterSlotAffinityError(Exception):
 
 
 @dataclass
-class LocutusCommandMock:
+class RhizoCommandMock:
     subcommand: str
     args: list[str]
     returncode: int = 0
@@ -38,14 +38,14 @@ class LocutusCommandMock:
     required: bool = True
 
 
-class LocutusPlugin(BasePlugin):
-    """Tripwire plugin specialized for Locutus multi-agent coordination layer."""
+class RhizoPlugin(BasePlugin):
+    """Tripwire plugin specialized for Rhizo multi-agent coordination layer."""
 
-    plugin_name: ClassVar[str] = "locutus"
+    plugin_name: ClassVar[str] = "rhizo"
 
     def __init__(self, verifier: Any) -> None:
         super().__init__(verifier)
-        self._command_mocks: list[LocutusCommandMock] = []
+        self._command_mocks: list[RhizoCommandMock] = []
 
     def mock_command(
         self,
@@ -58,11 +58,11 @@ class LocutusPlugin(BasePlugin):
         json_data: Any = None,
         required: bool = True,
     ) -> None:
-        """Register an expected Locutus CLI invocation."""
+        """Register an expected Rhizo CLI invocation."""
         if json_data is not None and not stdout:
             stdout = json.dumps(json_data)
         self._command_mocks.append(
-            LocutusCommandMock(
+            RhizoCommandMock(
                 subcommand=subcommand,
                 args=args or [],
                 returncode=returncode,
@@ -73,7 +73,7 @@ class LocutusPlugin(BasePlugin):
             )
         )
 
-    def record_locutus_call(
+    def record_rhizo_call(
         self,
         subcommand: str,
         args: Sequence[str],
@@ -81,7 +81,7 @@ class LocutusPlugin(BasePlugin):
         stdout: str,
         stderr: str,
     ) -> Interaction:
-        """Record a Locutus CLI call on the tripwire timeline."""
+        """Record a Rhizo CLI call on the tripwire timeline."""
         details: dict[str, Any] = {
             "subcommand": subcommand,
             "args": list(args),
@@ -90,7 +90,7 @@ class LocutusPlugin(BasePlugin):
             "stderr": stderr,
         }
         interaction = Interaction(
-            source_id=f"locutus:{subcommand}",
+            source_id=f"rhizo:{subcommand}",
             sequence=0,
             details=details,
             plugin=self,
@@ -98,7 +98,7 @@ class LocutusPlugin(BasePlugin):
         self.record(interaction)
         return interaction
 
-    def assert_locutus_call(
+    def assert_rhizo_call(
         self,
         subcommand: str,
         *,
@@ -106,14 +106,14 @@ class LocutusPlugin(BasePlugin):
         args_contain: list[str] | None = None,
         stdout_contains: str | None = None,
     ) -> None:
-        """Assert the next Locutus interaction on the timeline."""
+        """Assert the next Rhizo interaction on the timeline."""
         expected: dict[str, Any] = {
             "subcommand": subcommand,
             "returncode": returncode,
         }
         # Find matching interaction
         for interaction in self.verifier._timeline.all_unasserted():
-            if interaction.source_id == f"locutus:{subcommand}":
+            if interaction.source_id == f"rhizo:{subcommand}":
                 d = interaction.details
                 if d.get("returncode") == returncode:
                     if args_contain:
@@ -126,12 +126,12 @@ class LocutusPlugin(BasePlugin):
                     interaction.mark_asserted()
                     return
         raise AssertionError(
-            f"No matching unasserted Locutus interaction found for subcommand={subcommand}, returncode={returncode}"
+            f"No matching unasserted Rhizo interaction found for subcommand={subcommand}, returncode={returncode}"
         )
 
     @staticmethod
     def validate_wire_envelope(payload: str | dict[str, Any], secret: str | None = None) -> dict[str, Any]:
-        """Validate an inter-agent message against the Locutus Wire Specification.
+        """Validate an inter-agent message against the Rhizo Wire Specification.
         
         Requires: id, from, to, type, body, ts.
         If secret is provided and sig is present, validates cryptographic HMAC-SHA256 signature.
@@ -140,40 +140,40 @@ class LocutusPlugin(BasePlugin):
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError as exc:
-                raise LocutusSchemaError(f"Payload is not valid JSON: {exc}") from exc
+                raise RhizoSchemaError(f"Payload is not valid JSON: {exc}") from exc
         else:
             data = payload
 
         if not isinstance(data, dict):
-            raise LocutusSchemaError(f"Wire envelope must be a JSON object, got {type(data).__name__}")
+            raise RhizoSchemaError(f"Wire envelope must be a JSON object, got {type(data).__name__}")
 
         required_fields = ["id", "from", "to", "type", "body"]
         for f in required_fields:
             if f not in data:
-                raise LocutusSchemaError(f"Wire envelope missing required field '{f}': {data}")
+                raise RhizoSchemaError(f"Wire envelope missing required field '{f}': {data}")
 
         ts_val = data.get("timestamp") or data.get("ts")
         if not ts_val:
-            raise LocutusSchemaError(f"Wire envelope missing required timestamp field ('timestamp' or 'ts'): {data}")
+            raise RhizoSchemaError(f"Wire envelope missing required timestamp field ('timestamp' or 'ts'): {data}")
 
         if not isinstance(data["id"], str) or len(data["id"]) == 0:
-            raise LocutusSchemaError("Wire envelope 'id' must be a non-empty string")
+            raise RhizoSchemaError("Wire envelope 'id' must be a non-empty string")
 
         if not isinstance(data["from"], str) or len(data["from"]) == 0:
-            raise LocutusSchemaError("Wire envelope 'from' must be a non-empty string")
+            raise RhizoSchemaError("Wire envelope 'from' must be a non-empty string")
 
         if not isinstance(data["body"], str):
-            raise LocutusSchemaError("Wire envelope 'body' must be a string")
+            raise RhizoSchemaError("Wire envelope 'body' must be a string")
 
         # Cryptographic authentication verification
         if secret is not None and "sig" in data and data["sig"]:
             sig = data["sig"]
             subject = data.get("subject", "")
-            # Canonical message signature per locutus.nim: id|from|to|type|subject|body|ts
+            # Canonical message signature per rhizo.nim: id|from|to|type|subject|body|ts
             canon = f"{data['id']}|{data['from']}|{data['to']}|{data['type']}|{subject}|{data['body']}|{ts_val}"
             expected_sig = hmac.new(secret.encode("utf-8"), canon.encode("utf-8"), hashlib.sha256).hexdigest()
             if not hmac.compare_digest(sig, expected_sig):
-                raise LocutusSchemaError(
+                raise RhizoSchemaError(
                     f"Cryptographic HMAC signature mismatch on wire envelope! Expected {expected_sig}, got {sig}"
                 )
 
@@ -181,56 +181,56 @@ class LocutusPlugin(BasePlugin):
 
     @staticmethod
     def validate_json_schema(subcommand: str, json_text: str) -> Any:
-        """Validate JSON output schema for a specific Locutus CLI subcommand."""
+        """Validate JSON output schema for a specific Rhizo CLI subcommand."""
         try:
             data = json.loads(json_text)
         except json.JSONDecodeError as exc:
-            raise LocutusSchemaError(f"Locutus {subcommand} output is not valid JSON: {exc}") from exc
+            raise RhizoSchemaError(f"Rhizo {subcommand} output is not valid JSON: {exc}") from exc
 
         if subcommand == "who":
             if not isinstance(data, list):
-                raise LocutusSchemaError(f"'who --json' must return a list of agents, got {type(data).__name__}")
+                raise RhizoSchemaError(f"'who --json' must return a list of agents, got {type(data).__name__}")
             for item in data:
                 if not isinstance(item, dict):
-                    raise LocutusSchemaError(f"Agent entry must be an object, got {type(item).__name__}")
+                    raise RhizoSchemaError(f"Agent entry must be an object, got {type(item).__name__}")
                 for req in ["agent", "status", "tags", "state", "activity"]:
                     if req not in item:
                         if req == "agent" and "name" in item:
                             continue
                         if req == "status" and "alive" in item:
                             continue
-                        raise LocutusSchemaError(f"Agent object missing field '{req}': {item}")
+                        raise RhizoSchemaError(f"Agent object missing field '{req}': {item}")
         elif subcommand == "sweep":
             if not isinstance(data, dict):
-                raise LocutusSchemaError(f"'sweep' must return an object, got {type(data).__name__}")
+                raise RhizoSchemaError(f"'sweep' must return an object, got {type(data).__name__}")
             for req in ["pruned_listeners", "pruned_agents", "foreign_listeners"]:
                 if req not in data:
-                    raise LocutusSchemaError(f"Sweep output missing field '{req}': {data}")
+                    raise RhizoSchemaError(f"Sweep output missing field '{req}': {data}")
         elif subcommand == "config":
             if not isinstance(data, dict):
-                raise LocutusSchemaError(f"'config show --json' must return a dict, got {type(data).__name__}")
+                raise RhizoSchemaError(f"'config show --json' must return a dict, got {type(data).__name__}")
             for req in ["redis_url", "project", "prefix", "encrypt", "heartbeat_ttl", "message_ttl"]:
                 if req not in data:
-                    raise LocutusSchemaError(f"Config output missing field '{req}': {data}")
+                    raise RhizoSchemaError(f"Config output missing field '{req}': {data}")
         elif subcommand == "blackboard":
             if not isinstance(data, dict):
-                raise LocutusSchemaError(f"'blackboard snapshot' must return a dict, got {type(data).__name__}")
+                raise RhizoSchemaError(f"'blackboard snapshot' must return a dict, got {type(data).__name__}")
             for req in ["room", "kv", "lists"]:
                 if req not in data:
-                    raise LocutusSchemaError(f"Blackboard snapshot missing field '{req}': {data}")
+                    raise RhizoSchemaError(f"Blackboard snapshot missing field '{req}': {data}")
             if not isinstance(data["kv"], dict):
-                raise LocutusSchemaError(f"Blackboard snapshot 'kv' must be a dict, got {type(data['kv']).__name__}")
+                raise RhizoSchemaError(f"Blackboard snapshot 'kv' must be a dict, got {type(data['kv']).__name__}")
             if not isinstance(data["lists"], dict):
-                raise LocutusSchemaError(f"Blackboard snapshot 'lists' must be a dict, got {type(data['lists']).__name__}")
+                raise RhizoSchemaError(f"Blackboard snapshot 'lists' must be a dict, got {type(data['lists']).__name__}")
         elif subcommand == "workflow":
             if not isinstance(data, dict):
-                raise LocutusSchemaError(f"'workflow status' must return a dict, got {type(data).__name__}")
+                raise RhizoSchemaError(f"'workflow status' must return a dict, got {type(data).__name__}")
             if "flow_id" not in data and "id" not in data:
-                raise LocutusSchemaError(f"Workflow status missing 'flow_id' or 'id': {data}")
+                raise RhizoSchemaError(f"Workflow status missing 'flow_id' or 'id': {data}")
             if "status" not in data and "state" not in data:
-                raise LocutusSchemaError(f"Workflow status missing 'status' or 'state': {data}")
+                raise RhizoSchemaError(f"Workflow status missing 'status' or 'state': {data}")
             if "steps" not in data:
-                raise LocutusSchemaError(f"Workflow status missing 'steps': {data}")
+                raise RhizoSchemaError(f"Workflow status missing 'steps': {data}")
 
         return data
 

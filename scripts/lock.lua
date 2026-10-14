@@ -1,6 +1,6 @@
 -- scripts/lock.lua
 -- Atomically acquires a distributed lock for an agent with an expiration lease.
--- ARGV[1]: prefix (e.g. "locutus:")
+-- ARGV[1]: prefix (e.g. "rhizo:")
 -- ARGV[2]: lock name (e.g. "git_rebase")
 -- ARGV[3]: owner agent name (e.g. "alice")
 -- ARGV[4]: lease TTL seconds (default 30)

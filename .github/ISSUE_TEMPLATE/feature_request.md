@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea or enhancement for Locutus
+about: Suggest an idea or enhancement for Rhizo
 title: '[FEAT] '
 labels: enhancement
 assignees: ''
