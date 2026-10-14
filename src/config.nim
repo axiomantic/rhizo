@@ -82,6 +82,11 @@ type
     profile*: string
     activeConfigFile*: string
     provenance*: Table[string, ProvenanceEntry]
+    forceSteal*: bool
+    allowDrift*: bool
+    allProjects*: bool
+    globalLock*: bool
+    crossProject*: string
 
 proc sourceLabel*(s: SettingSource): string =
   case s
@@ -169,6 +174,22 @@ proc findWorkspaceDir*(startDir: string = getCurrentDir()): string =
       break
     cur = parent
   return startDir
+
+proc findGitOrWorkspaceRoot*(startDir: string = getCurrentDir()): string =
+  var cur = startDir
+  while true:
+    if dirExists(cur / ".git") or fileExists(cur / ".git"):
+      return cur
+    for candidate in [".rhizo.local.toml", "rhizo.local.toml", ".rhizo.toml", "rhizo.toml",
+                      "garden.toml", "vine.toml", "AGENTS.md"]:
+      let p = cur / candidate
+      if fileExists(p):
+        return cur
+    let parent = cur.parentDir()
+    if parent == cur or parent.len == 0:
+      break
+    cur = parent
+  return ""
 
 # Walk up from current directory to find workspace configuration or git root
 proc findWorkspaceConfigPath*(startDir: string = getCurrentDir()): string =
@@ -434,6 +455,11 @@ type CliOverrides* = object
   timeout*: Option[int]
   profile*: string
   configFile*: string
+  forceSteal*: bool
+  allowDrift*: bool
+  allProjects*: bool
+  globalLock*: bool
+  crossProject*: string
 
 proc getEnvFirst*(keys: varargs[string]): string =
   for k in keys:
@@ -442,12 +468,43 @@ proc getEnvFirst*(keys: varargs[string]): string =
       return val
   return ""
 
+proc detectCurrentSessionId*(): string =
+  let agy = getEnv("ANTIGRAVITY_CONVERSATION_ID", "")
+  if agy.len > 0: return "agy:" & agy
+  let claude = getEnvFirst("CLAUDE_CONVERSATION_ID", "CLAUDE_SESSION_ID")
+  if claude.len > 0: return "claude:" & claude
+  let opencode = getEnv("OPENCODE_SESSION_ID", "")
+  if opencode.len > 0: return "opencode:" & opencode
+  let codex = getEnv("CODEX_SESSION_ID", "")
+  if codex.len > 0: return "codex:" & codex
+  let pi = getEnv("PI_SESSION_ID", "")
+  if pi.len > 0: return "pi:" & pi
+  let custom = getEnv("RHIZO_SESSION_ID", "")
+  if custom.len > 0: return custom
+  return ""
+
 proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
   # Step 0: Pre-load .env and .env.local into process environment
   loadDotEnv()
 
-  # Step 1: Initialize with default values
-  let defProject = getCurrentDir().splitPath.tail
+  # Step 1: Initialize with default values (workspace-aware project detection)
+  let repoRoot = findGitOrWorkspaceRoot(getCurrentDir())
+  let defProject = if repoRoot.len > 0 and repoRoot.splitPath.tail notin ["", "/", "Development"]:
+                     repoRoot.splitPath.tail
+                   else:
+                     getCurrentDir().splitPath.tail
+
+  # Operational Invariant: PWD vs Environment Variable Drift Guard
+  # Enforced whenever execution occurs inside an active git repository / workspace
+  let envProject = getEnvFirst("RHIZO_PROJECT", "A2A_PROJECT")
+  let allowDrift = cli.allowDrift or (getEnv("RHIZO_ALLOW_DRIFT", "") in ["1", "true", "yes"])
+  if not allowDrift and repoRoot.len > 0:
+    let repoName = repoRoot.splitPath.tail
+    if repoName.len > 0 and repoName notin ["default", "Development", ""]:
+      if envProject.len > 0 and envProject.toLowerAscii != repoName.toLowerAscii:
+        stderr.writeLine("Error: Environment variable RHIZO_PROJECT='" & envProject & "' does not match active repository project '" & repoName & "' (at " & repoRoot & ").")
+        stderr.writeLine("Aborting to prevent cross-project state corruption. Unset RHIZO_PROJECT, use --project, or pass --allow-drift.")
+        quit(1)
   result = RhizoConfig(
     redisUrl: "redis://127.0.0.1:6379",
     prefix: "rhizo:",
@@ -526,7 +583,6 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
     result.prefix = envPrefix
     result.provenance["prefix"] = ProvenanceEntry(key: "prefix", value: envPrefix, source: srcEnv, detail: "RHIZO_REDIS_PREFIX / RHIZO_PREFIX")
 
-  let envProject = getEnvFirst("RHIZO_PROJECT", "A2A_PROJECT")
   if envProject.len > 0:
     result.project = envProject
     result.provenance["project"] = ProvenanceEntry(key: "project", value: envProject, source: srcEnv, detail: "RHIZO_PROJECT")
@@ -612,6 +668,19 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
     let base = if result.prefix.endsWith(":"): result.prefix[0 .. ^2] else: result.prefix
     result.prefix = "{" & base & ":" & result.project & "}:"
     result.provenance["prefix"] = ProvenanceEntry(key: "prefix", value: result.prefix, source: srcDefault, detail: "Cluster hash tag auto-applied")
+
+  # Auto-detect Session ID if unpopulated
+  if result.sessionId.len == 0:
+    let autoSid = detectCurrentSessionId()
+    if autoSid.len > 0:
+      result.sessionId = autoSid
+      result.provenance["session_id"] = ProvenanceEntry(key: "session_id", value: autoSid, source: srcEnv, detail: "auto-detected harness session")
+
+  result.forceSteal = cli.forceSteal or (getEnv("RHIZO_FORCE_STEAL", "") in ["1", "true", "yes"])
+  result.allowDrift = allowDrift
+  result.allProjects = cli.allProjects or (getEnv("RHIZO_ALL_PROJECTS", "") in ["1", "true", "yes"])
+  result.globalLock = cli.globalLock or (getEnv("RHIZO_GLOBAL_LOCK", "") in ["1", "true", "yes"])
+  result.crossProject = if cli.crossProject.len > 0: cli.crossProject else: getEnv("RHIZO_CROSS_PROJECT", "")
 
 # Starter TOML template
 const starterTomlContent* = """# Rhizo Configuration File (.rhizo.toml)

@@ -17,6 +17,18 @@ name = string.lower(name)
 
 local tags_csv = ARGV[3] or ""
 local ttl = tonumber(ARGV[4]) or 150
+local proj = ARGV[5] or ""
+local force_steal = tonumber(ARGV[6] or 0)
+
+-- Ownership Guard: Prevent silent cross-project agent hijacking
+if proj ~= "" then
+    local existing_proj = redis.call('HGET', prefix .. 'agent:' .. name, 'project')
+    if existing_proj and existing_proj ~= "" and string.lower(existing_proj) ~= string.lower(proj) then
+        if force_steal ~= 1 then
+            return redis.error_reply("ERR_CROSS_PROJECT_TAKEOVER: Agent '" .. name .. "' is actively owned by project '" .. existing_proj .. "'. Cross-project takeover denied. Pass --force-steal to override.")
+        end
+    end
+end
 
 local mock_offset = tonumber(redis.call('GET', prefix .. 'mock_time_offset') or 0)
 local now = tonumber(redis.call('TIME')[1]) + mock_offset
@@ -42,7 +54,12 @@ end
 
 -- 3. Add to active roster and store metadata
 redis.call('SADD', prefix .. 'active_agents', name)
-redis.call('HSET', prefix .. 'agent:' .. name, 'tags', tags_csv, 'last_seen', now, 'heartbeat_ttl', ttl)
+if proj ~= "" then
+    redis.call('HSET', prefix .. 'agent:' .. name, 'tags', tags_csv, 'last_seen', now, 'heartbeat_ttl', ttl, 'project', proj)
+    redis.call('SADD', prefix .. 'tag:' .. string.lower(proj), name)
+else
+    redis.call('HSET', prefix .. 'agent:' .. name, 'tags', tags_csv, 'last_seen', now, 'heartbeat_ttl', ttl)
+end
 
 -- 4. Index new tags
 for tag in string.gmatch(tags_csv, "([^,]+)") do

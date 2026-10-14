@@ -21,6 +21,7 @@
 ## Table of Contents
 
 - [What is Rhizo?](#what-is-rhizo)
+- [Documentation for Humans & AI Agents](#documentation-for-humans--ai-agents)
 - [30-Second Quickstart](#30-second-quickstart)
   - [1. Install (Universal NPM Package)](#1-install-universal-npm-package)
   - [2. Try it in Your Terminals](#2-try-it-in-your-terminals)
@@ -76,6 +77,24 @@ However, Rhizo is designed from the ground up to pair seamlessly with **Vine** a
 2. **Spin Zero-Cost Strand**: `vine new <task_id>` (sub-second Rift CoW workspace).
 3. **Verify Two-Key Gate**: `vine gate --json` (Key 1 in-memory conflict check + Key 2 live compiler/test suite).
 4. **Weave & Acknowledge**: `vine weave && rhizo ack queue:myproj:tasks <task_id>`.
+
+---
+
+## Documentation for Humans & AI Agents
+
+Rhizo provides comprehensive technical and operational specifications:
+
+### Core Protocols & Architecture
+* **[System Architecture & Data Engine](docs/architecture.md)**: Redis keyspace map, 27 Lua EVALSHA atomic scripts, connection pooling, and fail-safe designs.
+* **[Wire Protocol Specification](docs/wire_protocol.md)**: JSON envelope schema, HMAC-SHA256 signatures, prompt firewall, causal sequence ordering, and delivery guarantees.
+* **[Work Item State Machine (WISM)](docs/wism_state_machine.md)**: Formal 10-state task machine, monotonic fencing leases, receipt timeouts, and automated DAG cascading.
+* **[System 1 Routing Guide](docs/system_one_routing.md)**: Sub-40ms ModernBERT / Laya intent classification, cascading YAML rules, and local daemon setup.
+* **[CLI Reference Manual](docs/cli_reference.md)**: Complete catalog of all 35+ CLI commands, subcommands, flags, exit codes, and JSON outputs.
+* **[Agent Constitution & Invariants (AGENTS.md)](AGENTS.md)**: Coordination invariants, sovereign session rules, and listener discipline.
+
+### Configuration & Schemas
+* **[Configuration Architecture](docs/configuration.md)**: Layered configuration hierarchy, environment variables, and Redis security profiles.
+* **[Routes Schema Reference](docs/routes_schema.md)**: Cascading YAML schema, match operators, and queue interpolation.
 
 ---
 

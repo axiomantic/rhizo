@@ -130,7 +130,8 @@ class TestCoordinationInvariants(unittest.TestCase):
                 stdout=f,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=self.env
+                env=self.env,
+                cwd=self.test_home
             )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("Unsupervised detachment detected", proc.stderr)
@@ -143,7 +144,8 @@ class TestCoordinationInvariants(unittest.TestCase):
                 stdout=f,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=self.env
+                env=self.env,
+                cwd=self.test_home
             )
         self.assertEqual(proc_force.returncode, 0)
 
@@ -203,14 +205,21 @@ class TestCoordinationInvariants(unittest.TestCase):
     # Problem 6: Broadcast Scope Transparency
     # -------------------------------------------------------------------------
     def test_07_broadcast_scope_default_all(self):
-        """Verify broadcast with no tags defaults to scope '*' and warns if only sender reached."""
+        """Verify broadcast with no tags defaults to project scope and supports --all-projects for global scope."""
         self.run_cmd(["open", "bcast_sender", "solo_project"])
         res_bcast = self.run_cmd([
             "broadcast", "--subject", "Global Alert", "--body", "All hands", "--from", "bcast_sender"
         ])
         self.assertEqual(res_bcast.returncode, 0)
         self.assertIn("BROADCAST", res_bcast.stdout)
-        self.assertIn("scope: *", res_bcast.stdout)
+        self.assertIn("scope: @coord_test", res_bcast.stdout)
+
+        # Cross-project broadcast with --all-projects
+        res_bcast_all = self.run_cmd([
+            "broadcast", "--all-projects", "--subject", "Global Alert", "--body", "All hands", "--from", "bcast_sender"
+        ])
+        self.assertEqual(res_bcast_all.returncode, 0)
+        self.assertIn("scope: *", res_bcast_all.stdout)
 
     # -------------------------------------------------------------------------
     # Problem 7: Scatter-Reply Correlation & Progress
@@ -418,7 +427,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         """Verify that rhizo listen detects parent while/until loops and rejects execution."""
         # Run inside a bash while loop
         bash_cmd = f"set -e; while true; do '{BIN_PATH}' listen test_agent_loop --timeout 1; done"
-        res = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, env=self.env)
+        res = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, env=self.env, cwd=self.test_home)
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("bash loop", res.stderr)
         self.assertIn("SINGLE-SHOT", res.stderr)
@@ -492,7 +501,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         res_lock1 = self.run_cmd(["lock", "SharedDb", "30"],
                                  env_overrides={"RHIZO_AGENT_NAME": "Worker-Alpha"})
         self.assertEqual(res_lock1.returncode, 0)
-        self.assertIn("LOCKED shareddb by worker-alpha", res_lock1.stdout)
+        self.assertIn("shareddb by worker-alpha", res_lock1.stdout)
 
         # Attempt to acquire same lock with different casing from another worker
         res_lock2 = self.run_cmd(["lock", "shareddb", "30"],
@@ -504,7 +513,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         res_unlock = self.run_cmd(["unlock", "SHAREDDB"],
                                   env_overrides={"RHIZO_AGENT_NAME": "worker-alpha"})
         self.assertEqual(res_unlock.returncode, 0)
-        self.assertIn("UNLOCKED shareddb", res_unlock.stdout)
+        self.assertIn("shareddb", res_unlock.stdout)
 
         # 7. Decision case-insensitivity
         res_prop = self.run_cmd(["decision", "propose", "DECISION-ALPHA", "--title", "Test Dec"],
@@ -1266,6 +1275,308 @@ class TestCoordinationInvariants(unittest.TestCase):
         # Clean up
         self.run_cmd(["close", worker])
         self.run_cmd(["close", orchestrator])
+
+
+    # -------------------------------------------------------------------------
+    # Problem 25: Completion-Aware Auto-Idle on Reply & Alias Resolution
+    # -------------------------------------------------------------------------
+    def test_25_auto_idle_on_reply_and_alias_resolution(self):
+        """Verify completion-aware auto-idle, delivery isolation, and alias resolution."""
+        worker = "auto-idle-worker"
+        orchestrator = "auto-idle-orchestrator"
+        self.run_cmd(["open", worker, "worker"])
+        self.run_cmd(["open", orchestrator, "orchestrator"])
+
+        # 1. Setup in-flight task on worker
+        task_id = "task-idle-check"
+        self.run_cmd(["task", "create", task_id, "--title", "Idle Check Task", "--assignee", worker])
+        self.run_cmd(["task", "claim", task_id, "--worker", worker, "--no-vine"])
+
+        rhizo_dir = os.path.join(self.test_home, ".config", "rhizo")
+        os.makedirs(rhizo_dir, exist_ok=True)
+        worker_task_file = os.path.join(rhizo_dir, f"current_task_{worker}.json")
+        with open(worker_task_file, "w") as f:
+            json.dump({"id": task_id, "state": "IN_PROGRESS"}, f)
+
+        # Verify initial busy state in who
+        res_who = self.run_cmd(["who", "--json"])
+        self.assertEqual(res_who.returncode, 0)
+        who_data = {a["agent"]: a for a in json.loads(res_who.stdout.strip())}
+        self.assertIn(f"busy ({task_id})", who_data[worker]["state"].lower())
+
+        # 2. Negative Control: Intermediate reply must NOT auto-idle
+        res_inter = self.run_cmd([
+            "reply", "--to", orchestrator, "--from", worker,
+            "--subject", "Progress check: 50% done", "--body", "Still running tests",
+            "--skip-gate"
+        ])
+        self.assertEqual(res_inter.returncode, 0)
+
+        # Worker local file must STILL exist
+        self.assertTrue(os.path.exists(worker_task_file), "Intermediate reply must not clear local task stamp")
+
+        # Worker presence in who must STILL be busy with updated activity
+        res_who_inter = self.run_cmd(["who", "--json"])
+        self.assertEqual(res_who_inter.returncode, 0)
+        who_inter_data = {a["agent"]: a for a in json.loads(res_who_inter.stdout.strip())}
+        self.assertIn(f"busy ({task_id})", who_inter_data[worker]["state"].lower())
+        self.assertIn("replied: progress check", who_inter_data[worker]["activity"].lower())
+
+        # 3. Positive Control: Completion subject triggers auto-idle
+        res_comp = self.run_cmd([
+            "reply", "--to", orchestrator, "--from", worker,
+            "--subject", "Task Complete: Two-Key Gate Passed", "--body", "Finished cleanly",
+            "--skip-gate"
+        ])
+        self.assertEqual(res_comp.returncode, 0)
+
+        # Local task stamp must be deleted
+        self.assertFalse(os.path.exists(worker_task_file), "Completion reply must delete local task stamp")
+
+        # Redis task pointers must be cleared
+        res_cur = subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", f"{TEST_PREFIX}current_task:{worker}"], capture_output=True, text=True)
+        self.assertEqual(res_cur.stdout.strip(), "")
+        res_hcur = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{worker}", "current_task"], capture_output=True, text=True)
+        self.assertEqual(res_hcur.stdout.strip(), "")
+
+        # Worker state in who must be IDLE
+        res_who_comp = self.run_cmd(["who", "--json"])
+        self.assertEqual(res_who_comp.returncode, 0)
+        who_comp_data = {a["agent"]: a for a in json.loads(res_who_comp.stdout.strip())}
+        self.assertEqual(who_comp_data[worker]["state"].upper(), "IDLE")
+
+        # 4. Explicit --idle flag triggers auto-idle even for non-completion subjects
+        # Re-set task on worker
+        with open(worker_task_file, "w") as f:
+            json.dump({"id": "task-custom-done", "state": "IN_PROGRESS"}, f)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", f"{TEST_PREFIX}current_task:{worker}", "task-custom-done"], check=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}agent:{worker}", "current_task", "task-custom-done"], check=True)
+
+        res_flag_idle = self.run_cmd([
+            "reply", "--to", orchestrator, "--from", worker,
+            "--subject", "Arbitrary non-completion subject", "--body", "Forcing idle",
+            "--idle", "--skip-gate"
+        ])
+        self.assertEqual(res_flag_idle.returncode, 0)
+        self.assertFalse(os.path.exists(worker_task_file))
+        res_who_flag = self.run_cmd(["who", "--json"])
+        who_flag_data = {a["agent"]: a for a in json.loads(res_who_flag.stdout.strip())}
+        self.assertEqual(who_flag_data[worker]["state"].upper(), "IDLE")
+
+        # 5. Non-task message delivery isolation: incoming replies/info must NOT stamp current_task
+        # Clean orchestrator current_task
+        orch_task_file = os.path.join(rhizo_dir, f"current_task_{orchestrator}.json")
+        if os.path.exists(orch_task_file):
+            os.remove(orch_task_file)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HDEL", f"{TEST_PREFIX}agent:{orchestrator}", "current_task"], check=True)
+
+        # Send a reply to orchestrator
+        self.run_cmd(["send", "--to", orchestrator, "--from", worker, "--type", "reply", "--subject", "Reply message", "--body", "Payload"])
+        # Drain/listen to pop the message
+        res_pop = self.run_cmd(["listen", orchestrator, "--timeout", "1"])
+        self.assertEqual(res_pop.returncode, 0)
+
+        # Orchestrator MUST NOT have current_task set in Redis or on disk
+        self.assertFalse(os.path.exists(orch_task_file), "Delivering non-task message must not write local task stamp")
+        res_orch_cur = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{orchestrator}", "current_task"], capture_output=True, text=True)
+        self.assertEqual(res_orch_cur.stdout.strip(), "", "Delivering non-task message must not set current_task in Redis")
+
+        # 6. Bidirectional Alias Resolution
+        alias_name = "alias-lead"
+        target_name = "target-lead"
+        self.run_cmd(["open", target_name, "orchestrator"])
+        res_alias_set = self.run_cmd(["alias", "set", alias_name, target_name])
+        self.assertEqual(res_alias_set.returncode, 0)
+
+        # Send message to alias
+        res_alias_send = self.run_cmd(["send", "--to", alias_name, "--from", worker, "--subject", "Hello Alias", "--body", "Content"])
+        self.assertEqual(res_alias_send.returncode, 0)
+
+        # Check inbox on alias resolves to target
+        res_chk_alias = self.run_cmd(["check-inbox", alias_name])
+        self.assertEqual(res_chk_alias.returncode, 0)
+        self.assertEqual(res_chk_alias.stdout.strip(), "1")
+
+        # Drain from alias resolves to target
+        res_drain_alias = self.run_cmd(["drain", "1", alias_name])
+        self.assertEqual(res_drain_alias.returncode, 0)
+        self.assertIn("Hello Alias", res_drain_alias.stdout)
+
+        # Inboxes are now 0
+        self.assertEqual(self.run_cmd(["check-inbox", alias_name]).stdout.strip(), "0")
+        self.assertEqual(self.run_cmd(["check-inbox", target_name]).stdout.strip(), "0")
+
+        # 7. Broadcast Announcement Isolation
+        # When a broadcast message is popped by listen, it must NOT set current_task or BUSY state
+        self.run_cmd(["open", "broadcast-recipient", "worker"])
+        res_bcast = self.run_cmd(["broadcast", "--from", worker, "--subject", "Swarm Plan Complete: Deployed", "--body", "All tasks done"])
+        self.assertEqual(res_bcast.returncode, 0)
+        res_bcast_pop = self.run_cmd(["listen", "broadcast-recipient", "--timeout", "1"])
+        self.assertEqual(res_bcast_pop.returncode, 0)
+        # Recipient MUST NOT have current_task in Redis
+        res_rcp_cur = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:broadcast-recipient", "current_task"], capture_output=True, text=True)
+        self.assertEqual(res_rcp_cur.stdout.strip(), "", "Broadcast message must not set current_task in Redis")
+        # Recipient status in who must be IDLE
+        res_who_b = self.run_cmd(["who", "--json"])
+        who_b_data = {a["agent"]: a for a in json.loads(res_who_b.stdout.strip())}
+        self.assertEqual(who_b_data["broadcast-recipient"]["state"].lower(), "idle")
+        self.run_cmd(["close", "broadcast-recipient"])
+
+        # Clean up
+        self.run_cmd(["alias", "del", alias_name])
+        self.run_cmd(["close", worker])
+        self.run_cmd(["close", orchestrator])
+        self.run_cmd(["close", target_name])
+
+    # -------------------------------------------------------------------------
+    # Problem 26: Cross-Project Isolation & Anti-Hijack Invariants
+    # -------------------------------------------------------------------------
+    def test_26_cross_project_isolation_and_anti_hijack_invariants(self):
+        """Verify hermetic cross-project isolation, anti-hijack guards, scoped who/locks, and key migration."""
+        proj_a = "alpha-system"
+        proj_b = "beta-system"
+        agent_a = "alpha-conductor"
+        agent_b = "beta-worker"
+
+        # 1. Register agent_a in proj_a
+        res_open_a = self.run_cmd(["open", agent_a, "conductor"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_open_a.returncode, 0)
+        self.assertIn("Registered Successfully", res_open_a.stdout)
+
+        # Verify Redis has project set
+        res_proj_get = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{agent_a}", "project"], capture_output=True, text=True)
+        self.assertEqual(res_proj_get.stdout.strip(), proj_a)
+
+        # 2. Negative Control: proj_b session attempts to hijack agent_a without force-steal
+        res_hijack = self.run_cmd(["open", agent_a, "worker"], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertNotEqual(res_hijack.returncode, 0, "Cross-project hijack of active agent must be rejected")
+        self.assertIn("Cross-project takeover denied", res_hijack.stderr)
+        self.assertIn(proj_a, res_hijack.stderr)
+
+        # 3. Positive Control: Override hijack with --force-steal
+        res_steal = self.run_cmd(["open", agent_a, "worker", "--force-steal"], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_steal.returncode, 0, "Cross-project takeover with --force-steal must succeed")
+        res_stolen_proj = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{agent_a}", "project"], capture_output=True, text=True)
+        self.assertEqual(res_stolen_proj.stdout.strip(), proj_b)
+
+        # Re-assign back to proj_a
+        self.run_cmd(["open", agent_a, "conductor", "--force-steal"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+
+        # 4. Cross-Project Inbox Drain & Check-Inbox Isolation
+        # Send a message to agent_a
+        self.run_cmd(["send", "--to", agent_a, "--from", "system", "--subject", "Confidential Task", "--body", "Secret payload"],
+                     env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+
+        # proj_b session attempts to check-inbox of agent_a
+        res_chk_alien = self.run_cmd(["check-inbox", agent_a], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertNotEqual(res_chk_alien.returncode, 0)
+        self.assertIn("Check-inbox across projects denied", res_chk_alien.stderr)
+
+        # proj_b session attempts to drain agent_a's inbox
+        res_drain_alien = self.run_cmd(["drain", "10", agent_a], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertNotEqual(res_drain_alien.returncode, 0)
+        self.assertIn("Draining across projects denied", res_drain_alien.stderr)
+
+        # proj_a session successfully drains its own inbox
+        res_drain_own = self.run_cmd(["drain", "10", agent_a], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_drain_own.returncode, 0)
+        self.assertIn("Confidential Task", res_drain_own.stdout)
+
+        # 5. Project-Scoped rhizo who Filtering
+        self.run_cmd(["open", agent_b, "worker"], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_ALLOW_DRIFT": "1"})
+
+        # Unscoped / default who in proj_a MUST only see agent_a
+        res_who_a = self.run_cmd(["who", "--json"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_who_a.returncode, 0)
+        who_a_agents = [x["agent"] for x in json.loads(res_who_a.stdout.strip())]
+        self.assertIn(agent_a, who_a_agents)
+        self.assertNotIn(agent_b, who_a_agents, "Unscoped who in proj_a must not show proj_b agents")
+
+        # Global who (-a / --all-projects) MUST see both
+        res_who_all = self.run_cmd(["who", "-a", "--json"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_who_all.returncode, 0)
+        who_all_agents = [x["agent"] for x in json.loads(res_who_all.stdout.strip())]
+        self.assertIn(agent_a, who_all_agents)
+        self.assertIn(agent_b, who_all_agents)
+
+        # 6. Project-Scoped Distributed Locks
+        # Acquire lock 'build' in proj_a
+        res_lock_a = self.run_cmd(["lock", "build", "30", "--fencing"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_AGENT_NAME": agent_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_lock_a.returncode, 0)
+        self.assertIn("LOCKED alpha-system:build", res_lock_a.stdout)
+
+        # Acquire lock 'build' in proj_b -> MUST SUCCEED because it is scoped to beta-system:build
+        res_lock_b = self.run_cmd(["lock", "build", "30", "--fencing"], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_AGENT_NAME": agent_b, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_lock_b.returncode, 0)
+        self.assertIn("LOCKED beta-system:build", res_lock_b.stdout)
+
+        # Acquire lock 'build' in proj_a AGAIN -> MUST FAIL (already held)
+        res_lock_a2 = self.run_cmd(["lock", "build", "30"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_AGENT_NAME": agent_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertNotEqual(res_lock_a2.returncode, 0)
+        self.assertIn("already held", res_lock_a2.stderr)
+
+        # Clean up locks
+        self.run_cmd(["unlock", "build"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_AGENT_NAME": agent_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.run_cmd(["unlock", "build"], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_AGENT_NAME": agent_b, "RHIZO_ALLOW_DRIFT": "1"})
+
+        # 7. Project-Scoped Sweep
+        # Expire heartbeat of agent_b in Redis
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}heartbeat:{agent_b}"], check=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}heartbeat:{agent_a}"], check=True)
+
+        # Sweeping proj_a MUST only prune agent_a, leaving dead agent_b in proj_b untouched
+        res_sweep_a = self.run_cmd(["sweep", "--raw"], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_sweep_a.returncode, 0)
+        self.assertIn("Pruned 1 dead agents", res_sweep_a.stdout)
+
+        # Verify agent_b is STILL in active_agents set
+        res_b_member = subprocess.run(["redis-cli", "-u", REDIS_URL, "SISMEMBER", f"{TEST_PREFIX}active_agents", agent_b], capture_output=True, text=True)
+        self.assertEqual(res_b_member.stdout.strip(), "1", "Project-scoped sweep in proj_a must not prune proj_b agent")
+
+        # Global sweep prunes agent_b
+        res_sweep_all = self.run_cmd(["sweep", "--all-projects", "--raw"], env_overrides={"RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(res_sweep_all.returncode, 0)
+        self.assertIn("Pruned 1 dead agents", res_sweep_all.stdout)
+
+        # 8. Key Migration Utility (rhizo migrate-keys)
+        # Create a legacy untagged agent
+        legacy_agent = "legacy-proj-worker"
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SADD", f"{TEST_PREFIX}active_agents", legacy_agent], check=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}agent:{legacy_agent}", "state", "idle"], check=True)
+        # Verify it has no project
+        res_no_proj = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{legacy_agent}", "project"], capture_output=True, text=True)
+        self.assertEqual(res_no_proj.stdout.strip(), "")
+
+        # Run migrate-keys for legacy-proj
+        res_migrate = self.run_cmd(["migrate-keys", "--project", "legacy-proj"])
+        self.assertEqual(res_migrate.returncode, 0)
+        migrate_data = json.loads(res_migrate.stdout.strip())
+        self.assertEqual(migrate_data["status"], "MIGRATION_COMPLETE")
+        self.assertEqual(migrate_data["agents_tagged"], 1)
+
+        # Verify agent now has project tagged
+        res_tagged_proj = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{legacy_agent}", "project"], capture_output=True, text=True)
+        self.assertEqual(res_tagged_proj.stdout.strip(), "legacy-proj")
+
+        # Clean up
+        self.run_cmd(["close", agent_a], env_overrides={"RHIZO_PROJECT": proj_a, "RHIZO_ALLOW_DRIFT": "1"})
+        self.run_cmd(["close", agent_b], env_overrides={"RHIZO_PROJECT": proj_b, "RHIZO_ALLOW_DRIFT": "1"})
+        self.run_cmd(["close", legacy_agent], env_overrides={"RHIZO_PROJECT": "legacy-proj", "RHIZO_ALLOW_DRIFT": "1"})
+
+    # -------------------------------------------------------------------------
+    # Problem 27: PWD vs. Environment Variable Drift Guard
+    # -------------------------------------------------------------------------
+    def test_27_pwd_drift_guard_rejection(self):
+        """Verify that PWD vs. Environment Variable Drift Guard aborts execution when RHIZO_PROJECT does not match directory."""
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        res_mismatch = self.run_cmd(["name"], env_overrides={"RHIZO_PROJECT": "completely-alien-project"}, cwd=repo_root)
+        self.assertNotEqual(res_mismatch.returncode, 0)
+        self.assertIn("does not match active repository project", res_mismatch.stderr)
+        self.assertIn("Aborting to prevent cross-project state corruption", res_mismatch.stderr)
+
+        # With --allow-drift, it succeeds
+        res_allowed = self.run_cmd(["name", "--allow-drift"], env_overrides={"RHIZO_PROJECT": "completely-alien-project"}, cwd=repo_root)
+        self.assertEqual(res_allowed.returncode, 0)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,23 @@ local agents = {}
 
 if filter and filter ~= "" and filter ~= "*" and filter ~= "@all" then
     local filter_tag = string.lower(filter)
-    agents = redis.call('SMEMBERS', prefix .. 'tag:' .. filter_tag)
+    local from_tag = redis.call('SMEMBERS', prefix .. 'tag:' .. filter_tag)
+    local seen = {}
+    for _, a in ipairs(from_tag) do
+        seen[a] = true
+        table.insert(agents, a)
+    end
+    -- Also scan active_agents for matching project field
+    local all_active = redis.call('SMEMBERS', prefix .. 'active_agents')
+    for _, a in ipairs(all_active) do
+        if not seen[a] then
+            local a_proj = redis.call('HGET', prefix .. 'agent:' .. a, 'project')
+            if a_proj and string.lower(a_proj) == filter_tag then
+                seen[a] = true
+                table.insert(agents, a)
+            end
+        end
+    end
 else
     agents = redis.call('SMEMBERS', prefix .. 'active_agents')
 end
@@ -24,7 +40,7 @@ local now = tonumber(redis.call('TIME')[1]) + mock_offset
 
 local result = {}
 for _, agent in ipairs(agents) do
-    local meta = redis.call('HMGET', prefix .. 'agent:' .. agent, 'tags', 'state', 'activity', 'last_seen', 'heartbeat_ttl', 'current_task')
+    local meta = redis.call('HMGET', prefix .. 'agent:' .. agent, 'tags', 'state', 'activity', 'last_seen', 'heartbeat_ttl', 'current_task', 'project')
     local tags = meta[1] or ""
     local state = meta[2]
     if not state or state == "" then state = "idle" end
@@ -32,6 +48,7 @@ for _, agent in ipairs(agents) do
     local last_seen = tonumber(meta[4]) or now
     local hb_ttl = tonumber(meta[5]) or 150
     local cur_task = meta[6] or ""
+    local proj = meta[7] or ""
     if cur_task == "" then
         local at = redis.call('GET', prefix .. 'agent_task:' .. agent)
         if at and at ~= false and at ~= "" then
@@ -68,7 +85,7 @@ for _, agent in ipairs(agents) do
         has_listener = 1
     end
 
-    -- Format: agent|alive|tags|state|activity|has_listener|elapsed
-    table.insert(result, agent .. "|" .. alive .. "|" .. tags .. "|" .. state .. "|" .. activity .. "|" .. has_listener .. "|" .. elapsed)
+    -- Format: agent|alive|tags|state|activity|has_listener|elapsed|project
+    table.insert(result, agent .. "|" .. alive .. "|" .. tags .. "|" .. state .. "|" .. activity .. "|" .. has_listener .. "|" .. elapsed .. "|" .. proj)
 end
 return result

@@ -15,6 +15,10 @@ end
 
 local action = ARGV[2] or "audit"
 local dry_run = ARGV[3] == "1" or action == "audit"
+local target_project = ARGV[4] or ""
+if target_project ~= "" and target_project ~= "*" then
+    target_project = string.lower(target_project)
+end
 
 local function encode_array(arr)
     if not arr or #arr == 0 then
@@ -27,17 +31,27 @@ local dead_agents = {}
 local active_agents = redis.call("SMEMBERS", prefix .. "active_agents")
 
 for _, agent in ipairs(active_agents) do
-    local hb = redis.call("EXISTS", prefix .. "heartbeat:" .. agent)
-    if hb == 0 then
-        table.insert(dead_agents, agent)
-        if not dry_run then
-            redis.call("SREM", prefix .. "active_agents", agent)
-            local agent_tags = redis.call("HGET", prefix .. "agent:" .. agent, "tags") or ""
-            for t in string.gmatch(agent_tags, "([^,]+)") do
-                local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
-                if tr ~= "" then redis.call("SREM", prefix .. "tag:" .. tr, agent) end
+    local should_check = true
+    if target_project ~= "" and target_project ~= "*" then
+        local a_proj = redis.call("HGET", prefix .. "agent:" .. agent, "project")
+        if a_proj and a_proj ~= "" and string.lower(a_proj) ~= target_project then
+            should_check = false
+        end
+    end
+
+    if should_check then
+        local hb = redis.call("EXISTS", prefix .. "heartbeat:" .. agent)
+        if hb == 0 then
+            table.insert(dead_agents, agent)
+            if not dry_run then
+                redis.call("SREM", prefix .. "active_agents", agent)
+                local agent_tags = redis.call("HGET", prefix .. "agent:" .. agent, "tags") or ""
+                for t in string.gmatch(agent_tags, "([^,]+)") do
+                    local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
+                    if tr ~= "" then redis.call("SREM", prefix .. "tag:" .. tr, agent) end
+                end
+                redis.call("UNLINK", prefix .. "agent:" .. agent)
             end
-            redis.call("UNLINK", prefix .. "agent:" .. agent)
         end
     end
 end
@@ -50,8 +64,17 @@ repeat
     local keys = scan_res[2]
     for _, lk in ipairs(keys) do
         local agent = string.sub(lk, string.len(prefix .. "listener:") + 1)
-        local val = redis.call("GET", lk)
-        table.insert(listeners, { agent = agent, key = lk, data = val or "" })
+        local include_listener = true
+        if target_project ~= "" and target_project ~= "*" then
+            local a_proj = redis.call("HGET", prefix .. "agent:" .. agent, "project")
+            if a_proj and a_proj ~= "" and string.lower(a_proj) ~= target_project then
+                include_listener = false
+            end
+        end
+        if include_listener then
+            local val = redis.call("GET", lk)
+            table.insert(listeners, { agent = agent, key = lk, data = val or "" })
+        end
     end
 until cursor == "0"
 

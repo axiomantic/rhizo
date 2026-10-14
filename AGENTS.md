@@ -322,6 +322,103 @@ Never weave a strand into the canonical trunk without passing both keys:
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 <!-- END GARDEN GUIDE -->
 
+---
+
+## 4. Rhizo System Architecture & Data Engine
+
+Rhizo provides sub-millisecond inter-agent communication, distributed locking, and competing-consumer work queues over Redis/Valkey via atomic Lua execution.
+
+```mermaid
+flowchart TD
+    subgraph Swarm["Swarm Workers & Orchestrator"]
+        Orchestrator["Lead Orchestrator"]
+        Workers["Autonomous Worker Sessions"]
+    end
+
+    subgraph Native["Rhizo Native Engine (<10ms Cold Start)"]
+        CLI["rhizo CLI"]
+        EVALSHA["Lua EVALSHA Engine (27 Atomic Scripts)"]
+        Firewall["Air-Gap Prompt Firewall & HMAC Signer"]
+    end
+
+    subgraph Redis["Redis Storage & Coordination Layer"]
+        Registry["Agent Registry (`{pfx}agent:*`, `{pfx}agents`)"]
+        Inboxes["Inboxes & Queues (`{pfx}inbox:*`, `{pfx}queue:*`)"]
+        Locks["Fencing Mutexes (`{pfx}lock:*`, `{pfx}fencing:*`)"]
+        WISM["Task State Machine (`{pfx}task:*`, `{pfx}tasks:blocked`)"]
+        PubSub["Pub/Sub Bus (`{pfx}notify:*`, `{pfx}channel:*`)"]
+    end
+
+    Swarm --> CLI
+    CLI --> EVALSHA
+    CLI --> Firewall
+    EVALSHA --> Redis
+    PubSub -.-> Swarm
+```
+
+---
+
+## 5. Rhizo Machine Constitution & Core Invariants
+
+All agents interacting with the Rhizo codebase or runtime MUST adhere to these strict invariants:
+
+<INVARIANT>
+Zero Dirty Commits:
+Never stage or commit coordination metadata (*.lock, .rhizo.*) into Git. Keep all agent state in ~/.gitignore_global.
+</INVARIANT>
+
+<INVARIANT>
+Single-Shot Listener Discipline:
+Always run 'rhizo listen <agent>' with zero timeout (infinite wait). Bounded timeouts cause empty LLM turn wakeups that exhaust token budgets. Never execute 'rhizo listen &' or redirect output ('> /dev/null'). Each listener must execute once, exit on delivery, and return output cleanly to the parent harness.
+</INVARIANT>
+
+<INVARIANT>
+Monotonic Fencing Tokens:
+All shared resource mutations and distributed task claims must negotiate leases ('--lease <sec>') and hold monotonically increasing fencing tokens ('--fencing') to prevent zombie writes and split-brain execution across workers.
+</INVARIANT>
+
+<INVARIANT>
+Case-Insensitive Normalization:
+All channel names, agent codenames, inbox addresses, multicast tags ('@tag'), work queues ('queue:<name>'), distributed locks ('lock:<name>'), pub/sub channels ('channel:<name>'), task contracts, decisions, and run cancellation tokens are normalized case-insensitively.
+</INVARIANT>
+
+<INVARIANT>
+Air-Gap Prompt Firewall:
+Inbound message payloads are cryptographically signed with HMAC-SHA256 and sanitized before insertion into an LLM context window to prevent prompt injection and unauthorized command execution.
+</INVARIANT>
+
+---
+
+## 6. Dynamic Documentation Sync & Verification
+
+To verify that all CLI commands, protocol schemas, and routing rulebooks remain synchronized with code:
+
+```bash
+# Verify test suite & coordination invariants
+nimble test
+python3 tests/test_coordination_invariants.py
+
+# Lint routing rules and check System 1 connectivity
+rhizo route lint --check-service
+```
+
+---
+
+## 7. Documentation Directory & Reading Paths
+
+Agents and human engineers operating in this repository must consult the dedicated documentation modules:
+
+| Document | Path | Description |
+| :--- | :--- | :--- |
+| **System Architecture** | [`docs/architecture.md`](docs/architecture.md) | Redis keyspace map, Lua EVALSHA engine, connection pooling, and crash resiliency. |
+| **Wire Protocol Specification** | [`docs/wire_protocol.md`](docs/wire_protocol.md) | Transport envelopes, HMAC-SHA256 signing, air-gap firewall, and delivery guarantees. |
+| **WISM State Machine** | [`docs/wism_state_machine.md`](docs/wism_state_machine.md) | 10-state task machine, monotonic leases, receipt timeouts, and automated DAG cascading. |
+| **System 1 Routing Guide** | [`docs/system_one_routing.md`](docs/system_one_routing.md) | Sub-40ms ModernBERT / Laya intent classification, cascading YAML rules, and daemon setup. |
+| **CLI Reference Manual** | [`docs/cli_reference.md`](docs/cli_reference.md) | Comprehensive catalog of all 35+ commands, subcommands, flags, and JSON formats. |
+| **Configuration Architecture** | [`docs/configuration.md`](docs/configuration.md) | Layered configuration files, environment variables, and Redis security profiles. |
+| **Routes Schema Reference** | [`docs/routes_schema.md`](docs/routes_schema.md) | YAML schema definition, match operators, and queue interpolation. |
+
+
 
 
 

@@ -1,5 +1,5 @@
 # Package
-version       = "0.2.15"
+version       = "0.2.16"
 author        = "Axiomantic"
 description   = "High Performance Inter-Assistant Redis Bus & Multi-Agent Coordination Mesh"
 license       = "MIT"
@@ -11,6 +11,7 @@ binDir        = "bin"
 requires "nim >= 2.0.0"
 requires "yaml >= 2.1.0"
 requires "https://github.com/elijahr/redis.git#feat/timeouts-and-reconnect"
+requires "typestates >= 0.13.0"
 
 task test, "Run test suite":
   exec "nim r tests/test_routing_unit.nim"

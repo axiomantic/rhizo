@@ -86,7 +86,7 @@ const
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.15"
+  RhizoVersion*  = "0.2.16"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -537,13 +537,22 @@ proc runLuaScript*(redisUrl, scriptText, scriptSha: string, evalArgs: openArray[
         let evalResp = client.eval(scriptText, @[], argSeq)
         return formatRedisValue(evalResp)
       except CatchableError as e2:
-        stderr.writeLine("Redis error: " & e2.msg)
+        if "ERR_CROSS_PROJECT" in e2.msg:
+          stderr.writeLine("Error: " & e2.msg)
+        else:
+          stderr.writeLine("Redis error: " & e2.msg)
         quit(1)
     else:
-      stderr.writeLine("Redis error: " & e.msg)
+      if "ERR_CROSS_PROJECT" in e.msg:
+        stderr.writeLine("Error: " & e.msg)
+      else:
+        stderr.writeLine("Redis error: " & e.msg)
       quit(1)
   except CatchableError as e:
-    stderr.writeLine("Redis error: " & e.msg)
+    if "ERR_CROSS_PROJECT" in e.msg:
+      stderr.writeLine("Error: " & e.msg)
+    else:
+      stderr.writeLine("Redis error: " & e.msg)
     quit(1)
 
 # Global Session-to-Agent Mapping
@@ -569,16 +578,36 @@ proc loadLocalSessionMap*(): JsonNode =
       discard
   return newJObject()
 
-proc saveLocalSessionMapping*(sessionKey, agentName: string) =
+proc saveLocalSessionMapping*(sessionKey, agentName: string, project: string = "", cwd: string = "") =
   let p = sessionsFilePath()
   try:
     createDir(p.splitPath.head)
     var m = loadLocalSessionMap()
     var entry = newJObject()
     entry["agent"] = %agentName.toLowerAscii
+    if project.len > 0: entry["project"] = %project
+    if cwd.len > 0: entry["cwd"] = %cwd
     entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
     m[sessionKey] = entry
     writeFile(p, pretty(m) & "\n")
+    secureFilePermissions(p)
+  except OSError:
+    discard
+
+proc saveRepoLocalSessionMapping*(agentName, project: string, sessionId: string = "") =
+  let wsDir = findWorkspaceDir(getCurrentDir())
+  let baseDir = if wsDir.len > 0: wsDir else: getCurrentDir()
+  let rhizoDir = baseDir / ".rhizo"
+  let p = rhizoDir / "session.json"
+  try:
+    createDir(rhizoDir)
+    var entry = newJObject()
+    entry["agent"] = %agentName.toLowerAscii
+    entry["project"] = %project
+    if sessionId.len > 0: entry["session_id"] = %sessionId
+    entry["cwd"] = %getCurrentDir()
+    entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    writeFile(p, pretty(entry) & "\n")
     secureFilePermissions(p)
   except OSError:
     discard
@@ -603,6 +632,14 @@ proc getLocalSessionAgent*(sessionKey: string): string =
       return node["agent"].getStr().toLowerAscii
     elif node.kind == JString:
       return node.getStr().toLowerAscii
+  return ""
+
+proc getLocalSessionProject*(sessionKey: string): string =
+  let m = loadLocalSessionMap()
+  if m.hasKey(sessionKey):
+    let node = m[sessionKey]
+    if node.kind == JObject and node.hasKey("project"):
+      return node["project"].getStr().toLowerAscii
   return ""
 
 # Redis Session Mapping
@@ -722,39 +759,47 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
   if explicitName.len > 0:
     return ensureProjectScopedName(cfg, explicitName)
 
-  # Explicit Session ID resolution (CLI argument --session-id takes precedence over ambient env vars)
-  let explicitSid = if sessionId.len > 0: sessionId else: cfg.sessionId
-  if explicitSid.len > 0:
-    let localAgent = getLocalSessionAgent(explicitSid)
-    if localAgent.len > 0:
-      return ensureProjectScopedName(cfg, localAgent)
-    try:
-      let redisAgent = getRedisSessionMapping(cfg, explicitSid)
-      if redisAgent.len > 0:
-        return ensureProjectScopedName(cfg, redisAgent)
-    except CatchableError:
-      discard
-
+  # Explicit agent name via CLI, Env or Config takes precedence over session mappings
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
     return ensureProjectScopedName(cfg, cfg.agentName)
   let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
   if envName.len > 0:
     return ensureProjectScopedName(cfg, envName)
 
-  # Ambient RHIZO_SESSION_ID fallback
-  let envSid = getEnv("RHIZO_SESSION_ID", "")
-  if envSid.len > 0 and envSid != explicitSid:
-    let localAgent = getLocalSessionAgent(envSid)
+  # Session ID resolution (CLI argument --session-id or auto-detected session fallback)
+  let sid = if sessionId.len > 0: sessionId elif cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
+  if sid.len > 0:
+    let localAgent = getLocalSessionAgent(sid)
     if localAgent.len > 0:
       return ensureProjectScopedName(cfg, localAgent)
     try:
-      let redisAgent = getRedisSessionMapping(cfg, envSid)
+      let redisAgent = getRedisSessionMapping(cfg, sid)
       if redisAgent.len > 0:
         return ensureProjectScopedName(cfg, redisAgent)
     except CatchableError:
       discard
 
   # Note: Global file fallback (loadCurrentAgent) permanently removed to satisfy GVR-008.
+
+  # Check repo-local .rhizo/session.json or .garden/session.json
+  let wsDir = findWorkspaceDir(getCurrentDir())
+  let baseDir = if wsDir.len > 0: wsDir else: getCurrentDir()
+  let repoSessionFile = baseDir / ".rhizo" / "session.json"
+  if fileExists(repoSessionFile):
+    try:
+      let parsed = parseFile(repoSessionFile)
+      let agent = parsed.getOrDefault("agent").getStr("")
+      if agent.len > 0:
+        return ensureProjectScopedName(cfg, agent)
+    except CatchableError: discard
+  let gardenSessionFile = baseDir / ".garden" / "session.json"
+  if fileExists(gardenSessionFile):
+    try:
+      let parsed = parseFile(gardenSessionFile)
+      let agent = parsed.getOrDefault("agent").getStr("")
+      if agent.len > 0:
+        return ensureProjectScopedName(cfg, agent)
+    except CatchableError: discard
 
   if fallbackDefault:
     if cfg.agentName.len > 0:
@@ -952,15 +997,28 @@ proc doRemindTickFallback*(cfg: RhizoConfig): string =
     return $(%*{"dispatched": 0, "error": e.msg})
 
 # Core Operations
-proc doRegister*(cfg: RhizoConfig, name, tags: string, ttl: int = -1): string =
+proc doRegister*(cfg: RhizoConfig, name, tags: string, ttl: int = -1, proj: string = "", forceSteal: bool = false): string =
   let effectiveTtl = if ttl > 0: ttl elif cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
-  return runLuaScript(cfg.redisUrl, registerLua, registerSha, [cfg.prefix, sanitizeIdentifier(name), tags, $effectiveTtl])
+  let effectiveProj = if proj.len > 0: proj else: cfg.project
+  let stealFlag = if forceSteal or cfg.forceSteal: "1" else: "0"
+  return runLuaScript(cfg.redisUrl, registerLua, registerSha, [cfg.prefix, sanitizeIdentifier(name), tags, $effectiveTtl, effectiveProj, stealFlag])
 
-proc doCheckInbox*(cfg: RhizoConfig, name: string): int =
+proc doCheckInbox*(cfg: RhizoConfig, name: string, forceSteal: bool = false): int =
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
-  let inboxKey = cfg.prefix & "inbox:" & sanitizeIdentifier(name)
+  var targetName = sanitizeIdentifier(name)
+  try:
+    let aliasVal = client.hGet(cfg.prefix & "aliases", targetName)
+    if aliasVal != redisNil and aliasVal.len > 0:
+      targetName = sanitizeIdentifier(aliasVal)
+  except CatchableError: discard
+  let existingProj = try: client.hGet(cfg.prefix & "agent:" & targetName, "project") except CatchableError: redisNil
+  if existingProj != redisNil and existingProj.len > 0 and existingProj.toLowerAscii != cfg.project.toLowerAscii:
+    if not (forceSteal or cfg.forceSteal):
+      stderr.writeLine("Error: Agent '" & targetName & "' belongs to project '" & existingProj & "'. Check-inbox across projects denied. Pass --force-steal to override.")
+      quit(1)
+  let inboxKey = cfg.prefix & "inbox:" & targetName
   try:
     return client.lLen(inboxKey)
   except CatchableError:
@@ -986,11 +1044,12 @@ proc detectHarness*(cfg: RhizoConfig): string =
 
   return "unknown"
 
-proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json"): string =
+proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false): string =
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
-  var argSeq: seq[string] = @[cfg.prefix, sanitizeIdentifier(name), $count]
+  let stealFlag = if forceSteal or cfg.forceSteal: "1" else: "0"
+  var argSeq: seq[string] = @[cfg.prefix, sanitizeIdentifier(name), $count, cfg.project, stealFlag]
   var resp: RedisValue
   try:
     resp = client.evalSha(drainSha, @[], argSeq)
@@ -999,13 +1058,22 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       try:
         resp = client.eval(drainLua, @[], argSeq)
       except CatchableError as e2:
-        stderr.writeLine("Redis error: " & e2.msg)
+        if "ERR_CROSS_PROJECT" in e2.msg:
+          stderr.writeLine("Error: " & e2.msg)
+        else:
+          stderr.writeLine("Redis error: " & e2.msg)
         quit(1)
     else:
-      stderr.writeLine("Redis error: " & e.msg)
+      if "ERR_CROSS_PROJECT" in e.msg:
+        stderr.writeLine("Error: " & e.msg)
+      else:
+        stderr.writeLine("Redis error: " & e.msg)
       quit(1)
   except CatchableError as e:
-    stderr.writeLine("Redis error: " & e.msg)
+    if "ERR_CROSS_PROJECT" in e.msg:
+      stderr.writeLine("Error: " & e.msg)
+    else:
+      stderr.writeLine("Redis error: " & e.msg)
     quit(1)
 
   var rawList: seq[string] = @[]
@@ -1292,7 +1360,7 @@ proc formatDirectory*(raw: string): string =
   if raw.strip().len == 0:
     return "No agents found."
   var lines = raw.strip().splitLines()
-  var rows: seq[(string, string, string, string, string, string)] = @[]
+  var rows: seq[(string, string, string, string, string, string, string)] = @[]
   for line in lines:
     let parts = line.strip().split('|')
     if parts.len >= 3:
@@ -1303,6 +1371,7 @@ proc formatDirectory*(raw: string): string =
       let activity = if parts.len > 4: parts[4].strip() else: ""
       let hasListener = (parts.len > 5 and parts[5] == "1")
       let elapsedSec = if parts.len > 6: (try: parseInt(parts[6].strip()) except ValueError: 0) else: 0
+      let proj = if parts.len > 7: parts[7].strip() else: ""
 
       let statusStr = if isAlive: "ACTIVE"
                       elif elapsedSec < 60: "STALE (" & $elapsedSec & "s)"
@@ -1313,17 +1382,17 @@ proc formatDirectory*(raw: string): string =
                         elif isAlive: "DETACHED"
                         else: "NO_LISTENER"
 
-      rows.add((name, statusStr, listenerStr, state, tags, activity))
+      rows.add((name, proj, statusStr, listenerStr, state, tags, activity))
     elif line.strip().len > 0:
-      rows.add((line.strip(), "", "", "", "", ""))
+      rows.add((line.strip(), "", "", "", "", "", ""))
 
   if rows.len == 0:
     return "No agents found."
 
-  result = "AGENT               STATUS           LISTENER     STATE        TAGS                ACTIVITY\n"
-  result.add("------------------------------------------------------------------------------------------------------\n")
-  for (name, status, listener, state, tags, activity) in rows:
-    result.add(name.alignLeft(20) & status.alignLeft(17) & listener.alignLeft(13) & state.alignLeft(13) & tags.alignLeft(20) & activity & "\n")
+  result = "AGENT               PROJECT         STATUS           LISTENER     STATE        TAGS                ACTIVITY\n"
+  result.add("----------------------------------------------------------------------------------------------------------------------\n")
+  for (name, proj, status, listener, state, tags, activity) in rows:
+    result.add(name.alignLeft(20) & proj.alignLeft(16) & status.alignLeft(17) & listener.alignLeft(13) & state.alignLeft(13) & tags.alignLeft(20) & activity & "\n")
   result = result.strip()
 
 proc formatDirectoryJson*(raw: string): string =
@@ -1336,8 +1405,11 @@ proc formatDirectoryJson*(raw: string): string =
         let isAlive = (parts[1] == "1")
         let hasListener = (parts.len > 5 and parts[5] == "1")
         let elapsedSec = if parts.len > 6: (try: parseInt(parts[6].strip()) except ValueError: 0) else: 0
+        let proj = if parts.len > 7: parts[7].strip() else: ""
 
         obj["agent"] = %parts[0]
+        if proj.len > 0:
+          obj["project"] = %proj
         obj["status"] = %(if isAlive: "ACTIVE" else: "STALE")
         var tagArr = newJArray()
         if parts[2].len > 0:
@@ -1361,13 +1433,14 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 proc isCompletionSubject*(subject: string): bool
+proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string
 proc findVineManifestPath*(startDir: string = ""): string
 proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string]
 proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
              rearmListen: bool = false, listenTimeoutSec: int = -1,
              urgency: string = "soon", format: string = "text", listenAgent: string = "",
-             skipGate: bool = false): string
+             skipGate: bool = false, idle: bool = false): string
 proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken: var string,
                      strandPath: string = "", weave: bool = false, skipGate: bool = false): string
 
@@ -1413,7 +1486,7 @@ proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 
   discard runLuaScript(cfg.redisUrl, reserveNameLua, reserveNameSha, [cfg.prefix, candidate, $ttl])
   return (name: candidate, prefix: pfx, codename: fallbackWord)
 
-proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = false, listenTimeoutSec: int = -1) =
+proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = false, listenTimeoutSec: int = -1, forceSteal: bool = false) =
   cleanupOldTmpFiles()
   randomize()
   var client = connectRedis(cfg.redisUrl)
@@ -1421,6 +1494,7 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     try: client.close() except CatchableError: discard
 
   var name = ensureProjectScopedName(cfg, optName)
+  let effectiveForceSteal = forceSteal or cfg.forceSteal
   if name.len == 0:
     let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
                else: getCurrentDir().splitPath.tail
@@ -1429,7 +1503,14 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
   else:
     try:
-      if client.exists(cfg.prefix & "heartbeat:" & name):
+      let existingProj = client.hGet(cfg.prefix & "agent:" & name, "project")
+      if existingProj != redisNil and existingProj.len > 0 and existingProj.toLowerAscii != cfg.project.toLowerAscii:
+        if not effectiveForceSteal:
+          stderr.writeLine("Error: Agent '" & name & "' is owned by project '" & existingProj & "'. Cross-project takeover denied. Use --force-steal to override.")
+          quit(1)
+        else:
+          stderr.writeLine("[NOTICE] Overriding project ownership for agent '" & name & "' from '" & existingProj & "' to '" & cfg.project & "' via --force-steal.")
+      elif client.exists(cfg.prefix & "heartbeat:" & name):
         echo "[NOTICE] Re-attaching to existing active agent '" & name & "'"
     except CatchableError:
       discard
@@ -1443,15 +1524,16 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   setTerminalTitle(name)
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
-    saveLocalSessionMapping(sid, name)
+    saveLocalSessionMapping(sid, name, cfg.project, getCurrentDir())
     setRedisSessionMapping(cfg, sid, name)
+  saveRepoLocalSessionMapping(name, cfg.project, sid)
 
-  discard doRegister(cfg, name, tags, cfg.heartbeatTtl)
+  discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
   try:
     discard client.del(@[cfg.prefix & "held_name:" & name])
   except CatchableError:
     discard
-  let backlog = doDrain(cfg, name, 50)
+  let backlog = doDrain(cfg, name, 50, "json", effectiveForceSteal)
 
   echo "===================================================="
   echo "[RHIZO BUS] Registered Successfully"
@@ -1509,17 +1591,21 @@ proc isCompletionSubject*(subject: string): bool =
   if s in ["done", "complete", "completed", "finished"]:
     return true
   if s.endsWith("done") or s.endsWith("complete") or s.endsWith("completed") or s.endsWith("finished"):
-    if "task" in s or "work" in s or "stage" in s or "track" in s or "strand" in s or "step" in s or s.startsWith("re:"):
+    if "task" in s or "work" in s or "stage" in s or "track" in s or "strand" in s or "step" in s or "plan" in s or "swarm" in s or s.startsWith("re:"):
       return true
   if "task done" in s or "task complete" in s or "task completed" in s or "task finished" in s or
      "work done" in s or "work complete" in s or "work completed" in s or
      "weave complete" in s or "weave done" in s or
      "stage complete" in s or "stage done" in s or
-     "track complete" in s or "track done" in s:
+     "track complete" in s or "track done" in s or
+     "plan complete" in s or "plan done" in s or "plan completed" in s or
+     "swarm complete" in s or "swarm done" in s or "swarm plan complete" in s:
     return true
-  if ("stage" in s or "track" in s or "wave" in s) and ("done" in s or "complete" in s or "completed" in s):
+  if ("stage" in s or "track" in s or "wave" in s or "plan" in s or "swarm" in s) and ("done" in s or "complete" in s or "completed" in s or "deployed" in s):
     return true
-  if (s.startsWith("done") or s.startsWith("complete") or s.startsWith("finished")) and ("task" in s or "work" in s):
+  if (s.startsWith("done") or s.startsWith("complete") or s.startsWith("finished")) and ("task" in s or "work" in s or "plan" in s):
+    return true
+  if s.startsWith("swarm plan complete") or s.startsWith("swarm complete"):
     return true
   return false
 
@@ -1616,7 +1702,8 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
 proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: string,
             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", isBroadcast: bool = false,
             customTs: string = "", echoResult: bool = true, rearmListen: bool = false, listenTimeoutSec: int = -1,
-            urgency: string = "soon", format: string = "text", listenAgent: string = ""): string =
+            urgency: string = "soon", format: string = "text", listenAgent: string = "",
+            idle: bool = false): string =
   randomize()
   let secret = getSecret(cfg)
   let rawCleanTo = sanitizeIdentifier(toAgent)
@@ -1626,20 +1713,34 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let normFrom = sanitizeIdentifier(fromAgent)
   resetWatchdogStreak(cfg, normFrom)
 
-  # Causal clearing of current_task on reply or outbound progress message
-  if msgType in ["reply", "progress", "complete"]:
-    let curTaskFile = currentTaskFilePath(normFrom)
-    if fileExists(curTaskFile):
-      try: removeFile(curTaskFile) except CatchableError: discard
-    let legacyTaskFile = currentTaskFilePath("")
-    if fileExists(legacyTaskFile):
-      try: removeFile(legacyTaskFile) except CatchableError: discard
-    try:
-      var client = connectRedis(cfg.redisUrl)
-      defer: (try: client.close() except CatchableError: discard)
-      discard client.del(@[cfg.prefix & "current_task:" & normFrom])
-    except CatchableError:
-      discard
+  # Causal clearing of current_task on completion or explicit idle flag
+  let isDone = (msgType in ["reply", "complete"] and isCompletionSubject(subject)) or
+               (msgType == "complete") or
+               idle
+
+  if normFrom.len > 0:
+    if isDone:
+      let curTaskFile = currentTaskFilePath(normFrom)
+      if fileExists(curTaskFile):
+        try: removeFile(curTaskFile) except CatchableError: discard
+      try:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        discard client.del(@[
+          cfg.prefix & "current_task:" & normFrom,
+          cfg.prefix & "agent_task:" & normFrom
+        ])
+        discard client.hDel(cfg.prefix & "agent:" & normFrom, "current_task")
+      except CatchableError:
+        discard
+      discard doStatus(cfg, normFrom, "idle", "Standing by")
+    elif msgType == "reply":
+      # Intermediate reply on an active task: preserve task and lease, update activity
+      discard doStatus(cfg, normFrom, "busy", "Replied: " & subject & " (working)")
+    elif msgType == "progress":
+      # Progress update: preserve task and lease, update activity
+      let act = if body.len > 0 and body.len < 100: body elif subject.len > 0: subject else: "In progress"
+      discard doStatus(cfg, normFrom, "busy", act)
 
   # Dynamic alias resolution (GVR-012)
   var resolvedTo = normTo
@@ -1805,7 +1906,7 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
              rearmListen: bool = false, listenTimeoutSec: int = -1,
              urgency: string = "soon", format: string = "text", listenAgent: string = "",
-             skipGate: bool = false): string =
+             skipGate: bool = false, idle: bool = false): string =
   if isCompletionSubject(subject) and not skipGate:
     let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
     if not passed:
@@ -1813,7 +1914,7 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
       quit(1)
   return doSend(cfg, toAgent, "reply", fromAgent, subject, body, tags, replyTo, msgId, false, customTs,
                 echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeoutSec,
-                urgency = urgency, format = format, listenAgent = listenAgent)
+                urgency = urgency, format = format, listenAgent = listenAgent, idle = idle)
 
 proc sendDesktopNotification*(msgNode: JsonNode) =
   try:
@@ -1843,7 +1944,20 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
 proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
-  let name = ensureProjectScopedName(cfg, name)
+  var cleanName = ensureProjectScopedName(cfg, name)
+  var client = connectRedis(cfg.redisUrl)
+  defer:
+    setTerminalTitle(cleanName)
+    try: client.close() except CatchableError: discard
+
+  # Resolve alias if listener was launched with an alias name
+  try:
+    let aliasVal = client.hGet(cfg.prefix & "aliases", cleanName)
+    if aliasVal != redisNil and aliasVal.len > 0:
+      cleanName = sanitizeIdentifier(aliasVal)
+  except CatchableError: discard
+
+  let name = cleanName
   setTerminalTitle(name & " (listening)")
   checkSupervisionAttached(name, force or continuous)
   resetWatchdogStreak(cfg, name)
@@ -1854,10 +1968,6 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   let pollChunk = min(60, max(1, hbTtl div 2))
 
   # Initial Heartbeat & Directory Registration
-  var client = connectRedis(cfg.redisUrl)
-  defer:
-    setTerminalTitle(name)
-    try: client.close() except CatchableError: discard
 
   try:
     discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
@@ -2036,18 +2146,24 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       if notify:
         sendDesktopNotification(parsed)
 
-      # Record in Unified Work Item State Machine as DELIVERED
-      try:
-        discard doTask(cfg, "deliver", [id, name, "180", subject, body])
-      except CatchableError:
-        discard
+      # Record in Unified Work Item State Machine as DELIVERED if message is an actionable task
+      let rawMsgType = parsed.getOrDefault("type").getStr("task").toLowerAscii()
+      let toField = parsed.getOrDefault("to").getStr("").strip().toLowerAscii()
+      let isBroadcastMsg = (toField == "*" or toField == "all" or toField == "" or toField.startsWith("@"))
+      let isTask = (rawMsgType in ["task", "work"]) and not isBroadcastMsg and not isCompletionSubject(subject)
 
-      # Mirror active delivery to local disk stamp for sub-millisecond hook inspection
-      try:
-        createDir(getHomeDir() / ".config" / "rhizo")
-        writeFile(currentTaskFilePath(name), $parsed)
-      except CatchableError:
-        discard
+      if isTask:
+        try:
+          discard doTask(cfg, "deliver", [id, name, "180", subject, body])
+        except CatchableError:
+          discard
+
+        # Mirror active delivery to local disk stamp for sub-millisecond hook inspection
+        try:
+          createDir(getHomeDir() / ".config" / "rhizo")
+          writeFile(currentTaskFilePath(name), $parsed)
+        except CatchableError:
+          discard
 
       echo $parsed
       flushFile(stdout)
@@ -2126,31 +2242,41 @@ proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): st
   let effectiveTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
   return runLuaScript(cfg.redisUrl, statusLua, statusSha, [cfg.prefix, sanitizeIdentifier(name), state.toLowerAscii, activity, $effectiveTtl])
 
-proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: bool = false, rawOutput: bool = false, ownerAgent: string = ""): (string, int) =
+proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: bool = false, rawOutput: bool = false, ownerAgent: string = "", globalLock: bool = false): (string, int) =
   let normLock = sanitizeIdentifier(lockName)
+  let isGlobal = globalLock or cfg.globalLock
+  let effectiveLock = if not isGlobal and cfg.project.len > 0 and not normLock.startsWith(cfg.project.toLowerAscii & ":"):
+                        cfg.project.toLowerAscii & ":" & normLock
+                      else:
+                        normLock
   let owner = if ownerAgent.len > 0: sanitizeIdentifier(ownerAgent) else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let fencingArg = if withFencing: "1" else: "0"
-  let res = runLuaScript(cfg.redisUrl, lockLua, lockSha, [cfg.prefix, normLock, owner, $ttlSec, fencingArg])
+  let res = runLuaScript(cfg.redisUrl, lockLua, lockSha, [cfg.prefix, effectiveLock, owner, $ttlSec, fencingArg])
   if res != "0" and not res.startsWith("ERR:"):
     if withFencing:
       let token = res
       if rawOutput:
         return (token, 0)
       else:
-        return ("LOCKED " & normLock & " by " & owner & " (fencing: " & token & ")", 0)
+        return ("LOCKED " & effectiveLock & " by " & owner & " (fencing: " & token & ")", 0)
     else:
-      return ("LOCKED " & normLock & " by " & owner, 0)
+      return ("LOCKED " & effectiveLock & " by " & owner, 0)
   else:
-    return ("Error: Lock '" & normLock & "' is already held.", 1)
+    return ("Error: Lock '" & effectiveLock & "' is already held.", 1)
 
-proc doUnlock*(cfg: RhizoConfig, lockName: string, ownerAgent: string = ""): (string, int) =
+proc doUnlock*(cfg: RhizoConfig, lockName: string, ownerAgent: string = "", globalLock: bool = false): (string, int) =
   let normLock = sanitizeIdentifier(lockName)
+  let isGlobal = globalLock or cfg.globalLock
+  let effectiveLock = if not isGlobal and cfg.project.len > 0 and not normLock.startsWith(cfg.project.toLowerAscii & ":"):
+                        cfg.project.toLowerAscii & ":" & normLock
+                      else:
+                        normLock
   let owner = if ownerAgent.len > 0: sanitizeIdentifier(ownerAgent) else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
-  let res = runLuaScript(cfg.redisUrl, unlockLua, unlockSha, [cfg.prefix, normLock, owner])
+  let res = runLuaScript(cfg.redisUrl, unlockLua, unlockSha, [cfg.prefix, effectiveLock, owner])
   if res == "1":
-    return ("UNLOCKED " & normLock, 0)
+    return ("UNLOCKED " & effectiveLock, 0)
   else:
-    return ("Error: Cannot unlock '" & normLock & "': not owner or lock not found.", 1)
+    return ("Error: Cannot unlock '" & effectiveLock & "': not owner or lock not found.", 1)
 
 proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: string,
                 tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = ""): string =
@@ -3096,10 +3222,13 @@ proc doWorkflowImport*(cfg: RhizoConfig, flowId, fileOrJson: string, ttlSec: int
     quit(1)
   echo res
 
-proc doSweep*(cfg: RhizoConfig, dryRun: bool = false, rawOutput: bool = false) =
+proc doSweep*(cfg: RhizoConfig, dryRun: bool = false, rawOutput: bool = false, targetProject: string = "") =
   let action = if dryRun: "audit" else: "prune"
   let dryRunArg = if dryRun: "1" else: "0"
-  let res = runLuaScript(cfg.redisUrl, sweepLua, sweepSha, [cfg.prefix, action, dryRunArg])
+  let effectiveProj = if targetProject.len > 0: targetProject
+                      elif cfg.allProjects: "*"
+                      else: cfg.project
+  let res = runLuaScript(cfg.redisUrl, sweepLua, sweepSha, [cfg.prefix, action, dryRunArg, effectiveProj])
   if res.startsWith("ERR:"):
     stderr.writeLine(res)
     quit(1)
@@ -3163,6 +3292,65 @@ proc doSweep*(cfg: RhizoConfig, dryRun: bool = false, rawOutput: bool = false) =
       "dry_run": %dryRun
     }
     echo $outObj
+
+proc doMigrateKeys*(cfg: RhizoConfig, targetProject: string, dryRun: bool = false): string =
+  var client = connectRedis(cfg.redisUrl)
+  defer:
+    try: client.close() except CatchableError: discard
+  let proj = if targetProject.len > 0: targetProject.toLowerAscii else: cfg.project.toLowerAscii
+  if proj.len == 0 or proj in ["default", ""]:
+    stderr.writeLine("Error: No target project specified for migration. Pass --project <name>.")
+    quit(1)
+
+  var migratedCount = 0
+  var taggedCount = 0
+
+  # 1. Inspect all active agents in prefix & "active_agents"
+  let activeAgents = try: client.sMembers(cfg.prefix & "active_agents") except CatchableError: @[]
+  for agent in activeAgents:
+    let agentKey = cfg.prefix & "agent:" & agent
+    let existingProj = try: client.hGet(agentKey, "project") except CatchableError: redisNil
+    if existingProj == redisNil or existingProj.len == 0:
+      if agent.startsWith(proj & "-") or agent.endsWith("-" & proj) or proj == "default":
+        taggedCount.inc
+        if not dryRun:
+          discard client.hSet(agentKey, "project", proj)
+          discard client.sAdd(cfg.prefix & "tag:" & proj, agent)
+
+  # 2. Migrate legacy lock keys: prefix & "lock:{<name>}" -> prefix & "lock:{" & proj & ":<name>}"
+  var cursor = 0
+  var lockKeysToMigrate: seq[(string, string)] = @[]
+  while true:
+    var scanRes: tuple[cursor: int, keys: seq[string]]
+    try:
+      scanRes = client.scan(cursor, pattern = cfg.prefix & "lock:*", count = 100)
+    except CatchableError:
+      break
+    cursor = scanRes.cursor
+    for k in scanRes.keys:
+      if not k.contains(":" & proj & ":") and not k.contains("{" & proj & ":"):
+        let suffix = k[len(cfg.prefix & "lock:")..^1]
+        let cleanSuffix = suffix.strip(chars = {'{', '}'})
+        if not cleanSuffix.startsWith(proj & ":"):
+          let newKey = cfg.prefix & "lock:{" & proj & ":" & cleanSuffix & "}"
+          lockKeysToMigrate.add((k, newKey))
+    if cursor == 0: break
+
+  for (oldK, newK) in lockKeysToMigrate:
+    migratedCount.inc
+    if not dryRun:
+      try:
+        discard client.rename(oldK, newK)
+      except CatchableError:
+        discard
+
+  var resObj = newJObject()
+  resObj["status"] = %"MIGRATION_COMPLETE"
+  resObj["project"] = %proj
+  resObj["dry_run"] = %dryRun
+  resObj["agents_tagged"] = %taggedCount
+  resObj["keys_migrated"] = %migratedCount
+  return $resObj
 
 proc doRequest*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string, timeoutSec: int = 30, rawOutput: bool = false, urgency: string = "soon") =
   randomize()
@@ -4849,6 +5037,18 @@ proc main() =
     elif a == "--timeout" and i + 1 < rawArgs.len:
       cli.timeout = some(parseRequiredInt(rawArgs[i+1], "--timeout"))
       inc i
+    elif a in ["--force-steal", "--steal"]:
+      cli.forceSteal = true
+    elif a in ["--allow-drift", "--drift"]:
+      cli.allowDrift = true
+    elif a in ["--all-projects", "--global"]:
+      cli.allProjects = true
+    elif a in ["--global-lock"]:
+      cli.globalLock = true
+    elif a.startsWith("--cross-project="):
+      cli.crossProject = a[16..^1]
+    elif a == "--cross-project" and i + 1 < rawArgs.len:
+      cli.crossProject = rawArgs[i+1]; inc i
     else:
       positionalArgs.add(a)
     inc i
@@ -5034,10 +5234,13 @@ proc main() =
     var tags = ""
     var rearmListen = false
     var listenTimeout = -1
+    var forceSteal = false
     var i = 1
     while i < args.len:
       let a = args[i]
-      if a in ["--listen", "-l"]:
+      if a in ["--force-steal", "--steal"]:
+        forceSteal = true
+      elif a in ["--listen", "-l"]:
         rearmListen = true
       elif a.startsWith("--listen="):
         rearmListen = true
@@ -5062,7 +5265,7 @@ proc main() =
         if name.len == 0: name = a
         elif tags.len == 0: tags = a
       inc i
-    doOpen(cfg, name, tags, rearmListen, listenTimeout)
+    doOpen(cfg, name, tags, rearmListen, listenTimeout, forceSteal)
 
   of "listen":
     var explicitName = ""
@@ -5110,7 +5313,7 @@ proc main() =
     let isBroadcast = (subcmd == "broadcast")
     let isReply = (subcmd == "reply")
     var toAgent = ""
-    var msgType = if isReply: "reply" else: "task"
+    var msgType = if isReply: "reply" elif isBroadcast: "broadcast" else: "task"
     var fromAgent = ""
     var subject = ""
     var body = ""
@@ -5124,6 +5327,7 @@ proc main() =
     var urgency = "soon"
     var format = "text"
     var skipGate = false
+    var setIdle = false
 
     var i = 1
     while i < args.len:
@@ -5138,6 +5342,7 @@ proc main() =
       elif a == "--subject" and i + 1 < args.len: subject = args[i+1]; inc i
       elif a.startsWith("--body="): body = resolveVal(a[7..^1])
       elif a == "--body" and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
+      elif a in ["--idle", "-d"]: setIdle = true
       elif a in ["--immediate", "-i"]: urgency = "immediate"
       elif a == "--soon": urgency = "soon"
       elif a == "--json": format = "json"
@@ -5207,25 +5412,25 @@ proc main() =
     if isBroadcast and toAgent == "":
       if tags.len > 0:
         if "*" in tags or "@all" in tags:
-          toAgent = "*"
+          toAgent = if cfg.allProjects: "*" else: "@" & cfg.project
         else:
           toAgent = "@" & tags.join(",")
       else:
-        toAgent = "*"
+        toAgent = if cfg.allProjects: "*" else: "@" & cfg.project
 
     if (not isBroadcast and toAgent.len == 0) or subject.len == 0 or body.len == 0:
       if not isBroadcast and toAgent.len == 0:
         stderr.writeLine("Error: Missing required argument '--to <recipient>'.")
         if isReply:
-          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--immediate|--soon] [--skip-gate]")
+          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--idle/-d] [--listen/-l] [--immediate|--soon] [--skip-gate]")
         else:
-          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--listen/-l] [--immediate|--soon] [--skip-gate]")
+          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--idle/-d] [--listen/-l] [--immediate|--soon] [--skip-gate]")
       else:
         stderr.writeLine("Error: Missing required arguments. --subject and --body are required.")
         if isReply:
-          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--immediate|--soon] [--skip-gate]")
+          stderr.writeLine("Usage: rhizo reply --to <recipient> --subject <subj> --body <body> [--reply-to <id>] [--idle/-d] [--listen/-l] [--immediate|--soon] [--skip-gate]")
         elif not isBroadcast:
-          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--listen/-l] [--immediate|--soon] [--skip-gate]")
+          stderr.writeLine("Usage: rhizo send --to <recipient> --subject <subj> --body <body> [--idle/-d] [--listen/-l] [--immediate|--soon] [--skip-gate]")
         else:
           stderr.writeLine("Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body> [--immediate|--soon]")
       quit(1)
@@ -5236,24 +5441,24 @@ proc main() =
       listenAgent = ensureProjectScopedName(cfg, listenAgent)
 
     if isReply:
-      discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate)
+      discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate, idle = setIdle)
     else:
       if subcmd == "send" and isCompletionSubject(subject) and not skipGate:
         let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
         if not passed:
           stderr.writeLine(err)
           quit(1)
-      discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent)
+      discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent, idle = setIdle)
 
   of "who":
     var filterTag = cfg.project
     var jsonOutput = false
-    var showAll = false
+    var showAll = cfg.allProjects
 
     var i = 1
     while i < args.len:
       let a = args[i]
-      if a in ["-a", "--all", "*", "@all"]:
+      if a in ["-a", "--all", "*", "@all", "--all-projects", "--global"]:
         showAll = true
       elif a in ["--json", "-j"]:
         jsonOutput = true
@@ -5284,12 +5489,19 @@ proc main() =
     echo doTag(cfg, name, action, tags)
 
   of "check-inbox":
-    let explicitName = if args.len > 1: args[1] else: ""
+    var explicitName = ""
+    var forceSteal = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["--force-steal", "--steal"]: forceSteal = true
+      elif not a.startsWith("-") and explicitName.len == 0: explicitName = a
+      inc i
     let name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
     if name.len == 0:
       stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name, or export RHIZO_AGENT_NAME=<name>.")
       quit(1)
-    let count = doCheckInbox(cfg, name)
+    let count = doCheckInbox(cfg, name, forceSteal)
     echo count
     if count > 0:
       quit(0)
@@ -5300,11 +5512,14 @@ proc main() =
     var count = 50
     var explicitName = ""
     var format = "json"
+    var forceSteal = false
     var positionalIdx = 0
     var i = 1
     while i < args.len:
       let a = args[i]
-      if a.startsWith("--format="):
+      if a in ["--force-steal", "--steal"]:
+        forceSteal = true
+      elif a.startsWith("--format="):
         format = a[9..^1].toLowerAscii
       elif a in ["--hook", "-H"]:
         format = "hook"
@@ -5357,7 +5572,7 @@ proc main() =
     if name.len == 0:
       stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name, or export RHIZO_AGENT_NAME=<name>.")
       quit(1)
-    let output = doDrain(cfg, name, count, format)
+    let output = doDrain(cfg, name, count, format, forceSteal)
     if format == "hook" and output.len == 0:
       discard
     else:
@@ -6596,13 +6811,18 @@ proc main() =
   of "sweep":
     var dryRun = false
     var rawOutput = false
+    var targetProject = ""
     var i = 1
     while i < args.len:
       let a = args[i]
       if a == "--dry-run" or a == "-n": dryRun = true
       elif a == "--raw": rawOutput = true
+      elif a in ["-a", "--all", "--all-projects", "--global"]: targetProject = "*"
+      elif a.startsWith("--project="): targetProject = a[10..^1]
+      elif (a == "--project" or a == "-p") and i + 1 < args.len: targetProject = args[i+1]; inc i
+      elif not a.startsWith("-"): targetProject = a
       inc i
-    doSweep(cfg, dryRun, rawOutput)
+    doSweep(cfg, dryRun, rawOutput, targetProject)
 
   of "status":
     var state = ""
@@ -6665,21 +6885,23 @@ proc main() =
   of "lock":
     if args.len < 2:
       stderr.writeLine("Error: Missing lock name.")
-      stderr.writeLine("Usage: rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw]")
+      stderr.writeLine("Usage: rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw] [--global-lock]")
       quit(1)
     let lockName = args[1]
     var ttl = 30
     var withFencing = false
     var rawOutput = false
+    var globalLock = false
     var i = 2
     while i < args.len:
       let a = args[i]
       if a == "--fencing" or a == "-f": withFencing = true
       elif a == "--raw": rawOutput = true
+      elif a in ["--global-lock", "--global"]: globalLock = true
       elif not a.startsWith("-"):
         ttl = parseRequiredInt(a, "lock ttl")
       inc i
-    let (msg, code) = doLock(cfg, lockName, ttl, withFencing, rawOutput)
+    let (msg, code) = doLock(cfg, lockName, ttl, withFencing, rawOutput, globalLock = globalLock)
     if code != 0:
       stderr.writeLine(msg)
       quit(code)
@@ -6688,14 +6910,33 @@ proc main() =
   of "unlock":
     if args.len < 2:
       stderr.writeLine("Error: Missing lock name.")
-      stderr.writeLine("Usage: rhizo unlock <lock_name>")
+      stderr.writeLine("Usage: rhizo unlock <lock_name> [--global-lock]")
       quit(1)
     let lockName = args[1]
-    let (msg, code) = doUnlock(cfg, lockName)
+    var globalLock = false
+    var i = 2
+    while i < args.len:
+      let a = args[i]
+      if a in ["--global-lock", "--global"]: globalLock = true
+      inc i
+    let (msg, code) = doUnlock(cfg, lockName, globalLock = globalLock)
     if code != 0:
       stderr.writeLine(msg)
       quit(code)
     echo msg
+
+  of "migrate-keys":
+    var targetProject = cfg.project
+    var dryRun = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a.startsWith("--project="): targetProject = a[10..^1]
+      elif (a == "--project" or a == "-p") and i + 1 < args.len: targetProject = args[i+1]; inc i
+      elif a in ["--dry-run", "-n"]: dryRun = true
+      elif not a.startsWith("-"): targetProject = a
+      inc i
+    echo doMigrateKeys(cfg, targetProject, dryRun)
 
   of "pub", "publish":
     if args.len < 3:

@@ -18,7 +18,7 @@ if not name or name == "" then
 end
 name = string.lower(name)
 
-local state = ARGV[3] or ""
+local state = string.lower(ARGV[3] or "")
 local activity = ARGV[4] or ""
 local ttl = tonumber(ARGV[5]) or 150
 
@@ -27,5 +27,10 @@ local now = tonumber(redis.call('TIME')[1]) + mock_offset
 
 redis.call('SET', prefix .. 'heartbeat:' .. name, '1', 'EX', ttl)
 redis.call('HSET', prefix .. 'agent:' .. name, 'state', state, 'activity', activity, 'last_seen', now, 'heartbeat_ttl', ttl)
+if state == "idle" then
+    redis.call('HDEL', prefix .. 'agent:' .. name, 'current_task')
+    redis.call('DEL', prefix .. 'current_task:' .. name)
+    redis.call('DEL', prefix .. 'agent_task:' .. name)
+end
 redis.call('SADD', prefix .. 'active_agents', name)
 return "OK"
