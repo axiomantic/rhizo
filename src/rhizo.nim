@@ -759,15 +759,34 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
   if explicitName.len > 0:
     return ensureProjectScopedName(cfg, explicitName)
 
-  # Explicit agent name via CLI, Env or Config takes precedence over session mappings
-  if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcCli, srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
+  # 1. Explicit CLI --agent-name takes highest precedence
+  if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source == srcCli:
+    return ensureProjectScopedName(cfg, cfg.agentName)
+
+  # 2. Explicit CLI --session-id takes precedence over ambient RHIZO_AGENT_NAME
+  let cliSid = if sessionId.len > 0: sessionId
+               elif cfg.provenance.hasKey("session_id") and cfg.provenance["session_id"].source == srcCli: cfg.sessionId
+               else: ""
+  if cliSid.len > 0:
+    let localAgent = getLocalSessionAgent(cliSid)
+    if localAgent.len > 0:
+      return ensureProjectScopedName(cfg, localAgent)
+    try:
+      let redisAgent = getRedisSessionMapping(cfg, cliSid)
+      if redisAgent.len > 0:
+        return ensureProjectScopedName(cfg, redisAgent)
+    except CatchableError:
+      discard
+
+  # 3. Explicit agent name via Env or Config takes precedence over ambient session mappings
+  if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
     return ensureProjectScopedName(cfg, cfg.agentName)
   let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
   if envName.len > 0:
     return ensureProjectScopedName(cfg, envName)
 
-  # Session ID resolution (CLI argument --session-id or auto-detected session fallback)
-  let sid = if sessionId.len > 0: sessionId elif cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
+  # 4. Ambient Session ID resolution (RHIZO_SESSION_ID or config session_id)
+  let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     let localAgent = getLocalSessionAgent(sid)
     if localAgent.len > 0:

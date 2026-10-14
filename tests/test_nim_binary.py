@@ -1633,8 +1633,9 @@ secret = "my_inline_secret_test_555"
     def test_27_distributed_locking(self):
         """Test 'locutus lock' acquisition, mutual exclusion, unauthorized unlock rejection, TTL bounds, and fencing tokens."""
         lock_name = "deploy_mutex_test"
-        lock_key = f"{TEST_PREFIX}lock:{{{lock_name}}}"
-        fencing_key = f"{TEST_PREFIX}lock:fencing:{{{lock_name}}}"
+        scoped_lock = f"test_project:{lock_name}"
+        lock_key = f"{TEST_PREFIX}lock:{{{scoped_lock}}}"
+        fencing_key = f"{TEST_PREFIX}lock:fencing:{{{scoped_lock}}}"
 
         # Clean slate in Redis
         subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", lock_key, fencing_key], check=True, capture_output=True)
@@ -1653,7 +1654,7 @@ secret = "my_inline_secret_test_555"
             # 2. Acquire lock with owner 'agent_lock_owner'
             res_lock = self.run_locutus(["--agent-name=agent_lock_owner", "lock", lock_name, "10"])
             self.assertEqual(res_lock.returncode, 0)
-            self.assertIn(f"LOCKED {lock_name} by agent_lock_owner", res_lock.stdout)
+            self.assertIn(f"LOCKED {scoped_lock} by agent_lock_owner", res_lock.stdout)
 
             # Direct Redis inspection: verify owner and TTL bounds
             owner_in_redis = subprocess.run(
@@ -1671,7 +1672,7 @@ secret = "my_inline_secret_test_555"
             # 3. Second process ('intruder_agent') attempts to acquire held lock -> must fail with exit code 1
             res_conflict = self.run_locutus(["--agent-name=intruder_agent", "lock", lock_name, "10"])
             self.assertEqual(res_conflict.returncode, 1)
-            self.assertIn("Error: Lock 'deploy_mutex_test' is already held.", res_conflict.stderr)
+            self.assertIn(f"Error: Lock '{scoped_lock}' is already held.", res_conflict.stderr)
 
             # Lock owner in Redis must remain 'agent_lock_owner'
             self.assertEqual(subprocess.run(
@@ -1682,7 +1683,7 @@ secret = "my_inline_secret_test_555"
             # 4. Unauthorized unlock negative control: intruder cannot release lock held by agent_lock_owner
             res_unlock_bad = self.run_locutus(["--agent-name=intruder_agent", "unlock", lock_name])
             self.assertEqual(res_unlock_bad.returncode, 1)
-            self.assertIn("Error: Cannot unlock 'deploy_mutex_test': not owner or lock not found.", res_unlock_bad.stderr)
+            self.assertIn(f"Error: Cannot unlock '{scoped_lock}': not owner or lock not found.", res_unlock_bad.stderr)
 
             # Lock must still be held
             self.assertEqual(subprocess.run(
@@ -1693,7 +1694,7 @@ secret = "my_inline_secret_test_555"
             # 5. Authorized unlock by owner succeeds
             res_unlock = self.run_locutus(["--agent-name=agent_lock_owner", "unlock", lock_name])
             self.assertEqual(res_unlock.returncode, 0)
-            self.assertIn(f"UNLOCKED {lock_name}", res_unlock.stdout)
+            self.assertIn(f"UNLOCKED {scoped_lock}", res_unlock.stdout)
 
             # Lock key must be deleted in Redis
             self.assertEqual(subprocess.run(
@@ -4639,8 +4640,9 @@ secret = "my_inline_secret_test_555"
         self.run_locutus(["open", a2, "dev"])
         self.run_locutus(["open", a3, "dev"])
 
-        lock_key = f"{TEST_PREFIX}lock:{{{lock_name}}}"
-        fencing_key = f"{TEST_PREFIX}lock:fencing:{{{lock_name}}}"
+        scoped_lock = f"test_project:{lock_name}"
+        lock_key = f"{TEST_PREFIX}lock:{{{scoped_lock}}}"
+        fencing_key = f"{TEST_PREFIX}lock:fencing:{{{scoped_lock}}}"
 
         # 0. Argument validation negative controls
         res_no_name = self.run_locutus(["lock"])
@@ -4655,7 +4657,7 @@ secret = "my_inline_secret_test_555"
             # 1. Iteration 1: Agent 1 acquires lock with --fencing
             res_acq1 = self.run_locutus(["lock", lock_name, "10", "--fencing"], env_overrides={"RHIZO_AGENT_NAME": a1})
             self.assertEqual(res_acq1.returncode, 0)
-            self.assertIn(f"LOCKED {lock_name} by {a1}", res_acq1.stdout)
+            self.assertIn(f"LOCKED {scoped_lock} by {a1}", res_acq1.stdout)
             self.assertIn("fencing: 1", res_acq1.stdout)
 
             # Direct Redis inspection: verify owner, fencing token, and TTL
@@ -4667,7 +4669,7 @@ secret = "my_inline_secret_test_555"
             # Negative control: Agent 2 tries to acquire held lock -> fails (code 1)
             res_acq_fail = self.run_locutus(["lock", lock_name, "10", "--fencing"], env_overrides={"RHIZO_AGENT_NAME": a2})
             self.assertEqual(res_acq_fail.returncode, 1)
-            self.assertIn(f"Error: Lock '{lock_name}' is already held.", res_acq_fail.stderr)
+            self.assertIn(f"Error: Lock '{scoped_lock}' is already held.", res_acq_fail.stderr)
 
             # Negative control: Agent 2 unauthorized unlock fails
             res_unauth = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a2})
@@ -4677,7 +4679,7 @@ secret = "my_inline_secret_test_555"
             # Agent 1 unlocks
             res_un1 = self.run_locutus(["unlock", lock_name], env_overrides={"RHIZO_AGENT_NAME": a1})
             self.assertEqual(res_un1.returncode, 0)
-            self.assertIn(f"UNLOCKED {lock_name}", res_un1.stdout)
+            self.assertIn(f"UNLOCKED {scoped_lock}", res_un1.stdout)
 
             # Direct Redis inspection: lock key deleted, fencing counter preserved
             self.assertEqual(subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", lock_key], capture_output=True, text=True, check=True).stdout.strip(), "0")
@@ -4719,7 +4721,7 @@ secret = "my_inline_secret_test_555"
 
             # 6. Cluster slot affinity verification
             tag = LocutusPlugin.check_cluster_affinity([lock_key, fencing_key])
-            self.assertEqual(tag, lock_name)
+            self.assertEqual(tag, scoped_lock)
 
         finally:
             self.run_locutus(["close", a1])
