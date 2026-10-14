@@ -12,7 +12,10 @@ import tempfile
 import time
 import unittest
 
-BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo"))
+if os.name == "nt":
+    BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
+else:
+    BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo"))
 REDIS_URL = os.environ.get("RHIZO_REDIS_URL", "redis://127.0.0.1:6379/0")
 TEST_PREFIX = os.environ.get("RHIZO_REDIS_PREFIX", f"test_coord_inv_{os.getpid()}:")
 
@@ -123,15 +126,18 @@ class TestCoordinationInvariants(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_04_listener_detachment_guardrail(self):
         """Verify that 'rhizo listen' rejects redirection to a regular file unless --force is passed."""
+        if os.name == "nt":
+            self.skipTest("POSIX fstat stdout redirection check is not applicable on Windows")
         log_file = os.path.join(self.test_home, "nohup_test.log")
         with open(log_file, "w") as f:
             proc = subprocess.run(
-                [BIN_PATH, "listen", "detached_worker"],
+                [BIN_PATH, "listen", "detached_worker", "2"],
                 stdout=f,
                 stderr=subprocess.PIPE,
                 text=True,
                 env=self.env,
-                cwd=self.test_home
+                cwd=self.test_home,
+                timeout=10
             )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("Unsupervised detachment detected", proc.stderr)
@@ -425,9 +431,11 @@ class TestCoordinationInvariants(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_15_anti_while_loop_supervision_guardrail(self):
         """Verify that rhizo listen detects parent while/until loops and rejects execution."""
+        if os.name == "nt":
+            self.skipTest("POSIX ps -p parent inspection is not applicable on Windows")
         # Run inside a bash while loop
         bash_cmd = f"set -e; while true; do '{BIN_PATH}' listen test_agent_loop --timeout 1; done"
-        res = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, env=self.env, cwd=self.test_home)
+        res = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, env=self.env, cwd=self.test_home, timeout=10)
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("bash loop", res.stderr)
         self.assertIn("SINGLE-SHOT", res.stderr)

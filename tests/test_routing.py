@@ -564,9 +564,19 @@ def test_route_setup_already_healthy(mock_laya_server):
     assert "already running and healthy" in out
 
 def test_route_setup_timeout_failure():
-    code, out, err = run_rhizo("route", "setup", "--service-url=http://127.0.0.1:59998", "--timeout=1")
-    assert code == 1
-    assert "timed out" in err.lower()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bin_dir = Path(tmpdir) / "bin"
+        bin_dir.mkdir()
+        mock_exe = bin_dir / ("local-systemone.bat" if sys.platform == "win32" else "local-systemone")
+        if sys.platform == "win32":
+            mock_exe.write_text("@echo off\n")
+        else:
+            mock_exe.write_text("#!/bin/sh\n")
+            mock_exe.chmod(0o755)
+        new_env = {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        code, out, err = run_rhizo("route", "setup", "--service-url=http://127.0.0.1:59998", "--timeout=1", env=new_env)
+        assert code == 1
+        assert "timed out" in err.lower()
 
 def test_route_typo_suggestion_setup():
     code, out, err = run_rhizo("setup")

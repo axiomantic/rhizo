@@ -34,14 +34,12 @@ def load_lua(filename: str) -> str:
     path = os.path.join(SCRIPTS_DIR, filename)
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-    # Strip comments and collapse into single-line to avoid newline/CRLF argument splitting on Windows
+    # Strip full-line comments and collapse into single-line to avoid newline/CRLF argument splitting on Windows
     lines = []
     for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith("--"):
             continue
-        if "--" in line:
-            line = line.split("--")[0].strip()
         lines.append(line)
     return " ".join(lines)
 

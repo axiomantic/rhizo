@@ -4888,7 +4888,7 @@ proc doRouteSetup*(daemonMode: bool, customServiceUrl: string = "", timeoutSec: 
 
   if exePath.len == 0:
     echo "local-systemone not found in PATH. Attempting automatic installation from GitHub..."
-    let gitPkg = "git+https://github.com/axiomantic/local-systemone.git#egg=local-systemone[full]"
+    let gitPkg = "local-systemone[full] @ git+https://github.com/axiomantic/local-systemone.git"
     var installed = false
 
     if findExe("uv").len > 0:
