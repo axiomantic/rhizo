@@ -1586,6 +1586,62 @@ class TestCoordinationInvariants(unittest.TestCase):
         res_allowed = self.run_cmd(["name", "--allow-drift"], env_overrides={"RHIZO_PROJECT": "completely-alien-project"}, cwd=repo_root)
         self.assertEqual(res_allowed.returncode, 0)
 
+    # -------------------------------------------------------------------------
+    # Problem 28: Reminder Scope & Project Isolation
+    # -------------------------------------------------------------------------
+    def test_28_reminder_project_isolation(self):
+        """Verify that scope: * reminders stay within their originating project and do not leak across projects."""
+        proj_g = "gearmulator_test"
+        proj_t = "telar_test"
+        agent_g = f"g_worker_{int(time.time()*1000)}"
+        agent_t = f"t_worker_{int(time.time()*1000)}"
+
+        # 1. Register agents in different projects
+        r_g = self.run_cmd(["open", agent_g, "worker"], env_overrides={"RHIZO_PROJECT": proj_g, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(r_g.returncode, 0)
+        r_t = self.run_cmd(["open", agent_t, "worker"], env_overrides={"RHIZO_PROJECT": proj_t, "RHIZO_ALLOW_DRIFT": "1"})
+        self.assertEqual(r_t.returncode, 0)
+
+        # 2. Add scoped reminder from gearmulator agent (scope: *)
+        r_add_g = self.run_cmd(
+            ["remind", "add", "Gearmulator internal alert", "--author", agent_g],
+            env_overrides={"RHIZO_PROJECT": proj_g, "RHIZO_ALLOW_DRIFT": "1"}
+        )
+        self.assertEqual(r_add_g.returncode, 0)
+
+        # 3. Add explicit global reminder
+        r_add_glob = self.run_cmd(
+            ["remind", "add", "Global cluster announcement", "--scope", "@global", "--author", "operator"],
+            env_overrides={"RHIZO_PROJECT": proj_g, "RHIZO_ALLOW_DRIFT": "1"}
+        )
+        self.assertEqual(r_add_glob.returncode, 0)
+
+        # 4. Check list for telar_agent: must NOT see gearmulator internal alert, but MUST see global announcement
+        r_list_t = self.run_cmd(
+            ["remind", "list", f"--for={agent_t}", "--json"],
+            env_overrides={"RHIZO_PROJECT": proj_t, "RHIZO_ALLOW_DRIFT": "1"}
+        )
+        self.assertEqual(r_list_t.returncode, 0)
+        t_data = json.loads(r_list_t.stdout.strip())
+        t_texts = [rem["text"] for rem in t_data.get("reminders", [])]
+        self.assertNotIn("Gearmulator internal alert", t_texts)
+        self.assertIn("Global cluster announcement", t_texts)
+
+        # 5. Check list for gearmulator_agent: MUST see both gearmulator internal alert and global announcement
+        r_list_g = self.run_cmd(
+            ["remind", "list", f"--for={agent_g}", "--json"],
+            env_overrides={"RHIZO_PROJECT": proj_g, "RHIZO_ALLOW_DRIFT": "1"}
+        )
+        self.assertEqual(r_list_g.returncode, 0)
+        g_data = json.loads(r_list_g.stdout.strip())
+        g_texts = [rem["text"] for rem in g_data.get("reminders", [])]
+        self.assertIn("Gearmulator internal alert", g_texts)
+        self.assertIn("Global cluster announcement", g_texts)
+
+        # Clean up
+        self.run_cmd(["close", agent_g], env_overrides={"RHIZO_PROJECT": proj_g, "RHIZO_ALLOW_DRIFT": "1"})
+        self.run_cmd(["close", agent_t], env_overrides={"RHIZO_PROJECT": proj_t, "RHIZO_ALLOW_DRIFT": "1"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.19] - 2026-10-14
+
+### Added
+- **Antigravity Non-Yield Invariant in Lifecycle Notice (`src/rhizo.nim`)**:
+  - Embedded explicit instructions in Section 2 of `[RHIZO LIFECYCLE NOTICE]` instructing workers in background-capable harnesses (Antigravity) to arm `rhizo listen` immediately upon task receipt and strictly choose Option A ("proceed to other relevant work") instead of Option B ("simply update the user... and end turn").
+- **Anti-Premature-Yield Safety Guard in `rhizo reply` (`src/rhizo.nim`)**:
+  - Emits a loud stderr warning when `--listen` is appended to a message whose subject indicates an initial task claim or acknowledgment (`CLAIM` or `ACK`), preventing workers from blocking or prematurely yielding their turn before implementing deliverables.
+- **Reminder Scope & Project Boundary Isolation (`scripts/reminder.lua`, `src/rhizo.nim`)**:
+  - Enforced project boundary isolation for `scope: "*"` reminders in `evaluate_piggyback`, `tick_candidates`, and `list` so project-scoped reminders do not leak across cluster boundaries to unrelated projects.
+  - Added support for explicit `@global` scope for cross-project announcements.
+  - Added `--author` (and `--author=`) flag alias for `--by` in `rhizo remind add`.
+  - Added unit test coverage in `tests/test_coordination_invariants.py` (`test_28_reminder_project_isolation`).
+
+### Fixed
+- **Sender Identity Resolution Precedence (`src/rhizo.nim`)**:
+  - Fixed `getActiveAgentName` invocation in `send` dispatcher to prevent ambient `sessionId` from erroneously overriding explicit `RHIZO_AGENT_NAME` environment variables.
+
 ## [0.2.18] - 2026-10-14
 
 ### Added

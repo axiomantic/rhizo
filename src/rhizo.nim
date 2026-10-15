@@ -86,7 +86,7 @@ const
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.18"
+  RhizoVersion*  = "0.2.19"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -1926,6 +1926,9 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              rearmListen: bool = false, listenTimeoutSec: int = -1,
              urgency: string = "soon", format: string = "text", listenAgent: string = "",
              skipGate: bool = false, idle: bool = false): string =
+  let sLower = subject.toLowerAscii
+  if rearmListen and (sLower.contains("claim") or sLower.startsWith("ack") or sLower.contains("task claim")):
+    stderr.writeLine("[RHIZO WARNING] You passed --listen on a CLAIM/ACK message. In async coding harnesses (Antigravity), arming a listener during an initial acknowledgment causes premature turn yields before implementation! Pass --listen ONLY on your final completion reply.")
   if isCompletionSubject(subject) and not skipGate:
     let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
     if not passed:
@@ -2213,20 +2216,22 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
         stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
         stderr.writeLine("   operator in this chat window ALWAYS takes absolute precedence over cluster tasks.")
-        stderr.writeLine("   If the operator gives an instruction, execute it immediately; NEVER ignore the operator.")
-        stderr.writeLine("2. ARM NOW & IMMEDIATE ACK DISCIPLINE: The listener is an ARM NOW imperative.")
-        stderr.writeLine("   - Upon receiving a task, immediately claim/ACK it ('rhizo task claim " & id & " --lease 900'")
-        stderr.writeLine("     or send an immediate ACK reply) AND in Tier 2 async harnesses (Antigravity) re-arm")
-        stderr.writeLine("     your background listener ('" & exactCmd & "') RIGHT NOW so you remain reachable")
-        stderr.writeLine("     during multi-file edits and long test runs.")
+        stderr.writeLine("2. ARM NOW & IMMEDIATE BACKGROUND LISTENER (DO NOT YIELD TURN):")
+        stderr.writeLine("   - In background-capable harnesses (Antigravity): Launch your background listener ('" & exactCmd & "')")
+        stderr.writeLine("     IMMEDIATELY right now in this very turn BEFORE writing code.")
+        stderr.writeLine("   - CRITICAL ANTIGRAVITY NON-YIELD INVARIANT: When you launch the background listener, your harness will say:")
+        stderr.writeLine("     'YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or B) simply update the user and end the turn. DO NOTHING ELSE.'")
+        stderr.writeLine("     YOU MUST ALWAYS CHOOSE (A) PROCEED TO OTHER RELEVANT WORK! NEVER choose (B) or end the turn.")
+        stderr.writeLine("   - Immediately claim the task ('rhizo task claim " & id & " --lease 900' or send a quick ACK reply)")
+        stderr.writeLine("     WITHOUT passing --listen. NEVER pass --listen on initial CLAIM or ACK replies.")
         stderr.writeLine("   - For tasks taking >2 minutes (e.g. E2E/Playwright/builds), emit periodic progress:")
         stderr.writeLine("     rhizo task progress " & id & " \"Step X/Y: ...\"")
         stderr.writeLine("3. EXECUTE NOW: You are an autonomous cluster worker. A directive has been delivered.")
         stderr.writeLine("   DO NOT wait for operator prompt. DO NOT yield your turn with a passive acknowledgment.")
         stderr.writeLine("   Immediately read the message payload above, claim the task, and begin implementation.")
         stderr.writeLine("4. RE-ARM BEFORE TURN-END: The listener has EXITED (0) after delivering this message.")
-        stderr.writeLine("   You MUST re-arm your single-shot listener before concluding your turn (or use")
-        stderr.writeLine("   'rhizo reply --to " & fromAgent & " ... --listen' when sending your completion report):")
+        stderr.writeLine("   Ensure your single-shot listener is running in the background before concluding your turn (or use")
+        stderr.writeLine("   'rhizo reply --to " & fromAgent & " ... --listen' when sending your FINAL completion report):")
         stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\" --listen")
         stderr.writeLine("   Exact command: " & exactCmd)
         stderr.writeLine("   Re-arm Listen: " & exactCmd)
@@ -5473,7 +5478,7 @@ proc main() =
 
     # Identity resolution for sender: strictly process-bound, no silent cross-agent current_agent leakage (GVR-008)
     if fromAgent.len == 0:
-      fromAgent = getActiveAgentName(cfg, fromAgent, fallbackDefault = false, sessionId = cfg.sessionId, allowGlobalFallback = false)
+      fromAgent = getActiveAgentName(cfg, fromAgent, fallbackDefault = false, sessionId = "", allowGlobalFallback = false)
     if fromAgent.len == 0:
       if fileExists(".vine.json"):
         try:
@@ -7655,7 +7660,8 @@ proc main() =
         elif a.startsWith("--target="): target = a[9..^1]
         elif a == "--target" and i + 1 < args.len: target = args[i+1]; inc i
         elif a.startsWith("--by="): author = a[5..^1]
-        elif a == "--by" and i + 1 < args.len: author = args[i+1]; inc i
+        elif a.startsWith("--author="): author = a[9..^1]
+        elif (a == "--by" or a == "--author") and i + 1 < args.len: author = args[i+1]; inc i
         elif a in ["--once", "--once-per-agent"]: oncePerAgent = true
         elif not a.startsWith("-"):
           if text.len == 0: text = a

@@ -39,6 +39,42 @@ local function audit_log(event_type, details)
   end)
 end
 
+local function is_eligible_for_scope(rem, agent_name)
+  local rem_scope = string.lower(rem.scope or "*")
+  if rem_scope == "@global" or rem_scope == "global" then
+    return true
+  end
+
+  local agent_meta = redis.call("HMGET", prefix .. "agent:" .. agent_name, "project", "tags")
+  local recipient_project = string.lower(agent_meta[1] or "")
+  local recipient_tags_raw = string.lower(agent_meta[2] or "")
+
+  if string.sub(rem_scope, 1, 8) == "project:" then
+    local target_proj = string.sub(rem_scope, 9)
+    return (target_proj == recipient_project)
+  elseif string.sub(rem_scope, 1, 4) == "tag:" then
+    local target_tag = string.sub(rem_scope, 5)
+    return (string.find("," .. recipient_tags_raw .. ",", "," .. target_tag .. ",", 1, true) ~= nil)
+  elseif rem_scope == "*" then
+    local rem_project = string.lower(rem.project or "")
+    if rem_project == "" and rem.author and rem.author ~= "" and rem.author ~= "operator" then
+      local author_proj = redis.call("HGET", prefix .. "agent:" .. string.lower(rem.author), "project")
+      if author_proj and author_proj ~= false then
+        rem_project = string.lower(author_proj)
+      end
+    end
+    if rem_project ~= "" and recipient_project ~= "" and rem_project ~= recipient_project then
+      return false
+    end
+    return true
+  else
+    if rem_scope == recipient_project or string.find("," .. recipient_tags_raw .. ",", "," .. rem_scope .. ",", 1, true) ~= nil then
+      return true
+    end
+    return false
+  end
+end
+
 --------------------------------------------------------------------------------
 -- 1. ADD REMINDER
 -- ARGV[3]: text
@@ -64,6 +100,12 @@ if action == "add" then
   local seq = redis.call("INCR", prefix .. "reminder:seq")
   local rem_id = "rem-" .. tostring(seq)
 
+  local author_project = ""
+  if author ~= "" and author ~= "operator" then
+    local p = redis.call("HGET", prefix .. "agent:" .. author, "project")
+    if p and p ~= false then author_project = string.lower(p) end
+  end
+
   local expires_at = 0
   if ttl_sec > 0 then
     expires_at = now + ttl_sec
@@ -76,6 +118,7 @@ if action == "add" then
     "priority", priority,
     "author", author,
     "scope", scope,
+    "project", author_project,
     "target", target,
     "cadence_sec", tostring(cadence_sec),
     "expires_at", tostring(expires_at),
@@ -223,6 +266,13 @@ elseif action == "list" then
           end
         end
 
+        -- Filter by scope eligibility if for_agent is given
+        if matches and for_agent ~= "" then
+          if not is_eligible_for_scope(rem, for_agent) then
+            matches = false
+          end
+        end
+
         if matches then
           local acks = redis.call("SMEMBERS", prefix .. "reminder:" .. rem_id .. ":acks")
           rem.acks = acks
@@ -292,6 +342,11 @@ elseif action == "evaluate_piggyback" then
 
         -- Target check
         if rem.target and rem.target ~= "" and rem.target ~= agent_name then
+          eligible_for_agent = false
+        end
+
+        -- Scope check (project and tag isolation)
+        if eligible_for_agent and not is_eligible_for_scope(rem, agent_name) then
           eligible_for_agent = false
         end
 
@@ -369,6 +424,9 @@ elseif action == "tick_candidates" or action == "tick_fallback" then
           if expires_at == 0 or now < expires_at then
             local eligible = true
             if rem.target and rem.target ~= "" and rem.target ~= agent_name then
+              eligible = false
+            end
+            if eligible and not is_eligible_for_scope(rem, agent_name) then
               eligible = false
             end
             if eligible and rem.once_per_agent == "true" then
