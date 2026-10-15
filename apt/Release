@@ -1,13 +1,13 @@
 Origin: Axiomantic
-Label: Locutus
+Label: Rhizo
 Suite: stable
 Codename: stable
 Architectures: amd64 arm64
 Components: main
-Description: Axiomantic Locutus Debian/Ubuntu APT Repository
+Description: Axiomantic Rhizo Debian/Ubuntu APT Repository
 MD5Sum:
- 498e5c6a0d75213c1a7f0f6dbeb81181 1168 Packages
- 0f7e9eace7204f6d99c651c3bbdcadb1 527 Packages.gz
+ 360e9b2e27e0db34b19a9f2a4ea18ae0 1168 Packages
+ cfadf02a8a6a90fe55fbe9fdc3a0e0e4 524 Packages.gz
 SHA256:
- f0f2335a8dc412d55c0d25c7fe4891a494792bd648ab81ad17b931696f342c77 1168 Packages
- 042094b97e30ef9daf064cf9a0fd1888b002a4badbefa1f2a3880e04c1196eef 527 Packages.gz
+ 86b004b5c07b64100e8ab55cd9cf7203844f759c6968bc9f326064c83b235821 1168 Packages
+ 9c01c5dabb20b41c4f2d7b9eda45254e201f9847f168823c8786946c9fc2bc5d 524 Packages.gz
