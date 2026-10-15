@@ -269,6 +269,98 @@ proc verifyHmac*(secret, data, expectedSig: string): bool =
     return false
   return CRYPTO_memcmp(computed.cstring, expectedSig.cstring, computed.len.csize_t) == 0
 
+const Sha256K: array[64, uint32] = [
+  0x428a2f98'u32, 0x71374491'u32, 0xb5c0fbcf'u32, 0xe9b5dba5'u32,
+  0x3956c25b'u32, 0x59f111f1'u32, 0x923f82a4'u32, 0xab1c5ed5'u32,
+  0xd807aa98'u32, 0x12835b01'u32, 0x243185be'u32, 0x550c7dc3'u32,
+  0x72be5d74'u32, 0x80deb1fe'u32, 0x9bdc06a7'u32, 0xc19bf174'u32,
+  0xe49b69c1'u32, 0xefbe4786'u32, 0x0fc19dc6'u32, 0x240ca1cc'u32,
+  0x2de92c6f'u32, 0x4a7484aa'u32, 0x5cb0a9dc'u32, 0x76f988da'u32,
+  0x983e5152'u32, 0xa831c66d'u32, 0xb00327c8'u32, 0xbf597fc7'u32,
+  0xc6e00bf3'u32, 0xd5a79147'u32, 0x06ca6351'u32, 0x14292967'u32,
+  0x27b70a85'u32, 0x2e1b2138'u32, 0x4d2c6dfc'u32, 0x53380d13'u32,
+  0x650a7354'u32, 0x766a0abb'u32, 0x81c2c92e'u32, 0x92722c85'u32,
+  0xa2bfe8a1'u32, 0xa81a664b'u32, 0xc24b8b70'u32, 0xc76c51a3'u32,
+  0xd192e819'u32, 0xd6990624'u32, 0xf40e3585'u32, 0x106aa070'u32,
+  0x19a4c116'u32, 0x1e376c08'u32, 0x2748774c'u32, 0x34b0bcb5'u32,
+  0x391c0cb3'u32, 0x4ed8aa4a'u32, 0x5b9cca4f'u32, 0x682e6ff3'u32,
+  0x748f82ee'u32, 0x78a5636f'u32, 0x84c87814'u32, 0x8cc70208'u32,
+  0x90befffa'u32, 0xa4506ceb'u32, 0xbef9a3f7'u32, 0xc67178f2'u32
+]
+
+proc rorSha256(x: uint32, n: int): uint32 {.inline.} =
+  (x shr n) or (x shl (32 - n))
+
+proc computeSha256*(data: string): string =
+  var h: array[8, uint32] = [
+    0x6a09e667'u32, 0xbb67ae85'u32, 0x3c6ef372'u32, 0xa54ff53a'u32,
+    0x510e527f'u32, 0x9b05688c'u32, 0x1f83d9ab'u32, 0x5be0cd19'u32
+  ]
+  let bitLen = uint64(data.len) * 8'u64
+  var msg = newSeq[uint8](data.len)
+  for i in 0 ..< data.len: msg[i] = uint8(data[i])
+  msg.add(0x80'u8)
+  while (msg.len mod 64) != 56:
+    msg.add(0'u8)
+  for i in countdown(7, 0):
+    msg.add(uint8((bitLen shr (i * 8)) and 0xFF'u64))
+
+  var w: array[64, uint32]
+  for chunk in 0 ..< (msg.len div 64):
+    let base = chunk * 64
+    for i in 0 ..< 16:
+      w[i] = (uint32(msg[base + i*4]) shl 24) or
+             (uint32(msg[base + i*4 + 1]) shl 16) or
+             (uint32(msg[base + i*4 + 2]) shl 8) or
+             uint32(msg[base + i*4 + 3])
+    for i in 16 ..< 64:
+      let s0 = rorSha256(w[i-15], 7) xor rorSha256(w[i-15], 18) xor (w[i-15] shr 3)
+      let s1 = rorSha256(w[i-2], 17) xor rorSha256(w[i-2], 19) xor (w[i-2] shr 10)
+      w[i] = w[i-16] + s0 + w[i-7] + s1
+
+    var a = h[0]
+    var b = h[1]
+    var c = h[2]
+    var d = h[3]
+    var e = h[4]
+    var f = h[5]
+    var g = h[6]
+    var h0 = h[7]
+
+    for i in 0 ..< 64:
+      let s1 = rorSha256(e, 6) xor rorSha256(e, 11) xor rorSha256(e, 25)
+      let ch = (e and f) xor ((not e) and g)
+      let temp1 = h0 + s1 + ch + Sha256K[i] + w[i]
+      let s0 = rorSha256(a, 2) xor rorSha256(a, 13) xor rorSha256(a, 22)
+      let maj = (a and b) xor (a and c) xor (b and c)
+      let temp2 = s0 + maj
+
+      h0 = g
+      g = f
+      f = e
+      e = d + temp1
+      d = c
+      c = b
+      b = a
+      a = temp1 + temp2
+
+    h[0] += a
+    h[1] += b
+    h[2] += c
+    h[3] += d
+    h[4] += e
+    h[5] += f
+    h[6] += g
+    h[7] += h0
+
+  result = ""
+  for val in h:
+    result.add(toHex(val.int64, 8).toLowerAscii)
+
+proc computeGateToken*(mergeTreeSha, testOutputHash: string): string =
+  computeSha256(mergeTreeSha.strip() & ":" & testOutputHash.strip())
+
+
 proc getOriginHostname*(): string =
   let envH = getEnv("RHIZO_HOSTNAME", "")
   if envH.len > 0: return envH
@@ -1449,7 +1541,7 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
     return formatDirectoryJson(raw)
   return formatDirectory(raw)
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false)
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 proc isCompletionSubject*(subject: string): bool
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string
@@ -1716,6 +1808,21 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
               "Run `vine gate` and resolve all test/merge failures first."
     return (false, "", msg)
 
+  # Cryptographic Gate Certificate Verification (Harmonized with Vine)
+  let mTreeSha = vj.getOrDefault("merge_tree_sha").getStr("")
+  let mTestHash = vj.getOrDefault("test_output_hash").getStr("")
+  if mTreeSha.len > 0 and mTestHash.len > 0:
+    let expectedGateToken = computeGateToken(mTreeSha, mTestHash)
+    let manifestToken = vj.getOrDefault("gate_token").getStr("")
+    if manifestToken.len > 0 and manifestToken != expectedGateToken:
+      let msg = "[VINE GATE ERROR] Gate certificate verification failed.\n" &
+                "The stamped gate token in this strand does not match the cryptographic signature of merge_tree_sha and test_output_hash.\n" &
+                "Re-run `vine gate` to generate an authentic gate certificate."
+      return (false, "", msg)
+    if explicitGateToken.len > 0 and explicitGateToken != expectedGateToken:
+      let msg = "[VINE GATE ERROR] Explicit gate token does not match authentic strand certificate."
+      return (false, "", msg)
+
   return (true, token, "")
 
 proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: string,
@@ -1965,7 +2072,7 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
     discard
 proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false) =
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false) =
   var cleanName = ensureProjectScopedName(cfg, name)
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -2121,6 +2228,22 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           parsed["encrypted"] = %false
         except ValueError as e:
           stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping corrupted/undecryptable message: " & e.msg & " (ID: " & id & ")")
+          if not isForever:
+            let elapsed = int(getTime().toUnix() - startTime)
+            remaining = max(0, effectiveTimeout - elapsed)
+      # Swarm Roster Guard: reject alien/unauthorized messages at the listener level
+      let useRosterGuard = rosterGuard or (getEnv("RHIZO_ROSTER_GUARD", "0") in ["1", "true", "yes"])
+      if useRosterGuard and fromAgent.len > 0:
+        var allowed = true
+        try:
+          let (rgOut, rgCode) = execCmdEx("garden roster-guard " & quoteShell(fromAgent) & " --json")
+          if rgCode != 0:
+            allowed = false
+        except CatchableError:
+          allowed = true # fail-open if garden executable is not present
+
+        if not allowed:
+          stderr.writeLine("[RHIZO ROSTER GUARD] Dropping alien message from unauthorized sender @" & fromAgent & " (ID: " & id & ")")
           if not isForever:
             let elapsed = int(getTime().toUnix() - startTime)
             remaining = max(0, effectiveTimeout - elapsed)
@@ -5355,6 +5478,7 @@ proc main() =
     var notify = false
     var quiet = false
     var continuous = false
+    var rosterGuard = false
     var i = 1
     while i < args.len:
       let a = args[i]
@@ -5368,6 +5492,8 @@ proc main() =
         continuous = true
       elif a in ["--once"]:
         continuous = false
+      elif a in ["--roster-guard", "-R"]:
+        rosterGuard = true
       elif not a.startsWith("-"):
         try:
           timeout = parseInt(a)
@@ -5388,7 +5514,7 @@ proc main() =
         stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
         quit(1)
 
-    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous)
+    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous, rosterGuard)
 
   of "send", "broadcast", "reply":
     let isBroadcast = (subcmd == "broadcast")

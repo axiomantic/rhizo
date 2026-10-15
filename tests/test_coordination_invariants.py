@@ -1148,9 +1148,15 @@ class TestCoordinationInvariants(unittest.TestCase):
     # Problem 24: Two-Key Gate Command Interlock (rhizo task complete & rhizo reply)
     # -------------------------------------------------------------------------
     def test_24_two_key_gate_command_interlock(self):
-        """Verify the Two-Key Gate Command Interlock in rhizo task complete and rhizo reply."""
-        strand_dir = os.path.join(self.test_home, "test_strand_gate")
-        os.makedirs(strand_dir, exist_ok=True)
+        """Verify the Two-Key Gate Command Interlock in rhizo task complete and rhizo reply with real vine gate integration."""
+        # Provision real canonical git repo matching RHIZO_PROJECT ("coord_test")
+        repo_dir = os.path.join(self.test_home, "coord_test")
+        os.makedirs(repo_dir, exist_ok=True)
+        subprocess.run(["git", "init", "-b", "main", repo_dir], check=True, capture_output=True, env=self.env)
+        subprocess.run(["git", "-C", repo_dir, "config", "user.name", "Coord Tester"], check=True, env=self.env)
+        subprocess.run(["git", "-C", repo_dir, "config", "user.email", "coord@rhizo.local"], check=True, env=self.env)
+        subprocess.run(["git", "-C", repo_dir, "commit", "--allow-empty", "-m", "initial commit"], check=True, capture_output=True, env=self.env)
+
         worker = "gate-worker-1"
         orchestrator = "gate-orchestrator-1"
         self.run_cmd(["open", worker, "worker"])
@@ -1160,22 +1166,21 @@ class TestCoordinationInvariants(unittest.TestCase):
         res_create = self.run_cmd(["task", "create", task_id, "--title", "Gate Interlock Test", "--assignee", worker])
         self.assertEqual(res_create.returncode, 0)
 
-        # Claim with strand directory
+        # Provision real Vine strand using `vine new`
+        res_vine = subprocess.run(
+            ["vine", "new", task_id, "--repo", repo_dir, "--worktree"],
+            capture_output=True, text=True, env=self.env, check=True
+        )
+        strand_data = json.loads(res_vine.stdout.strip())
+        strand_dir = strand_data["strand_path"]
+        manifest_path = os.path.join(strand_dir, ".vine.json")
+        self.assertTrue(os.path.isfile(manifest_path), "Real .vine.json must be created by vine new")
+
+        # Claim task with real strand directory
         res_claim = self.run_cmd(["task", "claim", task_id, "--worker", worker, "--strand", strand_dir, "--lease", "120"])
         self.assertEqual(res_claim.returncode, 0)
 
-        # 1. Unverified Strand Interlock (status: PROVISIONED)
-        manifest_path = os.path.join(strand_dir, ".vine.json")
-        manifest = {
-            "task_id": task_id,
-            "project": "coord_test",
-            "strand_path": strand_dir,
-            "status": "PROVISIONED",
-            "lifecycle_state": "PROVISIONED",
-        }
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f)
-
+        # 1. Unverified Strand Interlock (initial state from vine new)
         # 1a: rhizo task complete inside strand MUST fail
         res_comp_fail = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
         self.assertNotEqual(res_comp_fail.returncode, 0)
@@ -1242,24 +1247,53 @@ class TestCoordinationInvariants(unittest.TestCase):
         )
         self.assertEqual(res_skip_reply.returncode, 0)
 
-        # 5. Missing Gate Token in READY_TO_WEAVE Strand (Gate token required)
-        manifest["status"] = "READY_TO_WEAVE"
-        manifest["lifecycle_state"] = "GATE_PASSED"
-        manifest.pop("gate_token", None)
-        manifest.pop("merge_tree_sha", None)
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f)
+        # 5. Real Key 2 Test Failure Interlock (Anti-Green-Mirage via actual vine gate)
+        res_gate_fail = subprocess.run(
+            ["vine", "gate", "--dir", strand_dir, "--test-command", "exit 1"],
+            capture_output=True, text=True, env=self.env
+        )
+        self.assertNotEqual(res_gate_fail.returncode, 0, "vine gate must fail when test command fails")
+        with open(manifest_path) as f:
+            failed_manifest = json.load(f)
+        self.assertEqual(failed_manifest.get("status"), "GATE_FAILED")
+        self.assertIsNone(failed_manifest.get("gate_token"))
 
         res_no_token_comp = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
         self.assertNotEqual(res_no_token_comp.returncode, 0)
         self.assertIn("[VINE GATE ERROR]", res_no_token_comp.stderr)
 
-        # 6. Verified Strand with Valid Gate Token -> MUST SUCCEED
-        gate_token = "tree_sha_f659be1e05748b639273cec79364a03b516f0f5f"
-        manifest["gate_token"] = gate_token
-        manifest["merge_tree_sha"] = gate_token
+        # 6. Real Key 1 & Key 2 Pass via actual vine gate -> MUST SUCCEED
+        res_gate_pass = subprocess.run(
+            ["vine", "gate", "--dir", strand_dir, "--test-command", "true"],
+            capture_output=True, text=True, env=self.env
+        )
+        self.assertEqual(res_gate_pass.returncode, 0, "vine gate must pass when test command succeeds")
+        with open(manifest_path) as f:
+            passed_manifest = json.load(f)
+        self.assertIn(passed_manifest.get("status"), ["READY_TO_WEAVE", "READY_FOR_WEAVE"])
+        self.assertEqual(passed_manifest.get("lifecycle_state"), "GATE_PASSED")
+        gate_token = passed_manifest.get("gate_token") or passed_manifest.get("merge_tree_sha")
+        self.assertTrue(bool(gate_token), "vine gate must produce a valid gate token")
+
+        # 6-audit: Verify cryptographic gate certificate
+        self.assertIn("test_output_hash", passed_manifest)
+        import hashlib
+        expected_sig = hashlib.sha256(f"{passed_manifest['merge_tree_sha']}:{passed_manifest['test_output_hash']}".encode()).hexdigest()
+        self.assertEqual(passed_manifest["gate_token"], expected_sig)
+
+        # 6-tamper: Tampered gate token MUST be rejected by rhizo task complete
+        tampered_manifest = dict(passed_manifest)
+        tampered_manifest["gate_token"] = "forged-token-signature-invalid"
         with open(manifest_path, "w") as f:
-            json.dump(manifest, f)
+            json.dump(tampered_manifest, f)
+
+        res_tamper = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
+        self.assertNotEqual(res_tamper.returncode, 0)
+        self.assertIn("Gate certificate verification failed", res_tamper.stderr)
+
+        # Restore authentic manifest
+        with open(manifest_path, "w") as f:
+            json.dump(passed_manifest, f)
 
         # 6a: rhizo reply with completion subject now succeeds
         res_rep_ok = self.run_cmd(
@@ -1268,12 +1302,12 @@ class TestCoordinationInvariants(unittest.TestCase):
         )
         self.assertEqual(res_rep_ok.returncode, 0)
 
-        # 6b: rhizo task complete succeeds and records gate token in Redis
+        # 6b: rhizo task complete succeeds and records real gate token in Redis
         res_comp_ok = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
         self.assertEqual(res_comp_ok.returncode, 0)
         self.assertIn(f"COMPLETED task '{task_id}'", res_comp_ok.stdout)
 
-        # 6c: Verify Redis task contract contains COMPLETED state and the gate token
+        # 6c: Verify Redis task contract contains COMPLETED state and the real gate token
         res_get = self.run_cmd(["task", "get", task_id, "--json"])
         self.assertEqual(res_get.returncode, 0)
         task_data = json.loads(res_get.stdout.strip())
@@ -1641,6 +1675,59 @@ class TestCoordinationInvariants(unittest.TestCase):
         # Clean up
         self.run_cmd(["close", agent_g], env_overrides={"RHIZO_PROJECT": proj_g, "RHIZO_ALLOW_DRIFT": "1"})
         self.run_cmd(["close", agent_t], env_overrides={"RHIZO_PROJECT": proj_t, "RHIZO_ALLOW_DRIFT": "1"})
+
+    # -------------------------------------------------------------------------
+    # Problem 29: Swarm Roster Guard Socket/Bus Rejection
+    # -------------------------------------------------------------------------
+    def test_29_roster_guard_bus_alien_rejection(self):
+        """Verify that rhizo listen --roster-guard drops alien messages and delivers authorized messages."""
+        swarm_cfg = {
+            "project": "coord_test",
+            "orchestrator": {"name": "coord_test-orchestrator", "agent": "coord_test-orchestrator"},
+            "workers": [{"name": "worker-guard-auth", "role": "implementer"}]
+        }
+        with open(os.path.join(self.test_home, "garden-swarm.json"), "w") as f:
+            json.dump(swarm_cfg, f)
+
+        worker = "worker-guard-auth"
+        alien = "alien-infiltrator"
+        orch = "coord_test-orchestrator"
+
+        self.run_cmd(["open", worker, "worker"])
+        self.run_cmd(["open", alien, "alien"])
+        self.run_cmd(["open", orch, "orchestrator"])
+
+        # Start listener with --roster-guard in background
+        proc = subprocess.Popen(
+            [BIN_PATH, "listen", worker, "4", "--roster-guard"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=self.env, cwd=self.test_home
+        )
+        time.sleep(0.3)
+
+        # 1. Send from alien agent -> MUST BE DROPPED
+        res_alien = self.run_cmd(
+            ["send", "--to", worker, "--from", alien, "--subject", "Alien Attack", "--body", "Bad payload"]
+        )
+        self.assertEqual(res_alien.returncode, 0)
+        time.sleep(0.3)
+
+        # 2. Send from authorized orchestrator -> MUST BE DELIVERED
+        res_legit = self.run_cmd(
+            ["send", "--to", worker, "--from", orch, "--subject", "Authorized Directive", "--body", "Execute test"]
+        )
+        self.assertEqual(res_legit.returncode, 0)
+
+        stdout, stderr = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Authorized Directive", stdout)
+        self.assertIn("[RHIZO ROSTER GUARD] Dropping alien message", stderr)
+        self.assertIn(alien, stderr)
+
+        # Clean up
+        self.run_cmd(["close", worker])
+        self.run_cmd(["close", alien])
+        self.run_cmd(["close", orch])
 
 
 if __name__ == "__main__":
