@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.18] - 2026-10-14
+
+### Added
+- **`rhizo probe` WISM In-Flight Task Telemetry (`src/rhizo.nim`)**:
+  - Upgraded `rhizo probe <agent> [--json]` to inspect and report active WISM task telemetry (`current_task`, `task_state`, `task_progress`, `task_lease_remaining_sec`, `in_flight_active`).
+  - Distinguishes actively executing workers (e.g. running Playwright/test suites) from stalled or offline workers, eliminating false `OFFLINE` diagnostics when single-shot foreground listeners have exited.
+- **In-Flight Task Lease Liveness in `rhizo who` (`scripts/directory.lua`)**:
+  - Extended in-flight task lease liveness in `scripts/directory.lua` to recognize `DELIVERED` tasks within their active delivery window alongside `IN_PROGRESS` and `CLAIMED`.
+  - Propagates WISM task progress (`progress`) into agent `activity` output when no explicit activity is set.
+- **Extended Task Delivery Window & Immediate ACK/Re-Arm Mandate (`src/rhizo.nim`)**:
+  - Increased default delivery lease window in `doListen` from 180s to 900s (15 minutes).
+  - Updated `[RHIZO LIFECYCLE NOTICE]` with an immediate task ACK/claim mandate, immediate background listener re-arming upon receipt in Tier 2 async harnesses (Antigravity), and periodic progress telemetry (`rhizo task progress <id> "Step X/Y"`) during operations taking >2 minutes.
+
+### Fixed
+- **Windows Platform Compatibility (`src/rhizo.nim`, `scripts/install.ps1`, `tests/`)**:
+  - Resolved `start /B` shell builtin execution by using `cmd /c start /B` in `doRouteSetup`.
+  - Added `USERPROFILE` environment fallback for Windows home directory resolution in hook installation.
+  - Normalized command-line quote escaping in `test_coordination_invariants.py` and forced RESP2 protocol for legacy Windows Redis services.
+  - Optimized `scripts/install.ps1` to re-use pre-built binaries and honor `RHIZO_SKIP_NPX=1`.
+- **Nomenclature & Cleanup**:
+  - Renamed all remaining legacy `Locutus` references across scripts, test suites, documentation, and hooks to `Rhizo` (including `tests/tripwire_locutus.py` -> `tests/tripwire_rhizo.py`).
+
 ## [0.2.17] - 2026-10-14
 
 ### Added
