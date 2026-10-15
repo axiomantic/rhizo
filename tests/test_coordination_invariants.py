@@ -1192,49 +1192,50 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertNotEqual(res_comp_out_fail.returncode, 0)
         self.assertIn("[VINE GATE ERROR]", res_comp_out_fail.stderr)
 
-        # 1c: rhizo reply with completion subject inside strand MUST fail
-        completion_subjects = [
-            "Task Done",
-            "Task Complete",
-            f"Task {task_id} Done",
-            f"Task {task_id} Complete",
-            "[Two-Key Gate PASS] Task Finished",
+        # 1c: rhizo reply with explicit --complete inside strand MUST fail
+        completion_flags = [
+            ["--complete"],
+            ["--status=complete"],
+            ["--status", "complete"],
         ]
-        for subj in completion_subjects:
+        for cflag in completion_flags:
             res_rep_fail = self.run_cmd(
-                ["reply", "--to", orchestrator, "--from", worker, "--subject", subj, "--body", "Work done"],
+                ["reply", "--to", orchestrator, "--from", worker, "--subject", "Finished task", "--body", "Work done"] + cflag,
                 cwd=strand_dir
             )
-            self.assertNotEqual(res_rep_fail.returncode, 0, f"Expected reply with subject '{subj}' to fail in unverified strand")
+            self.assertNotEqual(res_rep_fail.returncode, 0, f"Expected reply with flag '{cflag}' to fail in unverified strand")
             self.assertIn("[VINE GATE ERROR]", res_rep_fail.stderr)
             self.assertIn("Run `vine gate`", res_rep_fail.stderr)
 
-        # 1d: rhizo send with completion subject inside strand MUST also fail
+        # 1d: rhizo send with explicit --complete inside strand MUST also fail
         res_send_fail = self.run_cmd(
-            ["send", "--to", orchestrator, "--from", worker, "--subject", f"Task {task_id} Done", "--body", "Done"],
+            ["send", "--to", orchestrator, "--from", worker, "--subject", "Finished task", "--body", "Done", "--complete"],
             cwd=strand_dir
         )
         self.assertNotEqual(res_send_fail.returncode, 0)
         self.assertIn("[VINE GATE ERROR]", res_send_fail.stderr)
 
-        # 2. Non-Completion Subjects Must Pass (Normal Coordination Unimpeded)
-        res_chat = self.run_cmd(
-            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Claimed", "--body", "Claiming task"],
-            cwd=strand_dir
-        )
-        self.assertEqual(res_chat.returncode, 0)
-
-        res_clarify = self.run_cmd(
-            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Clarification on test requirements", "--body", "Need info"],
-            cwd=strand_dir
-        )
-        self.assertEqual(res_clarify.returncode, 0)
+        # 2. Intermediate Inquiries & Non-Completion Subjects Must Pass (Normal Coordination Unimpeded)
+        intermediate_inquiries = [
+            "Task Claimed",
+            "Clarification on test requirements",
+            "Re: Is task done?",
+            "Progress on complete refactor",
+            "Task Done",
+            "Task Complete",
+        ]
+        for subj in intermediate_inquiries:
+            res_chat = self.run_cmd(
+                ["reply", "--to", orchestrator, "--from", worker, "--subject", subj, "--body", "Status payload"],
+                cwd=strand_dir
+            )
+            self.assertEqual(res_chat.returncode, 0, f"Intermediate inquiry '{subj}' must not trigger gate verification")
 
         # 3. Subdirectory Manifest Discovery
         sub_dir = os.path.join(strand_dir, "src", "nested")
         os.makedirs(sub_dir, exist_ok=True)
         res_sub_fail = self.run_cmd(
-            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Done", "--body", "Finished from subdir"],
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Done", "--body", "Finished from subdir", "--complete"],
             cwd=sub_dir
         )
         self.assertNotEqual(res_sub_fail.returncode, 0)
@@ -1242,7 +1243,7 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         # 4. Manual Bypass via --skip-gate
         res_skip_reply = self.run_cmd(
-            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Done", "--body", "Forced", "--skip-gate"],
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", "Task Done", "--body", "Forced", "--complete", "--skip-gate"],
             cwd=strand_dir
         )
         self.assertEqual(res_skip_reply.returncode, 0)
@@ -1295,9 +1296,9 @@ class TestCoordinationInvariants(unittest.TestCase):
         with open(manifest_path, "w") as f:
             json.dump(passed_manifest, f)
 
-        # 6a: rhizo reply with completion subject now succeeds
+        # 6a: rhizo reply with explicit --complete now succeeds
         res_rep_ok = self.run_cmd(
-            ["reply", "--to", orchestrator, "--from", worker, "--subject", f"Task {task_id} Done", "--body", "100% Green"],
+            ["reply", "--to", orchestrator, "--from", worker, "--subject", f"Task {task_id} Done", "--body", "100% Green", "--complete"],
             cwd=strand_dir
         )
         self.assertEqual(res_rep_ok.returncode, 0)
@@ -1346,29 +1347,29 @@ class TestCoordinationInvariants(unittest.TestCase):
         who_data = {a["agent"]: a for a in json.loads(res_who.stdout.strip())}
         self.assertIn(f"busy ({task_id})", who_data[worker]["state"].lower())
 
-        # 2. Negative Control: Intermediate reply must NOT auto-idle
-        res_inter = self.run_cmd([
-            "reply", "--to", orchestrator, "--from", worker,
-            "--subject", "Progress check: 50% done", "--body", "Still running tests",
-            "--skip-gate"
-        ])
-        self.assertEqual(res_inter.returncode, 0)
+        # 2. Negative Control: Intermediate replies must NOT auto-idle (even with 'done' or 'complete' in subject)
+        for intermediate_subj in ["Progress check: 50% done", "Re: Is task done?", "Work on complete refactor"]:
+            res_inter = self.run_cmd([
+                "reply", "--to", orchestrator, "--from", worker,
+                "--subject", intermediate_subj, "--body", "Still running tests",
+                "--skip-gate"
+            ])
+            self.assertEqual(res_inter.returncode, 0)
 
-        # Worker local file must STILL exist
-        self.assertTrue(os.path.exists(worker_task_file), "Intermediate reply must not clear local task stamp")
+            # Worker local file must STILL exist
+            self.assertTrue(os.path.exists(worker_task_file), f"Intermediate reply '{intermediate_subj}' must not clear local task stamp")
 
-        # Worker presence in who must STILL be busy with updated activity
-        res_who_inter = self.run_cmd(["who", "--json"])
-        self.assertEqual(res_who_inter.returncode, 0)
-        who_inter_data = {a["agent"]: a for a in json.loads(res_who_inter.stdout.strip())}
-        self.assertIn(f"busy ({task_id})", who_inter_data[worker]["state"].lower())
-        self.assertIn("replied: progress check", who_inter_data[worker]["activity"].lower())
+            # Worker presence in who must STILL be busy with updated activity
+            res_who_inter = self.run_cmd(["who", "--json"])
+            self.assertEqual(res_who_inter.returncode, 0)
+            who_inter_data = {a["agent"]: a for a in json.loads(res_who_inter.stdout.strip())}
+            self.assertIn(f"busy ({task_id})", who_inter_data[worker]["state"].lower())
 
-        # 3. Positive Control: Completion subject triggers auto-idle
+        # 3. Positive Control: Explicit --complete flag triggers auto-idle
         res_comp = self.run_cmd([
             "reply", "--to", orchestrator, "--from", worker,
             "--subject", "Task Complete: Two-Key Gate Passed", "--body", "Finished cleanly",
-            "--skip-gate"
+            "--complete", "--skip-gate"
         ])
         self.assertEqual(res_comp.returncode, 0)
 
@@ -1728,6 +1729,159 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.run_cmd(["close", worker])
         self.run_cmd(["close", alien])
         self.run_cmd(["close", orch])
+
+    # -------------------------------------------------------------------------
+    # Problem 30: Intermediate Inquiry Lease Protection & Explicit Completion
+    # -------------------------------------------------------------------------
+    def test_30_intermediate_inquiry_lease_protection(self):
+        """Verify that inquiries like 'Re: Is task done?' do not drop active leases, and explicit flags trigger completion."""
+        worker = "worker-inquiry"
+        orch = "orch-inquiry"
+        self.run_cmd(["open", worker, "worker"])
+        self.run_cmd(["open", orch, "orchestrator"])
+
+        task_id = "task-inquiry-lease"
+        self.run_cmd(["task", "create", task_id, "--title", "Lease Protection Task", "--target", worker])
+        self.run_cmd(["task", "claim", task_id, "--worker", worker, "--no-vine"])
+
+        # 1. Intermediate inquiry with 'done' in subject MUST NOT clear active task or drop lease
+        res_inq1 = self.run_cmd([
+            "reply", "--to", orch, "--from", worker,
+            "--subject", "Re: Is task done?", "--body", "Still running benchmarks", "--skip-gate"
+        ])
+        self.assertEqual(res_inq1.returncode, 0)
+
+        # Worker MUST still hold active in-flight lease
+        res_who = self.run_cmd(["who", "--json"])
+        who_map = {a["agent"]: a for a in json.loads(res_who.stdout.strip())}
+        self.assertIn(f"busy ({task_id})", who_map[worker]["state"].lower())
+
+        # 2. Intermediate inquiry with 'complete' in subject MUST NOT clear active task
+        res_inq2 = self.run_cmd([
+            "reply", "--to", orch, "--from", worker,
+            "--subject", "Progress on complete refactor", "--body", "Writing tests", "--skip-gate"
+        ])
+        self.assertEqual(res_inq2.returncode, 0)
+        res_who2 = self.run_cmd(["who", "--json"])
+        who_map2 = {a["agent"]: a for a in json.loads(res_who2.stdout.strip())}
+        self.assertIn(f"busy ({task_id})", who_map2[worker]["state"].lower())
+
+        # 3. Explicit --status=complete flag triggers completion and transitions to IDLE
+        res_comp = self.run_cmd([
+            "reply", "--to", orch, "--from", worker,
+            "--subject", "Refactor finished", "--body", "Tests green",
+            "--status=complete", "--skip-gate"
+        ])
+        self.assertEqual(res_comp.returncode, 0)
+        res_who3 = self.run_cmd(["who", "--json"])
+        who_map3 = {a["agent"]: a for a in json.loads(res_who3.stdout.strip())}
+        self.assertEqual(who_map3[worker]["state"].upper(), "IDLE")
+
+        self.run_cmd(["close", worker])
+        self.run_cmd(["close", orch])
+
+    # -------------------------------------------------------------------------
+    # Problem 31: Sweep Preserves In-Flight Worker Tasks
+    # -------------------------------------------------------------------------
+    def test_31_sweep_preserves_inflight_worker_tasks(self):
+        """Verify that sweeping an expired DELIVERED task does not delete current_task of an active in-flight worker."""
+        worker = "worker-sweep-safe"
+        self.run_cmd(["open", worker, "worker"])
+
+        # Claim active in-flight task
+        active_task = "task-active-claimed"
+        self.run_cmd(["task", "create", active_task, "--title", "Active Task", "--target", worker])
+        self.run_cmd(["task", "claim", active_task, "--worker", worker, "--no-vine"])
+
+        # Create another task that was delivered but expired
+        stale_delivered = "task-stale-delivered"
+        self.run_cmd(["task", "create", stale_delivered, "--title", "Stale Delivery", "--target", worker])
+        # Manually deliver and expire delivery_until
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}task:{stale_delivered}",
+                        "state", "DELIVERED", "owner", worker, "delivery_until", "1", "delivery_attempts", "1"], check=True)
+
+        # Ensure current_task is set to the active task
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", f"{TEST_PREFIX}current_task:{worker}", active_task], check=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", f"{TEST_PREFIX}agent_task:{worker}", active_task], check=True)
+
+        # Advance virtual time and trigger sweep
+        self.run_cmd(["time", "advance", "300"])
+        res_sweep = self.run_cmd(["task", "sweep", "--json"])
+        self.assertEqual(res_sweep.returncode, 0)
+
+        # Stale task was swept to ORPHANED
+        res_get_stale = self.run_cmd(["task", "get", stale_delivered, "--json"])
+        self.assertEqual(json.loads(res_get_stale.stdout.strip())["state"], "ORPHANED")
+
+        # Worker's active current_task MUST NOT have been deleted
+        res_cur = subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", f"{TEST_PREFIX}current_task:{worker}"], capture_output=True, text=True)
+        self.assertEqual(res_cur.stdout.strip(), active_task, "Sweep of delivered task must not delete active worker's current_task")
+
+        self.run_cmd(["close", worker])
+
+    # -------------------------------------------------------------------------
+    # Problem 32: doSend Links Canonical WISM Task ID
+    # -------------------------------------------------------------------------
+    def test_32_dosend_links_canonical_wism_task_id(self):
+        """Verify that sending a task links directly to the canonical WISM task ID rather than creating transient msg_... records."""
+        worker = "worker-canon-task"
+        orch = "orch-canon-task"
+        self.run_cmd(["open", worker, "worker"])
+        self.run_cmd(["open", orch, "orchestrator"])
+
+        canonical_tid = "task-real-canonical-99"
+        self.run_cmd(["task", "create", canonical_tid, "--title", "Canonical Implementation", "--target", worker])
+
+        # Send with explicit --task-id
+        res_send = self.run_cmd([
+            "send", "--to", worker, "--from", orch, "--type", "task",
+            "--subject", f"Task Assignment: {canonical_tid}", "--body", "Implement core logic",
+            "--task-id", canonical_tid
+        ])
+        self.assertEqual(res_send.returncode, 0)
+
+        # Task in Redis MUST be in state DELIVERED with owner worker
+        res_get = self.run_cmd(["task", "get", canonical_tid, "--json"])
+        self.assertEqual(res_get.returncode, 0)
+        t_data = json.loads(res_get.stdout.strip())
+        self.assertEqual(t_data["state"], "DELIVERED")
+        self.assertEqual(t_data["owner"], worker)
+
+        # Worker's current_task MUST be the canonical task ID, not msg_...
+        res_cur = subprocess.run(["redis-cli", "-u", REDIS_URL, "GET", f"{TEST_PREFIX}current_task:{worker}"], capture_output=True, text=True)
+        self.assertEqual(res_cur.stdout.strip(), canonical_tid)
+
+        # Verify no phantom msg_... tasks were created
+        res_list = self.run_cmd(["task", "list", "--json"])
+        tasks = json.loads(res_list.stdout.strip())
+        msg_tasks = [t for t in tasks if t["id"].startswith("msg_")]
+        self.assertEqual(len(msg_tasks), 0, "No transient msg_... task records should be created when canonical task ID is provided")
+
+        self.run_cmd(["close", worker])
+        self.run_cmd(["close", orch])
+
+    # -------------------------------------------------------------------------
+    # Problem 33: Directory-Scoped Identity Files & Default Worker Fallbacks Purged
+    # -------------------------------------------------------------------------
+    def test_33_purge_directory_session_identity(self):
+        """Verify that directory .rhizo/session.json is ignored and unconfigured sessions fail loudly without defaulting to <dirname>-worker."""
+        empty_dir = tempfile.mkdtemp(prefix="rhizo_dir_identity_")
+        rhizo_subdir = os.path.join(empty_dir, ".rhizo")
+        os.makedirs(rhizo_subdir, exist_ok=True)
+        session_file = os.path.join(rhizo_subdir, "session.json")
+        with open(session_file, "w") as f:
+            json.dump({"agent": "rogue-directory-agent", "project": "rogue_proj"}, f)
+
+        # Running without RHIZO_AGENT_NAME in this directory MUST fail loudly
+        res_claim = self.run_cmd(
+            ["task", "claim", "some-task-id", "--no-vine"],
+            env_overrides={"RHIZO_AGENT_NAME": ""},
+            cwd=empty_dir
+        )
+        self.assertNotEqual(res_claim.returncode, 0, "Unconfigured session must fail loudly without defaulting to dirname-worker or reading session.json")
+        self.assertIn("Cannot determine worker name", res_claim.stderr)
+
+        shutil.rmtree(empty_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -509,7 +509,7 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
     redisUrl: "redis://127.0.0.1:6379",
     prefix: "rhizo:",
     project: defProject,
-    agentName: defProject & "-worker",
+    agentName: "",
     sessionId: "",
     secret: "",
     secretFile: "",
@@ -526,7 +526,7 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
   result.provenance["redis_url"] = ProvenanceEntry(key: "redis_url", value: result.redisUrl, source: srcDefault, detail: "builtin default")
   result.provenance["prefix"] = ProvenanceEntry(key: "prefix", value: result.prefix, source: srcDefault, detail: "builtin default")
   result.provenance["project"] = ProvenanceEntry(key: "project", value: result.project, source: srcDefault, detail: "current directory basename")
-  result.provenance["agent_name"] = ProvenanceEntry(key: "agent_name", value: result.agentName, source: srcDefault, detail: "${project}-worker")
+  result.provenance["agent_name"] = ProvenanceEntry(key: "agent_name", value: "", source: srcDefault, detail: "none")
   result.provenance["session_id"] = ProvenanceEntry(key: "session_id", value: "", source: srcDefault, detail: "builtin default")
   result.provenance["encrypt"] = ProvenanceEntry(key: "encrypt", value: "false", source: srcDefault, detail: "builtin default")
   result.provenance["cluster"] = ProvenanceEntry(key: "cluster", value: "false", source: srcDefault, detail: "builtin default")

@@ -687,20 +687,14 @@ proc saveLocalSessionMapping*(sessionKey, agentName: string, project: string = "
     discard
 
 proc saveRepoLocalSessionMapping*(agentName, project: string, sessionId: string = "") =
-  let wsDir = findWorkspaceDir(getCurrentDir())
-  let baseDir = if wsDir.len > 0: wsDir else: getCurrentDir()
-  let rhizoDir = baseDir / ".rhizo"
-  let p = rhizoDir / "session.json"
+  # Deprecated and intentionally disabled. File-persisted identity in repo roots (.rhizo/session.json)
+  # is strictly prohibited to maintain zero-dirty-commits and multi-agent workspace hygiene.
   try:
-    createDir(rhizoDir)
-    var entry = newJObject()
-    entry["agent"] = %agentName.toLowerAscii
-    entry["project"] = %project
-    if sessionId.len > 0: entry["session_id"] = %sessionId
-    entry["cwd"] = %getCurrentDir()
-    entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-    writeFile(p, pretty(entry) & "\n")
-    secureFilePermissions(p)
+    let wsDir = findWorkspaceDir(getCurrentDir())
+    let baseDir = if wsDir.len > 0: wsDir else: getCurrentDir()
+    let p = baseDir / ".rhizo" / "session.json"
+    if fileExists(p):
+      removeFile(p)
   except OSError:
     discard
 
@@ -892,32 +886,10 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
 
   # Note: Global file fallback (loadCurrentAgent) permanently removed to satisfy GVR-008.
 
-  # Check repo-local .rhizo/session.json or .garden/session.json
-  let wsDir = findWorkspaceDir(getCurrentDir())
-  let baseDir = if wsDir.len > 0: wsDir else: getCurrentDir()
-  let repoSessionFile = baseDir / ".rhizo" / "session.json"
-  if fileExists(repoSessionFile):
-    try:
-      let parsed = parseFile(repoSessionFile)
-      let agent = parsed.getOrDefault("agent").getStr("")
-      if agent.len > 0:
-        return ensureProjectScopedName(cfg, agent)
-    except CatchableError: discard
-  let gardenSessionFile = baseDir / ".garden" / "session.json"
-  if fileExists(gardenSessionFile):
-    try:
-      let parsed = parseFile(gardenSessionFile)
-      let agent = parsed.getOrDefault("agent").getStr("")
-      if agent.len > 0:
-        return ensureProjectScopedName(cfg, agent)
-    except CatchableError: discard
-
-  if fallbackDefault:
-    if cfg.agentName.len > 0:
-      return ensureProjectScopedName(cfg, cfg.agentName)
-    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
-               else: getCurrentDir().splitPath.tail
-    return if proj.len > 0: sanitizeIdentifier(proj & "-worker") else: "node-worker"
+  # Note: Directory-scoped identity files (.rhizo/session.json, .garden/session.json)
+  # and silent dirname-worker fallbacks are strictly purged to satisfy sovereign multi-agent isolation.
+  if cfg.agentName.len > 0:
+    return ensureProjectScopedName(cfg, cfg.agentName)
   return ""
 
 proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string] =
@@ -1543,7 +1515,7 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
-proc isCompletionSubject*(subject: string): bool
+proc extractTaskId*(subject: string, body: string = ""): string
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string
 proc findVineManifestPath*(startDir: string = ""): string
 proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string]
@@ -1551,9 +1523,10 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
              rearmListen: bool = false, listenTimeoutSec: int = -1,
              urgency: string = "soon", format: string = "text", listenAgent: string = "",
-             skipGate: bool = false, idle: bool = false): string
+             skipGate: bool = false, idle: bool = false, complete: bool = false, taskId: string = ""): string
 proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken: var string,
                      strandPath: string = "", weave: bool = false, skipGate: bool = false): string
+proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 
 proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 600): tuple[name, prefix, codename: string] =
@@ -1637,7 +1610,6 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   if sid.len > 0:
     saveLocalSessionMapping(sid, name, cfg.project, getCurrentDir())
     setRedisSessionMapping(cfg, sid, name)
-  saveRepoLocalSessionMapping(name, cfg.project, sid)
 
   discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
   try:
@@ -1694,31 +1666,40 @@ proc findVineManifestPath*(startDir: string = ""): string =
     cur = parent
   return ""
 
-proc isCompletionSubject*(subject: string): bool =
-  let s = subject.toLowerAscii().strip()
-  if s.len == 0: return false
-  if "two-key gate pass" in s or "ready to weave" in s or "ready_to_weave" in s or "ready for weave" in s or "gate pass" in s:
-    return true
-  if s in ["done", "complete", "completed", "finished"]:
-    return true
-  if s.endsWith("done") or s.endsWith("complete") or s.endsWith("completed") or s.endsWith("finished"):
-    if "task" in s or "work" in s or "stage" in s or "track" in s or "strand" in s or "step" in s or "plan" in s or "swarm" in s or s.startsWith("re:"):
-      return true
-  if "task done" in s or "task complete" in s or "task completed" in s or "task finished" in s or
-     "work done" in s or "work complete" in s or "work completed" in s or
-     "weave complete" in s or "weave done" in s or
-     "stage complete" in s or "stage done" in s or
-     "track complete" in s or "track done" in s or
-     "plan complete" in s or "plan done" in s or "plan completed" in s or
-     "swarm complete" in s or "swarm done" in s or "swarm plan complete" in s:
-    return true
-  if ("stage" in s or "track" in s or "wave" in s or "plan" in s or "swarm" in s) and ("done" in s or "complete" in s or "completed" in s or "deployed" in s):
-    return true
-  if (s.startsWith("done") or s.startsWith("complete") or s.startsWith("finished")) and ("task" in s or "work" in s or "plan" in s):
-    return true
-  if s.startsWith("swarm plan complete") or s.startsWith("swarm complete"):
-    return true
-  return false
+proc extractTaskId*(subject: string, body: string = ""): string =
+  let s = subject.strip()
+  if s.len == 0: return ""
+
+  let lower = s.toLowerAscii()
+  for pfx in ["task assignment:", "task assignment -", "task:", "task -", "assigned task:"]:
+    if lower.startsWith(pfx):
+      let rest = s[pfx.len..^1].strip()
+      let parts = rest.splitWhitespace()
+      if parts.len > 0:
+        let clean = parts[0].strip(chars = {':', ',', ';', '(', ')', '[', ']', '"', '\'', '<', '>'})
+        if clean.len > 0:
+          return sanitizeIdentifier(clean)
+
+  if s.startsWith("[") and ']' in s:
+    let bracketContent = s[1 ..< s.find(']')].strip()
+    let bLower = bracketContent.toLowerAscii()
+    if bLower.startsWith("task-") or bLower.startsWith("t-"):
+      return sanitizeIdentifier(bracketContent)
+
+  let words = s.splitWhitespace()
+  if words.len > 0:
+    let first = words[0].strip(chars = {':', ',', ';', '(', ')', '[', ']', '"', '\'', '<', '>'})
+    let firstLower = first.toLowerAscii()
+    if firstLower.startsWith("task-") or firstLower.startsWith("t-"):
+      return sanitizeIdentifier(first)
+
+  for w in words:
+    let clean = w.strip(chars = {':', ',', ';', '(', ')', '[', ']', '"', '\'', '<', '>'})
+    let cLower = clean.toLowerAscii()
+    if (cLower.startsWith("task-") or cLower.startsWith("t-")) and clean.len >= 3:
+      return sanitizeIdentifier(clean)
+
+  return ""
 
 proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string] =
   var manifestPath = ""
@@ -1829,7 +1810,7 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
             tags: seq[string] = @[], replyTo: string = "", msgId: string = "", isBroadcast: bool = false,
             customTs: string = "", echoResult: bool = true, rearmListen: bool = false, listenTimeoutSec: int = -1,
             urgency: string = "soon", format: string = "text", listenAgent: string = "",
-            idle: bool = false): string =
+            idle: bool = false, complete: bool = false, taskId: string = ""): string =
   randomize()
   let secret = getSecret(cfg)
   let rawCleanTo = sanitizeIdentifier(toAgent)
@@ -1839,10 +1820,8 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let normFrom = sanitizeIdentifier(fromAgent)
   resetWatchdogStreak(cfg, normFrom)
 
-  # Causal clearing of current_task on completion or explicit idle flag
-  let isDone = (msgType in ["reply", "complete"] and isCompletionSubject(subject)) or
-               (msgType == "complete") or
-               idle
+  # Causal clearing of current_task on explicit completion or explicit idle flag
+  let isDone = complete or (msgType == "complete") or idle
 
   if normFrom.len > 0:
     if isDone:
@@ -1911,6 +1890,16 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
     node["intended_recipient"] = %normTo
   node["type"] = %msgType
   node["urgency"] = %normUrgency
+  if complete or msgType == "complete":
+    node["complete"] = %true
+  var effectiveTaskId = if taskId.len > 0: sanitizeIdentifier(taskId) else: extractTaskId(subject, body)
+  if effectiveTaskId.len > 0:
+    node["task_id"] = %effectiveTaskId
+    if msgType in ["task", "work"] and not isBroadcast and resolvedTo.len > 0 and resolvedTo != "*":
+      try:
+        discard doTask(cfg, "deliver", [effectiveTaskId, resolvedTo, "900", subject, body])
+      except CatchableError:
+        discard
   let originHost = getOriginHostname()
   if originHost.len > 0:
     node["host"] = %originHost
@@ -2032,18 +2021,19 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              tags: seq[string] = @[], replyTo: string = "", msgId: string = "", customTs: string = "",
              rearmListen: bool = false, listenTimeoutSec: int = -1,
              urgency: string = "soon", format: string = "text", listenAgent: string = "",
-             skipGate: bool = false, idle: bool = false): string =
+             skipGate: bool = false, idle: bool = false, complete: bool = false, taskId: string = ""): string =
   let sLower = subject.toLowerAscii
   if rearmListen and (sLower.contains("claim") or sLower.startsWith("ack") or sLower.contains("task claim")):
     stderr.writeLine("[RHIZO WARNING] You passed --listen on a CLAIM/ACK message. In async coding harnesses (Antigravity), arming a listener during an initial acknowledgment causes premature turn yields before implementation! Pass --listen ONLY on your final completion reply.")
-  if isCompletionSubject(subject) and not skipGate:
+  if (complete or idle) and not skipGate:
     let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
     if not passed:
       stderr.writeLine(err)
       quit(1)
   return doSend(cfg, toAgent, "reply", fromAgent, subject, body, tags, replyTo, msgId, false, customTs,
                 echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeoutSec,
-                urgency = urgency, format = format, listenAgent = listenAgent, idle = idle)
+                urgency = urgency, format = format, listenAgent = listenAgent, idle = idle,
+                complete = complete, taskId = taskId)
 
 proc sendDesktopNotification*(msgNode: JsonNode) =
   try:
@@ -2070,7 +2060,6 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
       discard execCmdEx("notify-send " & quoteShell(title) & " " & quoteShell(displayBody))
   except Exception:
     discard
-proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false) =
   var cleanName = ensureProjectScopedName(cfg, name)
@@ -2295,18 +2284,27 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       let rawMsgType = parsed.getOrDefault("type").getStr("task").toLowerAscii()
       let toField = parsed.getOrDefault("to").getStr("").strip().toLowerAscii()
       let isBroadcastMsg = (toField == "*" or toField == "all" or toField == "" or toField.startsWith("@"))
-      let isTask = (rawMsgType in ["task", "work"]) and not isBroadcastMsg and not isCompletionSubject(subject)
+      let isCompleteFlag = parsed.getOrDefault("complete").getBool(false) or (rawMsgType == "complete")
+      let isTask = (rawMsgType in ["task", "work"]) and not isBroadcastMsg and not isCompleteFlag
 
       if isTask:
+        var effectiveTaskId = parsed.getOrDefault("task_id").getStr("")
+        if effectiveTaskId.len == 0:
+          effectiveTaskId = extractTaskId(subject, body)
+        if effectiveTaskId.len == 0:
+          effectiveTaskId = id # fallback to message ID only if no canonical task ID exists
+
         try:
-          discard doTask(cfg, "deliver", [id, name, "900", subject, body])
+          discard doTask(cfg, "deliver", [effectiveTaskId, name, "900", subject, body])
         except CatchableError:
           discard
 
         # Mirror active delivery to local disk stamp for sub-millisecond hook inspection
         try:
           createDir(getHomeDir() / ".config" / "rhizo")
-          writeFile(currentTaskFilePath(name), $parsed)
+          var taskStamp = parsed
+          taskStamp["id"] = %effectiveTaskId
+          writeFile(currentTaskFilePath(name), $taskStamp)
         except CatchableError:
           discard
 
@@ -5535,6 +5533,8 @@ proc main() =
     var format = "text"
     var skipGate = false
     var setIdle = false
+    var isComplete = false
+    var explicitTaskId = ""
 
     var i = 1
     while i < args.len:
@@ -5550,6 +5550,18 @@ proc main() =
       elif a.startsWith("--body="): body = resolveVal(a[7..^1])
       elif a == "--body" and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
       elif a in ["--idle", "-d"]: setIdle = true
+      elif a in ["--complete", "-c"]: isComplete = true
+      elif a.startsWith("--status="):
+        let stVal = a[9..^1].toLowerAscii
+        if stVal in ["complete", "completed", "done"]: isComplete = true
+      elif a == "--status" and i + 1 < args.len:
+        let stVal = args[i+1].toLowerAscii
+        if stVal in ["complete", "completed", "done"]: isComplete = true
+        inc i
+      elif a.startsWith("--task-id="): explicitTaskId = a[10..^1]
+      elif a == "--task-id" and i + 1 < args.len: explicitTaskId = args[i+1]; inc i
+      elif a.startsWith("--task="): explicitTaskId = a[7..^1]
+      elif a == "--task" and i + 1 < args.len: explicitTaskId = args[i+1]; inc i
       elif a in ["--immediate", "-i"]: urgency = "immediate"
       elif a == "--soon": urgency = "soon"
       elif a == "--json": format = "json"
@@ -5648,14 +5660,14 @@ proc main() =
       listenAgent = ensureProjectScopedName(cfg, listenAgent)
 
     if isReply:
-      discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate, idle = setIdle)
+      discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate, idle = setIdle, complete = isComplete, taskId = explicitTaskId)
     else:
-      if subcmd == "send" and isCompletionSubject(subject) and not skipGate:
+      if subcmd == "send" and (isComplete or msgType == "complete") and not skipGate:
         let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
         if not passed:
           stderr.writeLine(err)
           quit(1)
-      discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent, idle = setIdle)
+      discard doSend(cfg, toAgent, msgType, fromAgent, subject, body, tags, replyTo, msgId, isBroadcast, customTs, echoResult = true, rearmListen = rearmListen, listenTimeoutSec = listenTimeout, urgency = urgency, format = format, listenAgent = listenAgent, idle = setIdle, complete = isComplete, taskId = explicitTaskId)
 
   of "who":
     var filterTag = cfg.project

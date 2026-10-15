@@ -361,15 +361,19 @@ elseif action == "sweep" then
             local delivery_until = tonumber(redis.call('HGET', tk, "delivery_until") or 0)
             if delivery_until > 0 and now > delivery_until then
                 local attempts = tonumber(redis.call('HGET', tk, "delivery_attempts") or 1)
+                local active_task = redis.call('GET', prefix .. "agent_task:" .. owner)
+                local cur_task = redis.call('GET', prefix .. "current_task:" .. owner)
+                local has_active = (active_task and active_task ~= false and active_task ~= "")
+                local should_clear_current = (owner ~= "" and not has_active and cur_task == tid)
                 if attempts >= 3 then
                     redis.call('HSET', tk, "state", "DEAD_LETTER")
-                    if owner ~= "" then
+                    if should_clear_current then
                         redis.call('DEL', prefix .. "current_task:" .. owner)
                     end
                     table.insert(swept, { id = tid, previous_state = "DELIVERED", new_state = "DEAD_LETTER", attempts = attempts })
                 else
                     redis.call('HSET', tk, "state", "ORPHANED")
-                    if owner ~= "" then
+                    if should_clear_current then
                         redis.call('DEL', prefix .. "current_task:" .. owner)
                     end
                     table.insert(swept, { id = tid, previous_state = "DELIVERED", new_state = "ORPHANED", attempts = attempts })
