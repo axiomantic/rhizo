@@ -84,6 +84,7 @@ const
   reminderLua*   = staticRead("../scripts/reminder.lua")
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
+  pulseLua*      = staticRead("../scripts/pulse.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
   RhizoVersion*  = "0.2.19"
@@ -123,6 +124,7 @@ let
   reminderSha*   = computeSha1(reminderLua)
   rerouteSha*    = computeSha1(rerouteLua)
   watchdogInflightSha* = computeSha1(watchdogInflightLua)
+  pulseSha*      = computeSha1(pulseLua)
 
 
 proc secureFilePermissions*(path: string) =
@@ -1108,6 +1110,11 @@ proc doCheckInbox*(cfg: RhizoConfig, name: string, forceSteal: bool = false): in
     return 0
 
 proc detectHarness*(cfg: RhizoConfig): string =
+  if getEnv("OPENCODE_SESSION_ID", "").len > 0: return "opencode"
+  if getEnv("PI_SESSION_ID", "").len > 0: return "pi"
+  if getEnv("CODEX_SESSION_ID", "").len > 0: return "codex"
+  if getEnv("CLAUDE_CODE", "").len > 0 or getEnv("CLAUDE_PROJECT_ROOT", "").len > 0: return "claude"
+
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.startsWith("opencode:"): return "opencode"
   if sid.startsWith("pi:"): return "pi"
@@ -1117,11 +1124,7 @@ proc detectHarness*(cfg: RhizoConfig): string =
   if sid.startsWith("cursor:"): return "cursor"
   if sid.startsWith("copilot:"): return "copilot"
 
-  if getEnv("OPENCODE_SESSION_ID", "").len > 0: return "opencode"
-  if getEnv("PI_SESSION_ID", "").len > 0: return "pi"
-  if getEnv("CODEX_SESSION_ID", "").len > 0: return "codex"
-  if getEnv("CLAUDE_CODE", "").len > 0 or getEnv("CLAUDE_PROJECT_ROOT", "").len > 0: return "claude"
-  if getEnv("ANTIGRAVITY_APP_DIR", "").len > 0: return "antigravity"
+  if getEnv("ANTIGRAVITY_APP_DIR", "").len > 0 or getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0: return "antigravity"
   if getEnv("CURSOR_APP", "").len > 0 or getEnv("CURSOR_PROJECT_DIR", "").len > 0: return "cursor"
   if getEnv("GITHUB_COPILOT", "").len > 0: return "copilot"
 
@@ -2220,6 +2223,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           if not isForever:
             let elapsed = int(getTime().toUnix() - startTime)
             remaining = max(0, effectiveTimeout - elapsed)
+          continue
       # Swarm Roster Guard: reject alien/unauthorized messages at the listener level
       let useRosterGuard = rosterGuard or (getEnv("RHIZO_ROSTER_GUARD", "0") in ["1", "true", "yes"])
       if useRosterGuard and fromAgent.len > 0:
@@ -2471,6 +2475,125 @@ proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: 
   let effectiveTtl = if cfg.messageTtl > 0: cfg.messageTtl else: 604800
   discard runLuaScript(cfg.redisUrl, enqueueLua, enqueueSha, [cfg.prefix, normQueue, msgJson, $effectiveTtl])
   return id
+
+proc formatPulsesTable*(jsonStr: string): string =
+  try:
+    let root = parseJson(jsonStr)
+    let node = root.getOrDefault("pulses")
+    if node == nil or node.kind != JArray or node.len == 0:
+      return "No active pulses registered."
+    var rows: seq[(string, string, string, string, string, string)] = @[]
+    for item in node:
+      let id = item.getOrDefault("id").getStr("")
+      let cron = item.getOrDefault("cron").getStr("")
+      let queue = item.getOrDefault("queue").getStr("")
+      let nextRun = item.getOrDefault("next_run").getInt(0)
+      let nextRunStr = if nextRun > 0: fromUnix(nextRun).utc.format("yyyy-MM-dd HH:mm:ss") else: "-"
+      let totalTicks = item.getOrDefault("total_ticks").getInt(0)
+      let status = item.getOrDefault("status").getStr("ACTIVE")
+      rows.add((id, cron, queue, nextRunStr, $totalTicks, status))
+    result = "PULSE ID        SCHEDULE         TARGET QUEUE    NEXT RUN (UTC)       TICKS   STATUS\n"
+    result.add("--------------------------------------------------------------------------------------\n")
+    for (id, cr, q, nr, ticks, st) in rows:
+      result.add(id.alignLeft(16) & cr.alignLeft(17) & q.alignLeft(16) & nr.alignLeft(21) & ticks.alignLeft(8) & st & "\n")
+    result = result.strip()
+  except CatchableError:
+    return jsonStr
+
+proc doPulseAdd*(cfg: RhizoConfig, pulseId, cron, queue, body, title: string, immediate: bool, jsonOut: bool): string =
+  let normId = sanitizeIdentifier(pulseId)
+  var normQueue = sanitizeIdentifier(queue)
+  if normQueue.startsWith("queue:"):
+    normQueue = normQueue[6..^1]
+  let effectiveTitle = if title.len > 0: title else: "Pulse: " & normId
+  let initRun = if immediate: "1" else: "0"
+
+  let res = runLuaScript(cfg.redisUrl, pulseLua, pulseSha, [cfg.prefix, "add", normId, cron, normQueue, body, effectiveTitle, initRun])
+  if res.startsWith("ERR"):
+    stderr.writeLine(res)
+    quit(1)
+
+  if jsonOut:
+    return res
+  else:
+    try:
+      let node = parseJson(res)
+      let nextRun = node.getOrDefault("next_run").getInt(0)
+      let nextRunStr = if nextRun > 0: fromUnix(nextRun).utc.format("yyyy-MM-dd HH:mm:ss 'UTC'") else: "immediately"
+      return "Pulse '" & normId & "' registered successfully. Next run: " & nextRunStr & " (target: queue:" & normQueue & ")"
+    except CatchableError:
+      return "Pulse '" & normId & "' registered successfully."
+
+proc doPulseList*(cfg: RhizoConfig, jsonOut: bool): string =
+  let res = runLuaScript(cfg.redisUrl, pulseLua, pulseSha, [cfg.prefix, "list"])
+  if res.startsWith("ERR"):
+    stderr.writeLine(res)
+    quit(1)
+  if jsonOut:
+    return res
+  else:
+    return formatPulsesTable(res)
+
+proc doPulseRemove*(cfg: RhizoConfig, pulseId: string, jsonOut: bool): string =
+  let normId = sanitizeIdentifier(pulseId)
+  let res = runLuaScript(cfg.redisUrl, pulseLua, pulseSha, [cfg.prefix, "remove", normId])
+  if res.startsWith("ERR"):
+    stderr.writeLine(res)
+    quit(1)
+  if jsonOut:
+    return res
+  else:
+    return "Pulse '" & normId & "' removed successfully."
+
+proc doPulseTick*(cfg: RhizoConfig, maxCount: int = 50, jsonOut: bool = false): string =
+  let sweeperId = getActiveAgentName(cfg, fallbackDefault = true)
+  # Run Lua script: atomic claiming & schedule advancement with monotonic fencing
+  let resStr = runLuaScript(cfg.redisUrl, pulseLua, pulseSha, [cfg.prefix, "tick", $maxCount, sweeperId, "60", "0"])
+  if resStr.startsWith("ERR"):
+    stderr.writeLine(resStr)
+    quit(1)
+
+  var dispatched = 0
+  var dispatchedPulses: seq[JsonNode] = @[]
+  try:
+    let node = parseJson(resStr)
+    let pulses = node.getOrDefault("pulses")
+    if pulses != nil and pulses.kind == JArray:
+      for p in pulses:
+        let pId = p.getOrDefault("id").getStr("")
+        var pQueue = p.getOrDefault("queue").getStr("tasks")
+        if pQueue.startsWith("queue:"):
+          pQueue = pQueue[6..^1]
+        let pBody = p.getOrDefault("body").getStr("")
+        let pTitle = p.getOrDefault("title").getStr("Pulse: " & pId)
+        let fencing = p.getOrDefault("fencing_token").getInt(0)
+        let nowSec = getTime().toUnix()
+        let msgId = "msg_pulse_" & $fencing & "_" & pId & "_" & $nowSec
+
+        # Enqueue authenticated pulse task onto destination work queue
+        discard doEnqueue(
+          cfg = cfg,
+          queueName = pQueue,
+          msgType = "pulse",
+          fromAgent = "system:pulse",
+          subject = pTitle,
+          body = pBody,
+          tags = @["pulse", pId],
+          msgId = msgId
+        )
+        inc dispatched
+        dispatchedPulses.add(p)
+
+    if jsonOut:
+      return $(%*{"status": "OK", "ticked": dispatched, "pulses": dispatchedPulses})
+    else:
+      if dispatched == 0:
+        return "No due pulses to tick."
+      else:
+        return "Ticked and enqueued " & $dispatched & " pulse(s)."
+  except CatchableError as e:
+    stderr.writeLine("Error during pulse tick: " & e.msg)
+    quit(1)
 
 proc isRunCancelled*(client: Redis, cfg: RhizoConfig, runId: string): bool =
   if runId.len == 0 or client == nil: return false
@@ -5289,6 +5412,7 @@ proc main() =
     echo "  rhizo ballot <open|cast|tally|status> <ballot_id> [args...]"
     echo "  rhizo leader <acquire|renew|resign|status> <role> [args...]"
     echo "  rhizo workflow <define|next|resolve|fail|status|export|import> <flow_id> [args...]"
+    echo "  rhizo pulse <add|list|remove|tick> [args...]"
     echo "  rhizo status <idle|busy|error> [activity_text] [name] [--listen/-l]"
     echo "  rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw]"
     echo "  rhizo unlock <lock_name>"
@@ -7902,6 +8026,91 @@ proc main() =
       stderr.writeLine("Unknown remind action: '" & action & "'. Valid actions: add, dismiss, ack, get, list, tick")
       quit(1)
 
+  of "pulse":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo pulse <add|list|remove|tick> [args...]")
+      quit(1)
+    let action = args[1].toLowerAscii
+    case action
+    of "add":
+      var pulseId = ""
+      var cron = ""
+      var queue = ""
+      var body = ""
+      var title = ""
+      var immediate = false
+      var jsonOut = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--queue="): queue = a[8..^1]
+        elif (a == "--queue" or a == "-q") and i + 1 < args.len: queue = args[i+1]; inc i
+        elif a.startsWith("--body="): body = a[7..^1]
+        elif (a == "--body" or a == "-b") and i + 1 < args.len: body = args[i+1]; inc i
+        elif a.startsWith("--title="): title = a[8..^1]
+        elif (a == "--title" or a == "-t") and i + 1 < args.len: title = args[i+1]; inc i
+        elif a in ["--immediate", "--now"]: immediate = true
+        elif a == "--json": jsonOut = true
+        elif not a.startsWith("-"):
+          if pulseId.len == 0: pulseId = a
+          elif cron.len == 0: cron = a
+          else: cron.add(" " & a)
+        inc i
+      if pulseId.len == 0:
+        stderr.writeLine("Error: Missing pulse id. Usage: rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]")
+        quit(1)
+      if cron.len == 0:
+        stderr.writeLine("Error: Missing cron expression. Usage: rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]")
+        quit(1)
+      if queue.len == 0:
+        stderr.writeLine("Error: Missing target queue. Usage: rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]")
+        quit(1)
+      if body.len == 0:
+        stderr.writeLine("Error: Missing body. Usage: rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]")
+        quit(1)
+
+      let res = doPulseAdd(cfg, pulseId, cron, queue, body, title, immediate, jsonOut)
+      echo res
+
+    of "list":
+      var jsonOut = false
+      for i in 2..<args.len:
+        if args[i] == "--json": jsonOut = true
+      let res = doPulseList(cfg, jsonOut)
+      echo res
+
+    of "remove", "rm", "delete":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing pulse id. Usage: rhizo pulse remove <id>")
+        quit(1)
+      let pulseId = args[2]
+      var jsonOut = false
+      for i in 3..<args.len:
+        if args[i] == "--json": jsonOut = true
+      let res = doPulseRemove(cfg, pulseId, jsonOut)
+      echo res
+
+    of "tick":
+      var maxCount = 50
+      var jsonOut = false
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--max="):
+          try: maxCount = parseInt(a[6..^1]) except ValueError: discard
+        elif a == "--max" and i + 1 < args.len:
+          try: maxCount = parseInt(args[i+1]) except ValueError: discard
+          inc i
+        elif a == "--json": jsonOut = true
+        inc i
+      let res = doPulseTick(cfg, maxCount, jsonOut)
+      echo res
+
+    else:
+      stderr.writeLine("Error: Unknown pulse action: '" & action & "'")
+      stderr.writeLine("Usage: rhizo pulse <add|list|remove|tick> [args...]")
+      quit(1)
+
   of "history", "log":
     var targetAgent = ""
     var limit = 50
@@ -8175,6 +8384,8 @@ proc main() =
       suggestion = "sweep"
     elif lowCmd in ["reminders", "sticky", "banner", "advisory", "notice", "alert", "warn"]:
       suggestion = "remind"
+    elif lowCmd in ["pulses", "cron", "schedule", "scheduler", "heartbeat", "periodic"]:
+      suggestion = "pulse"
     elif lowCmd in ["aliases", "redirect"]:
       suggestion = "alias"
     elif lowCmd in ["forward", "move-inbox", "transfer"]:

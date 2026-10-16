@@ -469,16 +469,16 @@ proc getEnvFirst*(keys: varargs[string]): string =
   return ""
 
 proc detectCurrentSessionId*(): string =
-  let agy = getEnv("ANTIGRAVITY_CONVERSATION_ID", "")
-  if agy.len > 0: return "agy:" & agy
-  let claude = getEnvFirst("CLAUDE_CONVERSATION_ID", "CLAUDE_SESSION_ID")
-  if claude.len > 0: return "claude:" & claude
   let opencode = getEnv("OPENCODE_SESSION_ID", "")
   if opencode.len > 0: return "opencode:" & opencode
   let codex = getEnv("CODEX_SESSION_ID", "")
   if codex.len > 0: return "codex:" & codex
   let pi = getEnv("PI_SESSION_ID", "")
   if pi.len > 0: return "pi:" & pi
+  let claude = getEnvFirst("CLAUDE_CONVERSATION_ID", "CLAUDE_SESSION_ID")
+  if claude.len > 0: return "claude:" & claude
+  let agy = getEnv("ANTIGRAVITY_CONVERSATION_ID", "")
+  if agy.len > 0: return "agy:" & agy
   let custom = getEnv("RHIZO_SESSION_ID", "")
   if custom.len > 0: return custom
   return ""
