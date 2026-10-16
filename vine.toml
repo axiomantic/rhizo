@@ -1,0 +1,10 @@
+# vine.toml — Vine Project Configuration for Rhizo
+[project]
+primary_branch = "main"
+
+[strand]
+venv_policy = "prompt"
+vendor_dirs = ["deps", "vendor", "node_modules"]
+
+[verification]
+test_command = "uv run pytest tests/test_coordination_invariants.py tests/test_pulse.py"

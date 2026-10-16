@@ -1791,7 +1791,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         # Claim active in-flight task
         active_task = "task-active-claimed"
         self.run_cmd(["task", "create", active_task, "--title", "Active Task", "--target", worker])
-        self.run_cmd(["task", "claim", active_task, "--worker", worker, "--no-vine"])
+        self.run_cmd(["task", "claim", active_task, "--worker", worker, "--no-vine", "--lease", "3600"])
 
         # Create another task that was delivered but expired
         stale_delivered = "task-stale-delivered"
