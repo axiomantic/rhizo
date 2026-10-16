@@ -87,7 +87,7 @@ const
   pulseLua*      = staticRead("../scripts/pulse.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.19"
+  RhizoVersion*  = "0.2.20"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =

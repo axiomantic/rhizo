@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20] - 2026-10-15
+
+### Added
+- **Distributed Cron & Heartbeat Scheduler (`rhizo pulse`, `scripts/pulse.lua`, `src/rhizo.nim`)**:
+  - Implemented distributed recurring cron scheduling backed by Redis sorted sets (`rhizo:pulses`) with an atomic Lua execution engine.
+  - Subcommands:
+    - `rhizo pulse add <id> --cron "<expr>" --task "<task>" [--agent <agent>] [--scope <scope>]`: Schedules a recurring cron task with standard 5-field syntax.
+    - `rhizo pulse list [--scope <scope>] [--json]`: Lists all active pulses with next execution timestamps, cron expressions, and assigned agents.
+    - `rhizo pulse remove <id>`: Unregisters a scheduled pulse.
+    - `rhizo pulse tick [--max <n>] [--json]`: Sweeps and dispatches ready pulses to target inboxes, atomically advancing cron intervals with HA zero-duplicate execution.
+  - Added unit test suite in `tests/test_pulse.py`.
+- **Rift CoW Terminology Normalization**:
+  - Replaced legacy APFS copy-on-write references with generic, polyglot Rift CoW snapshotting across guides and prompt templates.
+- **Fast Hermetic Test Configuration (`vine.toml`)**:
+  - Configured project-level `test_command` in `vine.toml` targeting core coordination and pulse invariants, speeding up Strand Two-Key Gate verification from timeouts to ~14s.
+
 ## [0.2.19] - 2026-10-14
 
 ### Added

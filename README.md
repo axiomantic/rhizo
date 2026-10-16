@@ -182,6 +182,7 @@ Rhizo extends point-to-point and group messaging with dedicated primitives desig
 | **Cluster Health Sweeper** | Cursor-based SCAN watchdog pruning dead agents & stale listeners | `rhizo sweep [--dry-run] [--raw]` | [Recipe 13](#13-cluster-health-sweeping--self-healing-watchdog) |
 | **Fencing Tokens** | Monotonic integer sequence counter preventing zombie writes | `rhizo lock <resource> 60 --fencing` | [Recipe 14](#14-distributed-locking-with-monotonic-fencing-tokens) |
 | **Semantic Task Routing** | Zero-shot task classification into queues (<40ms) via ModernBERT/Laya | `rhizo enqueue --route "<task>"` | [Recipe 15](#15-semantic-task-routing-with-optional-system-1) |
+| **Scheduled Cron (Pulse)** | Distributed Redis ZSET cron scheduler with atomic Lua tick | `rhizo pulse add <id> --cron "<expr>" --task "<task>"` | [Recipe 16](#16-distributed-cron--recurring-heartbeats-with-rhizo-pulse) |
 | **Pub/Sub Streaming** | Real-time ephemeral broadcast streaming without queue memory | `rhizo pub <channel> "..."` / `rhizo sub <channel>` | [CLI Reference](#2-cli-command-reference) |
 
 ---
@@ -416,6 +417,27 @@ rhizo route init --global
 # 4. Or scaffold project-specific routes (layers on top of global):
 rhizo route init
 # => Created ./rhizo-routes.yaml
+```
+
+### 16. Distributed Cron & Recurring Heartbeats with Rhizo Pulse
+Schedule recurring jobs or background agent heartbeats without running standalone daemon processes:
+```bash
+# 1. Schedule a recurring heartbeat or telemetry check every 5 minutes:
+rhizo pulse add cluster_health --cron "*/5 * * * *" --task "rhizo watchdog check --json" --agent watchdog-agent
+
+# 2. Inspect active pulses and next trigger timestamps:
+rhizo pulse list
+# => Active Pulses:
+#    - ID: cluster_health
+#      Cron: */5 * * * *
+#      Next: 2026-10-15T23:55:00Z
+#      Target: watchdog-agent
+
+# 3. Sweep and dispatch due pulses (atomically dispatched to target agent's inbox):
+rhizo pulse tick
+
+# 4. Remove pulse when no longer needed:
+rhizo pulse remove cluster_health
 ```
 
 ---

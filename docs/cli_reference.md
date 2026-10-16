@@ -227,3 +227,23 @@ Garbage collects stale agent presences, expired locks, and orphaned tasks.
 
 ### `rhizo guide install`
 Installs the canonical `RHIZO GUIDE` block into the repository `AGENTS.md`.
+
+---
+
+## 9. Scheduled Cron & Heartbeats (Pulse)
+
+### `rhizo pulse add <id> --cron "<expr>" --task "<task>" [--agent <agent>] [--scope <scope>]`
+Registers a distributed recurring cron job in Redis sorted sets.
+```bash
+rhizo pulse add cluster_sweep --cron "*/10 * * * *" --task "rhizo sweep" --agent watchdog
+```
+
+### `rhizo pulse list [--scope <scope>] [--json]`
+Lists all active scheduled pulses, their target agents, cron expressions, and next trigger timestamps.
+
+### `rhizo pulse tick [--max <n>] [--json]`
+Evaluates and fires due pulses, dispatching them to target agent inboxes and advancing cron execution intervals with atomic Lua execution.
+
+### `rhizo pulse remove <id>`
+Deletes a registered pulse schedule from the cluster.
+
