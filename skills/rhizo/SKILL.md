@@ -1,6 +1,6 @@
 ---
 name: rhizo
-description: "Multi-agent coordination, inter-terminal messaging bus, distributed file/mutex locking with monotonic fencing tokens, System 1 decision model task routing (Laya, Kev, Decider, Jev), orchestrating multi-stage DAG task pipelines, cluster health watchdog sweeping, and worker queues over Redis. Use when coordinating work between multiple AI assistants or terminal sessions, classifying and routing tasks via System 1 decision models, acquiring distributed mutex locks before editing shared files or running migrations/deployments, generating monotonic fencing tokens to prevent zombie writes, dispatching tasks or RPC queries to peer agents, producing/consuming from competing-consumer work queues, orchestrating multi-stage pipelines with automatic dependency resolution, reliably claiming tasks with leases and ack/DLQ handling, scattering tasks to a pool for quorum aggregation, sharing scratchpad memory, managing floor control in roundtable brainstorming, setting and checking run cancellation tokens, running blind consensus ballots without anchoring bias, electing resilient mesh leaders with automated lease failover, auditing cluster health and sweeping dead agent/listener garbage, or discovering active teammates and their status. Triggers: 'rhizo', 'coordinate with the other terminal/agent', 'talk to agent', 'send task to', 'ask the other assistant', 'inter-agent chat', 'lock file', 'lock resource', 'mutex lock', 'prevent concurrent edits', 'fencing token', 'monotonic counter', 'zombie writes', 'work queue', 'enqueue task', 'claim task', 'ack task', 'reliable queue', 'dead letter queue', 'dlq', 'blackboard', 'scratchpad', 'shared memory', 'floor control', 'speaker ring', 'moderated roundtable', 'pass floor', 'yield floor', 'cancel task', 'cancel run', 'cancellation token', 'abort run', 'ballot', 'vote', 'consensus', 'blind voting', 'leader election', 'acquire leader', 'failover', 'mesh leader', 'scatter', 'gather', 'quorum', 'workflow', 'dag', 'pipeline', 'task dependencies', 'resolve step', 'workflow next', 'sweep', 'clean dead agents', 'stale locks', 'garbage collection', 'cluster watchdog', 'who is online', 'agent status', 'route task', 'system 1', 'systemone', 'laya', 'jev', 'Redis bus'."
+description: "Multi-agent coordination, inter-terminal messaging bus, distributed file/mutex locking with monotonic fencing tokens, distributed Redis ZSET cron scheduler (rhizo pulse), System 1 decision model task routing (Laya, Kev, Decider, Jev), orchestrating multi-stage DAG task pipelines, cluster health watchdog sweeping, and worker queues over Redis. Use when coordinating work between multiple AI assistants or terminal sessions, classifying and routing tasks via System 1 decision models, acquiring distributed mutex locks before editing shared files or running migrations/deployments, generating monotonic fencing tokens to prevent zombie writes, dispatching tasks or RPC queries to peer agents, producing/consuming from competing-consumer work queues, orchestrating multi-stage pipelines with automatic dependency resolution, scheduling recurring cron heartbeats or audits with rhizo pulse, reliably claiming tasks with leases and ack/DLQ handling, scattering tasks to a pool for quorum aggregation, sharing scratchpad memory, managing floor control in roundtable brainstorming, setting and checking run cancellation tokens, running blind consensus ballots without anchoring bias, electing resilient mesh leaders with automated lease failover, auditing cluster health and sweeping dead agent/listener garbage, or discovering active teammates and their status. Triggers: 'rhizo', 'pulse', 'rhizo pulse', 'cron', 'recurring task', 'scheduled task', 'coordinate with the other terminal/agent', 'talk to agent', 'send task to', 'ask the other assistant', 'inter-agent chat', 'lock file', 'lock resource', 'mutex lock', 'prevent concurrent edits', 'fencing token', 'monotonic counter', 'zombie writes', 'work queue', 'enqueue task', 'claim task', 'ack task', 'reliable queue', 'dead letter queue', 'dlq', 'blackboard', 'scratchpad', 'shared memory', 'floor control', 'speaker ring', 'moderated roundtable', 'pass floor', 'yield floor', 'cancel task', 'cancel run', 'cancellation token', 'abort run', 'ballot', 'vote', 'consensus', 'blind voting', 'leader election', 'acquire leader', 'failover', 'mesh leader', 'scatter', 'gather', 'quorum', 'workflow', 'dag', 'pipeline', 'task dependencies', 'resolve step', 'workflow next', 'sweep', 'clean dead agents', 'stale locks', 'garbage collection', 'cluster watchdog', 'who is online', 'agent status', 'route task', 'system 1', 'systemone', 'laya', 'jev', 'Redis bus'."
 ---
 
 # Rhizo: High-Performance Inter-Agent Coordination Bus
@@ -261,6 +261,10 @@ Inspect your available runtime tools and execute the highest matching tier:
 | **Acknowledge Advisory**| `rhizo remind ack <id> [--agent <name>]` | Confirms worker internalized directive. With `--once`, suppresses future banners. |
 | **Dismiss Advisory** | `rhizo remind dismiss <id>` | Immediately revokes advisory across entire cluster. |
 | **Trigger Fallback** | `rhizo remind tick [--json]` | Evaluates idle workers and dispatches standalone reminders if cadence elapsed. |
+| **Add Pulse (Cron)** | `rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]` | Registers distributed cron rhythm in Redis sorted set (`rhizo:pulses`). |
+| **List Pulses** | `rhizo pulse list [--json]` | Inspects registered pulses, schedule, target queues, next run time, and ticks. |
+| **Remove Pulse** | `rhizo pulse remove <id>` | Unregisters pulse from distributed schedule. |
+| **Tick Pulses** | `rhizo pulse tick [--max <n>] [--json]` | Atomic cluster sweeper. Enqueues due pulses to target queues and advances cron without duplicates. |
 | **Create Task** | `rhizo task create <id> --title <t> [--deliverables <files>]` | Creates first-class contract with explicit typed deliverables schema. |
 | **Claim Task** | `rhizo task claim <id> [--lease <sec>]` | Atomically claims task and provisions isolated Vine strand (`vine new <id>`). |
 | **Complete Task** | `rhizo task complete <id> [--gate-token <tok>]` | Verifies deliverables and Two-Key Gate before allowing merge to trunk. |
@@ -614,6 +618,30 @@ Exit Codes & Verdicts:
      Pass `--force` (`-f`) to override this check.
    - **Dry Run**:
      Pass `--dry-run` (`-n`) to inspect window discovery and verify matching windows without executing keystrokes.
+
+### M. Distributed Redis ZSET Cron & Heartbeat Pulses (`rhizo pulse`)
+
+Rhizo provides high-availability distributed cron scheduling without requiring background OS daemons or single-point-of-failure loops:
+1. **Register a Recurring Pulse**:
+   ```bash
+   rhizo pulse add "nightly-audit" "0 2 * * *" --queue "queue:rhizo:tasks" --body "Nightly health audit" --title "Nightly Audit"
+   ```
+2. **List Registered Pulses**:
+   ```bash
+   rhizo pulse list [--json]
+   ```
+3. **Cluster Sweeper Tick (`rhizo pulse tick`)**:
+   Any worker or cluster watchdog invoking `rhizo pulse tick` safely evaluates due pulses. Uses atomic Lua scripts over Redis sorted set `rhizo:pulses`:
+   ```bash
+   rhizo pulse tick [--max 10] [--json]
+   ```
+   - Automatically enqueues work items to target queues.
+   - Calculates the next Unix timestamp from the cron expression.
+   - Reschedules atomically with zero duplicate firings across concurrent sweepers.
+4. **Remove a Pulse**:
+   ```bash
+   rhizo pulse remove <pulse_id>
+   ```
 
 ---
 
