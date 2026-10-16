@@ -283,7 +283,7 @@ class TestCoordinationInvariants(unittest.TestCase):
     def test_10_operator_ruling_ledger(self):
         """Verify operator rulings have verifiable cryptographic/ledger status."""
         dec_id = "dec-arch-01"
-        self.run_cmd(["decision", "propose", dec_id, "--title", "Enable APFS Strands", "--by", "architect"])
+        self.run_cmd(["decision", "propose", dec_id, "--title", "Enable Rift Strands", "--by", "architect"])
 
         # Before ruling: verify returns status != APPROVED and exit code 1
         res_v1 = self.run_cmd(["decision", "verify", dec_id])

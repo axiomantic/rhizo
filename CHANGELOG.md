@@ -285,7 +285,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **First-Class Task Lifecycle & Governance (`rhizo task`)**:
   - Added state-machine-governed task objects (`rhizo task create|claim|progress|complete|yield|get|list`) with monotonic status progression (`UNASSIGNED`, `CLAIMED`, `IN_PROGRESS`, `COMPLETED`, `YIELDED`).
   - Enforced single-active-lease invariant per agent and typed deliverables contracts.
-  - Added automatic Vine APFS CoW strand provisioning on `rhizo task claim` (`vine new <task_id>`) and Two-Key Gate verification (`vine gate`) before task completion.
+  - Added automatic Vine Rift CoW strand provisioning on `rhizo task claim` (`vine new <task_id>`) and Two-Key Gate verification (`vine gate`) before task completion.
 - **Cryptographic Operator Decision Ledger (`rhizo decision`)**:
   - Added immutable, verifiable governance rulings (`rhizo decision propose|approve|reject|verify|get|list`) with operator-signed HMAC status.
   - Added gate verification via `rhizo decision verify <id>` (exiting 0 on approved, 1 on non-approved).
