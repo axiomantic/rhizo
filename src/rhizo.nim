@@ -8,7 +8,7 @@ import std/[
 ]
 when defined(posix):
   import posix
-import config, redis, guide, routing, lexicon, std/[net, asyncdispatch, httpclient]
+import config, redis, guide, routing, lexicon, update, std/[net, asyncdispatch, httpclient]
 
 proc isPidAlive*(pid: int): bool =
   if pid <= 0: return false
@@ -5433,6 +5433,7 @@ proc main() =
     echo "  rhizo nuke [--json]"
     echo "  rhizo get-secret"
     echo "  rhizo config <show|get|path|init>"
+    echo "  rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
     echo "  rhizo guide <install|uninstall|check> [path]"
     echo "  rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local]"
     echo ""
@@ -5449,6 +5450,8 @@ proc main() =
 
   let subcmd = args[0].toLowerAscii
   case subcmd
+  of "update":
+    quit(doUpdateCommand(args[1..^1], RhizoVersion, "rhizo"))
   of "config":
     let action = if args.len > 1: args[1].toLowerAscii else: "show"
     case action
@@ -5812,6 +5815,11 @@ proc main() =
     if showAll:
       filterTag = "*"
     echo doDirectory(cfg, filterTag, jsonOutput)
+    if not jsonOutput:
+      let rider = getUpdatePromptRider(RhizoVersion, "rhizo")
+      if rider.len > 0:
+        echo ""
+        echo rider
 
   of "tag":
     if args.len < 3:
@@ -6002,6 +6010,10 @@ proc main() =
         echo $j
       else:
         echo $reply
+        let rider = getUpdatePromptRider(RhizoVersion, "rhizo")
+        if rider.len > 0:
+          echo ""
+          echo rider
     except CatchableError as e:
       if isJson:
         var j = %*{
