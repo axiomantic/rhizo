@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.21] - 2026-10-17
+
+### Added
+- **Triad Update Checking Engine (`src/update.nim`, `src/rhizo.nim`)**:
+  - Unified 24-hour update cadence checking for `garden`, `rhizo`, and `vine` cached in `~/.config/axiomantic/updates.json`.
+  - Smart installation kind auto-detection (`dev_source` git checkout, `local_npm`, `homebrew`, `pnpm`, `yarn`, `bun`, `standalone_binary`, `global_npm`).
+  - Automatic `<!-- TRIAD_UPDATE_RIDER -->` prompt riders attached to `rhizo who` and `rhizo ping` during interactive use.
+  - Full suppression in Autonomous Mode (`AUTONOMOUS_MODE=1` or `.autonomous`) and JSON mode (`--json`).
+  - Added `rhizo update` subcommand supporting `--check`, `--apply`, `--skip <pkg@ver>`, `--disable`, `--enable`, and `--json`.
+- **Garden Guide v2.2 & Vine Guide v1.6 (`AGENTS.md`)**:
+  - Embedded Three-Key Gate (Mechanical, Semantic, Adversarial Code Audit Pump) and Literal Fidelity & Reference Parity Mandate.
+  - Structural Assertion Rigor eliminating Green Mirages.
+
+### Fixed
+- **Packaging & CI Cross-Platform Hardening (`Formula/rhizo.rb`, `packaging/scoop/rhizo.json`, `src/rhizo.nim`, `tests/test_coordination_invariants.py`)**:
+  - Synced Homebrew formula and Scoop manifest specs with repository version `0.2.21`.
+  - Added `findExe("garden")` check in `rhizo listen --roster-guard` to properly fail-open when garden is not installed.
+  - Added path-aware test skips in `test_24` and `test_29` when external peer CLIs (`vine`, `garden`) are not in PATH.
+
 ## [0.2.20] - 2026-10-15
 
 ### Added

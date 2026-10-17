@@ -1149,6 +1149,8 @@ class TestCoordinationInvariants(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_24_two_key_gate_command_interlock(self):
         """Verify the Two-Key Gate Command Interlock in rhizo task complete and rhizo reply with real vine gate integration."""
+        if shutil.which("vine") is None:
+            self.skipTest("vine executable not installed or not in PATH")
         # Provision real canonical git repo matching RHIZO_PROJECT ("coord_test")
         repo_dir = os.path.join(self.test_home, "coord_test")
         os.makedirs(repo_dir, exist_ok=True)
@@ -1682,6 +1684,8 @@ class TestCoordinationInvariants(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_29_roster_guard_bus_alien_rejection(self):
         """Verify that rhizo listen --roster-guard drops alien messages and delivers authorized messages."""
+        if shutil.which("garden") is None:
+            self.skipTest("garden executable not installed or not in PATH")
         swarm_cfg = {
             "project": "coord_test",
             "orchestrator": {"name": "coord_test-orchestrator", "agent": "coord_test-orchestrator"},

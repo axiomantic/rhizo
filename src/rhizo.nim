@@ -87,7 +87,7 @@ const
   pulseLua*      = staticRead("../scripts/pulse.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.20"
+  RhizoVersion*  = "0.2.21"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -2228,11 +2228,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       let useRosterGuard = rosterGuard or (getEnv("RHIZO_ROSTER_GUARD", "0") in ["1", "true", "yes"])
       if useRosterGuard and fromAgent.len > 0:
         var allowed = true
-        try:
+        if findExe("garden").len > 0:
           let (rgOut, rgCode) = execCmdEx("garden roster-guard " & quoteShell(fromAgent) & " --json")
           if rgCode != 0:
             allowed = false
-        except CatchableError:
+        else:
           allowed = true # fail-open if garden executable is not present
 
         if not allowed:
