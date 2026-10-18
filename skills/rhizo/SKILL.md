@@ -83,12 +83,23 @@ Run 'rhizo listen <agent>' with zero timeout (infinite wait). Do not pass bounde
 Never execute 'rhizo listen &' or redirect output ('> /dev/null'). Detaching severs process supervision. Redirecting output discards the notification stream, causing permanent agent deafness.
 </FORBIDDEN>
 
+<FORBIDDEN>
+Never Hijack or Kill Another Session's Active Listener: When 'rhizo listen <agent>' fails with "Error: Listener already active for agent ... (PID X)", an agent MUST NEVER kill that PID, run 'kill <pid>', or pass '--force' unless the agent has verified in its own conversation history that this agent name was explicitly opened and running in THIS session. In 'rhizo who', 'status: STALE' only indicates that no messages have been routed recently; it does NOT mean the blocking listener process in another window is dead or orphaned. Killing listener PIDs from other windows corrupts the cluster, severs peer communication, and hijacks sovereign sessions.
+</FORBIDDEN>
+
 <INVARIANT>
 Ad-Hoc Subagents & No Double-Daemons: Subagents are tools for sessions to run ad-hoc tasks, never cluster swarm workers or listener relays. If an ad-hoc subagent is explicitly requested by the operator for a one-off inspection, 'rhizo listen' inside that subagent must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents.
 </INVARIANT>
 
 <INVARIANT>
 Identity Allocation: Agent identity must be unique and collision-free across projects. Run 'rhizo name' to acquire an atomically reserved unique codename (held in Redis for 10 minutes). Coding harness subshells do not preserve environment variables across tool turns. Record the literal name output from 'rhizo name' (e.g. 'rhizo-sequoia') in your reasoning context and pass it explicitly in all subsequent commands: 'rhizo open <name>', 'rhizo listen <name>'.
+</INVARIANT>
+
+<INVARIANT>
+Unbootstrapped Session Identity Invariant: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or 'garden-swarm.json' (especially NEVER '<project>-orchestrator'). If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
+1. Run 'rhizo name' to allocate a fresh unique identity, followed by 'rhizo open <name>', OR
+2. Ask the operator via 'ask_question' which persona or role this window represents.
+Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.
 </INVARIANT>
 
 <INVARIANT>

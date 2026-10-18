@@ -2841,6 +2841,7 @@ secret = "my_inline_secret_test_555"
                 dup_res.stderr
             )
             self.assertIn("Refusing to start duplicate listener.", dup_res.stderr)
+            self.assertIn("CRITICAL GUARD FOR AI ASSISTANTS: If you are an AI assistant in a separate session/window, DO NOT kill PID", dup_res.stderr)
 
             # 3. Assert original listener lock in Redis is 100% preserved and unmodified
             chk_after = subprocess.run(

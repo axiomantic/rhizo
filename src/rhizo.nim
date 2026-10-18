@@ -5629,6 +5629,7 @@ proc main() =
     var name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
     if name.len == 0:
       stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name ('rhizo listen <name>'), or export RHIZO_AGENT_NAME=<name>.")
+      stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <name>'. Do NOT guess an existing identity from 'rhizo who' or 'garden-swarm.json'.")
       quit(1)
     else:
       name = ensureProjectScopedName(cfg, name)
@@ -5637,6 +5638,7 @@ proc main() =
       let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, name)
       if alreadyListening:
         stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
+        stderr.writeLine("CRITICAL GUARD FOR AI ASSISTANTS: If you are an AI assistant in a separate session/window, DO NOT kill PID " & $existingPid & " and DO NOT assume it is an orphaned process! That process is actively listening for messages for agent '" & name & "' in another session. You must allocate your own identity via 'rhizo name' + 'rhizo open <name>' or ask the operator which persona this window represents.")
         quit(1)
 
     doListen(cfg, name, timeout, notify, quiet, forceListen, continuous, rosterGuard)

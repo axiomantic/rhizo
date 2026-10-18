@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Unbootstrapped Session Identity & Active Listener Hijacking Guardrails (`src/rhizo.nim`, `src/guide.nim`, `skills/rhizo/SKILL.md`)**:
+  - Added explicit warning messages to `rhizo listen` when refusing duplicate listeners, warning AI assistants against killing active listener PIDs or assuming they are orphaned.
+  - Added guidance when no agent name is specified, prohibiting unbootstrapped sessions from guessing identities from `rhizo who` or `garden-swarm.json`.
+  - Bumped Rhizo Guide to `v1.8` with the `Unbootstrapped Session Identity Invariant` and `Never Hijack or Kill Another Session's Active Listener` rule.
+
 ## [0.2.21] - 2026-10-17
 
 ### Added
