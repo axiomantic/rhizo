@@ -102,7 +102,7 @@ Aggressive Replacement Purge: Any existing code, configurations, or fallbacks th
 </CRITICAL>
 <!-- END RHIZO GUIDE -->
 
-<!-- BEGIN VINE GUIDE [v1.6] -->
+<!-- BEGIN VINE GUIDE [v1.7] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `vine guide install` -->
 
 ## Vine Workspace & Strand Coordination Guide
@@ -136,6 +136,8 @@ npm install -g @axiomantic/rhizo @axiomantic/vine
   When recreating, porting, reverse-engineering, duplicating functionality from an existing reference, or executing an operator directive where fidelity is expected, the deliverable must exhibit literal, true fidelity. Approximations ("looks right", "good enough for happy paths", or "approximate heuristic") are STRICTLY REJECTED. The implementation must literally be the thing that was asked for, matching all edge cases, type boundaries, flags, and error flows.
 * **Structural Assertion Rigor (Anti-Green-Mirage)**:
   Partial or loose assertions ("loosey goosey" tests like `assert "foo" in bar` or `assert len(arr) > 0`) are strictly forbidden. Tests must assert complete object equality (`assert actual == expected`) and cover negative controls.
+* **Pre-Weave Changelog Invariant**:
+  Whenever a project has an existing changelog (`CHANGELOG.md`, `changelog.md`, `CHANGES.md`, etc.), deliverables MUST document their changes under `## [Unreleased]` before passing Key 2. Strands with substantive changes that fail to update an existing changelog are rejected at Key 2 (`GATE_CHANGELOG_VIOLATION`, exit code 5) unless explicitly bypassed with `--allow-no-changelog` or `allow_no_changelog = true` in `vine.toml`.
 
 ---
 
@@ -260,7 +262,7 @@ git merge-tree --write-tree "$BASE_BRANCH" HEAD
 - **Exit 0**: Clean mechanical merge.
 - **Exit 1**: Conflicts detected. Resolve conflicts *inside the Strand* before touching canonical trunk.
 
-#### Key 2: Live Compiler & Test Suite Gate (Zero Green Mirage)
+#### Key 2: Live Compiler, Test Suite & Changelog Gate (Zero Green Mirage)
 Execute the project's actual build and test suite inside the Strand:
 ```bash
 # Inferred from project or configured in vine.toml:
@@ -269,6 +271,7 @@ vine gate
 vine gate -- <custom-test-command>
 ```
 *Never bypass this gate. `git merge-tree` only verifies text mergeability, not compilation or semantic correctness.*
+* **Changelog Validation**: If a changelog file exists in the repository, `vine gate` verifies that it is modified under the `## [Unreleased]` section. Update it via `vine changelog "Description of changes"` or use `vine changelog --ensure-unreleased` to scaffold the section. For non-user-facing or test-only tasks, pass `--allow-no-changelog`.
 
 #### Key 3: Pre-Weave Adversarial Code Audit Pump
 Execute the Five-Pillar adversarial code audit under the presumption of guilt:
@@ -297,7 +300,7 @@ command -v rift >/dev/null 2>&1 && rift prune >/dev/null 2>&1 || true
 ```
 <!-- END VINE GUIDE -->
 
-<!-- BEGIN GARDEN GUIDE [v2.3] -->
+<!-- BEGIN GARDEN GUIDE [v2.4] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `garden guide install` -->
 
 ## Garden Multi-Agent Swarm & Ceremony Guide
@@ -349,13 +352,13 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
 * **Post-Compaction Ceremony Restoration**:
   Whenever context compaction occurs in a session that used Garden, Rhizo, or Vine, the compaction summary MUST include an explicit directive commanding the resurrected agent to re-read the active coordination skills (`garden`, `orchestrate-swarm`, `rhizo`, `vine`) before executing any further tools. Upon waking from compaction, the agent MUST immediately re-read those skills to restore ceremony, gate protocols, and listener discipline. This directive must remain intact across all future compactions.
 * **Worker Autonomous Execution Invariant**:
-  When 'rhizo listen' unblocks and exits, a task has been delivered! Swarm workers operate as sovereign, autonomous implementers, not passive chatbots. Workers MUST NOT wait for an operator prompt or ask "Shall I start?". They MUST immediately transition to active execution: claim the task, enter the isolated Vine strand, perform the work, verify the Three-Key Gate, report results, and re-arm the single-shot listener.
+  When 'rhizo listen' unblocks and exits, a task has been delivered! Swarm workers operate as sovereign, autonomous implementers, not passive chatbots. Workers MUST NOT wait for an operator prompt or ask "Shall I start?". They MUST immediately transition to active execution: claim the task, enter the isolated Vine strand, perform the work, update the changelog (`vine changelog`) if present, verify the Three-Key Gate, report results, and re-arm the single-shot listener.
 
 ### 3. The Three-Key Gate & Strand Weaving
 Never weave a strand into the canonical trunk without passing all three keys:
 * **Key 1 (Mechanical)**: In-memory conflict pre-check (`git merge-tree --write-tree`).
-* **Key 2 (Semantic)**: Automated compiler and test suite run inside the strand (`vine gate`).
-* **Key 3 (Adversarial Code Audit Pump)**: Five-pillar adversarial audit under the presumption of guilt (Two-point diff, holistic integration, literal fidelity, carcass purge, structural assertions) with iterative Delta Re-Pump loop until 0 open defects remain.
+* **Key 2 (Semantic & Changelog)**: Automated compiler, test suite, and changelog verification inside the strand (`vine gate`). If the repository contains a changelog, changes must be documented under `## [Unreleased]`.
+* **Key 3 (Adversarial Code Audit Pump)**: Five-pillar adversarial audit under the presumption of guilt (Changelog gate, Two-point diff, holistic integration, literal fidelity, carcass purge, structural assertions) with iterative Delta Re-Pump loop until 0 open defects remain.
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 * **Post-Push CI Verification**: After weaving and pushing to remote when CI is running, if your coding harness supports native timers/schedules, set a periodic check (default: every 5m, max 12 checks / 1h) to verify CI completion (`gh run list` / `gh run view`) and cancel the timer once CI passes or fails.
 <!-- END GARDEN GUIDE -->
@@ -455,6 +458,8 @@ Agents and human engineers operating in this repository must consult the dedicat
 | **CLI Reference Manual** | [`docs/cli_reference.md`](docs/cli_reference.md) | Comprehensive catalog of all 35+ commands, subcommands, flags, and JSON formats. |
 | **Configuration Architecture** | [`docs/configuration.md`](docs/configuration.md) | Layered configuration files, environment variables, and Redis security profiles. |
 | **Routes Schema Reference** | [`docs/routes_schema.md`](docs/routes_schema.md) | YAML schema definition, match operators, and queue interpolation. |
+
+
 
 
 
