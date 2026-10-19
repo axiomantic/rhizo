@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-10-18
+
 ### Added
 - **Unbootstrapped Session Identity & Active Listener Hijacking Guardrails (`src/rhizo.nim`, `src/guide.nim`, `skills/rhizo/SKILL.md`)**:
   - Added explicit warning messages to `rhizo listen` when refusing duplicate listeners, warning AI assistants against killing active listener PIDs or assuming they are orphaned.
