@@ -1194,6 +1194,101 @@ class TestRhizoNimBinary(unittest.TestCase):
         finally:
             self.run_rhizo(["close", agent])
 
+    def test_21b_inbox_subcommand_and_flags(self):
+        """Verify that 'rhizo inbox' defaults to draining, supports --limit, --peek, --no-drain, and positional variants."""
+        agent = "agent_inbox_test"
+        self.run_rhizo(["close", agent])
+        self.run_rhizo(["open", agent, "worker"])
+
+        try:
+            inbox_key = f"{TEST_PREFIX}inbox:{agent}"
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key], check=True, capture_output=True)
+
+            # Send 4 messages
+            for i in range(1, 5):
+                res_send = self.run_rhizo([
+                    "send",
+                    "--to", agent,
+                    "--subject", f"Inbox Task {i}",
+                    "--body", f"Inbox Body {i}"
+                ])
+                self.assertEqual(res_send.returncode, 0)
+
+            # 1. Non-destructive peek using --peek
+            res_peek = self.run_rhizo(["inbox", agent, "--limit", "2", "--peek"])
+            self.assertEqual(res_peek.returncode, 0)
+            data_peek = json.loads(res_peek.stdout)
+            self.assertEqual(len(data_peek), 2)
+            self.assertEqual(data_peek[0]["subject"], "Inbox Task 1")
+            self.assertEqual(data_peek[1]["subject"], "Inbox Task 2")
+
+            # Queue length must still be 4 after --peek
+            llen_peek = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(int(llen_peek), 4, "Queue length must remain 4 after --peek")
+
+            # 2. Non-destructive peek using --no-drain (synonym)
+            res_nodrain = self.run_rhizo(["inbox", agent, "-l", "3", "--no-drain"])
+            self.assertEqual(res_nodrain.returncode, 0)
+            data_nodrain = json.loads(res_nodrain.stdout)
+            self.assertEqual(len(data_nodrain), 3)
+
+            llen_nodrain = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(int(llen_nodrain), 4, "Queue length must remain 4 after --no-drain")
+
+            # 3. Default behavior of rhizo inbox is DRAIN (popping up to limit)
+            res_drain_default = self.run_rhizo(["inbox", agent, "--limit", "2"])
+            self.assertEqual(res_drain_default.returncode, 0)
+            data_drain = json.loads(res_drain_default.stdout)
+            self.assertEqual(len(data_drain), 2)
+            self.assertEqual(data_drain[0]["subject"], "Inbox Task 1")
+            self.assertEqual(data_drain[1]["subject"], "Inbox Task 2")
+
+            llen_after_drain = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(int(llen_after_drain), 2, "Inbox must contain 2 items after default drain")
+
+            # 4. Explicit --drain overrides --peek
+            res_override = self.run_rhizo(["inbox", agent, "--limit", "1", "--peek", "--drain"])
+            self.assertEqual(res_override.returncode, 0)
+            llen_after_override = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(int(llen_after_override), 1, "Explicit --drain must pop message even if --peek was passed")
+
+            # 5. rhizo drain also supports --limit
+            res_drain_limit = self.run_rhizo(["drain", agent, "--limit", "1"])
+            self.assertEqual(res_drain_limit.returncode, 0)
+            llen_final = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(int(llen_final), 0, "Inbox must now be empty")
+
+            # 6. Positional argument flexibility: rhizo inbox 50 <agent> vs rhizo inbox <agent> 50
+            for i in range(1, 3):
+                self.run_rhizo(["send", "--to", agent, "--subject", f"Pos {i}", "--body", f"Pos {i}"])
+
+            res_pos1 = self.run_rhizo(["inbox", "1", agent])
+            self.assertEqual(res_pos1.returncode, 0)
+            data_pos1 = json.loads(res_pos1.stdout)
+            self.assertEqual(data_pos1["subject"], "Pos 1")
+
+            res_pos2 = self.run_rhizo(["inbox", agent, "1"])
+            self.assertEqual(res_pos2.returncode, 0)
+            data_pos2 = json.loads(res_pos2.stdout)
+            self.assertEqual(data_pos2["subject"], "Pos 2")
+        finally:
+            self.run_rhizo(["close", agent])
+
     def test_22_crypto_tmp_cleanup_guarantee(self):
         """Verify that encrypt/decrypt operations leave zero temporary files, even during induced crypto failures and reap stale files."""
         agent = "agent_crypto_cleanup_test"

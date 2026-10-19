@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **First-Class `rhizo inbox` Subcommand (`src/rhizo.nim`, `scripts/peek.lua`, `tests/test_nim_binary.py`)**:
+  - Added dedicated `rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain]` command for consuming or inspecting agent inboxes.
+  - Defaults to **draining** (atomically popping messages FIFO oldest first) so that messages are consumed without piling up.
+  - Added non-destructive inspection via `--peek` and `--no-drain` flags (backed by Redis `LRANGE` via `scripts/peek.lua`), leaving inbox queues untouched.
+  - Added `--limit <N>` and `-l <N>` flags across both `rhizo inbox` and `rhizo drain`.
+  - Added support for polymorphic positional arguments (`rhizo inbox <agent> [count]` or `rhizo inbox [count] [agent]`), resolving the active session agent if omitted.
+  - Added command suggestions directing `rhizo mail`, `rhizo mailbox`, and `rhizo messages` to `rhizo inbox`.
+
 ## [0.2.22] - 2026-10-18
 
 ### Added

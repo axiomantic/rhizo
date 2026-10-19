@@ -678,7 +678,8 @@ npx skills remove rhizo -g
 | `rhizo tag <add\|remove\|set> <tags>` | Dynamically adjusts tags without dropping queued messages. | `rhizo tag add "lead"` |
 | `rhizo session <set\|get\|remove\|list> [args...]` | Manages global `<runtime>:<sessionId>` to agent mappings. | `rhizo session set opencode:ses_123 worker-1` |
 | `rhizo check-inbox [name]` | High-speed inbox check (exits 0 with count if messages exist, exits 1 if empty). | `rhizo check-inbox worker-1` |
-| `rhizo drain [count] [name] [--format json\|hook\|raw] [--hook]` | Atomically pops, authenticates, and decrypts offline messages (FIFO). Supports prompt formatting for LLM hooks. | `rhizo drain 10 worker-1 --hook` |
+| `rhizo inbox [name] [count] [--limit N] [--peek\|--no-drain] [--drain]` | Consumes or inspects messages (FIFO oldest first). Drains by default; peeks with `--peek`/`--no-drain`. | `rhizo inbox worker-1 --limit 50` |
+| `rhizo drain [count] [name] [--limit N] [--format json\|hook\|raw] [--hook]` | Atomically pops, authenticates, and decrypts offline messages (FIFO). Supports prompt formatting for LLM hooks. | `rhizo drain 10 worker-1 --hook` |
 | `rhizo close [name] [--session-id <key>]` | Graceful deregistration, clears tags, heartbeat, and session mapping. | `rhizo close` |
 | `rhizo get-secret` | Prints or initializes 256-bit cluster secret. | `rhizo get-secret` |
 | `rhizo config <show\|get\|path\|init>` | Introspects resolved settings, provenance, and paths. | `rhizo config show` or `rhizo config get redis_url` |

@@ -60,6 +60,7 @@ const
   multicastLua*  = staticRead("../scripts/multicast.lua")
   directoryLua*  = staticRead("../scripts/directory.lua")
   drainLua*      = staticRead("../scripts/drain.lua")
+  peekLua*       = staticRead("../scripts/peek.lua")
   tagLua*        = staticRead("../scripts/tag.lua")
   unregisterLua* = staticRead("../scripts/unregister.lua")
   statusLua*     = staticRead("../scripts/status.lua")
@@ -100,6 +101,7 @@ let
   multicastSha*  = computeSha1(multicastLua)
   directorySha*  = computeSha1(directoryLua)
   drainSha*      = computeSha1(drainLua)
+  peekSha*       = computeSha1(peekLua)
   tagSha*        = computeSha1(tagLua)
   unregisterSha* = computeSha1(unregisterLua)
   statusSha*     = computeSha1(statusLua)
@@ -1130,19 +1132,21 @@ proc detectHarness*(cfg: RhizoConfig): string =
 
   return "unknown"
 
-proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false): string =
+proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false, peek: bool = false): string =
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
   let stealFlag = if forceSteal or cfg.forceSteal: "1" else: "0"
   var argSeq: seq[string] = @[cfg.prefix, sanitizeIdentifier(name), $count, cfg.project, stealFlag]
+  let targetSha = if peek: peekSha else: drainSha
+  let targetLua = if peek: peekLua else: drainLua
   var resp: RedisValue
   try:
-    resp = client.evalSha(drainSha, @[], argSeq)
+    resp = client.evalSha(targetSha, @[], argSeq)
   except RedisError as e:
     if "NOSCRIPT" in e.msg:
       try:
-        resp = client.eval(drainLua, @[], argSeq)
+        resp = client.eval(targetLua, @[], argSeq)
       except CatchableError as e2:
         if "ERR_CROSS_PROJECT" in e2.msg:
           stderr.writeLine("Error: " & e2.msg)
@@ -1228,7 +1232,8 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       parsed["age_human"] = %ageHuman
       if elapsedSec >= 3600:
         parsed["is_stale"] = %true
-        stderr.writeLine("⚠️  [RHIZO WARNING] Stale message drained! Age: " & ageHuman & " (sent at " & ts & ").")
+        let verb = if peek: "peeked" else: "drained"
+        stderr.writeLine("⚠️  [RHIZO WARNING] Stale message " & verb & "! Age: " & ageHuman & " (sent at " & ts & ").")
       else:
         parsed["is_stale"] = %false
 
@@ -1239,7 +1244,8 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       return ""
     var lines: seq[string] = @[]
     let plural = if validMessages.len == 1: "1 new message" else: $validMessages.len & " new messages"
-    lines.add("[RHIZO BUS] " & plural & " received on inbox for '" & name & "':")
+    let headerAction = if peek: " peeked (unread)" else: " received"
+    lines.add("[RHIZO BUS] " & plural & headerAction & " on inbox for '" & name & "':")
     for m in validMessages:
       let fromA = m.getOrDefault("from").getStr("unknown")
       let subj = m.getOrDefault("subject").getStr("")
@@ -1253,7 +1259,7 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       header.add(" [type: " & msgType & ", urgency: " & urgency & "]:")
       lines.add(header)
       lines.add("  " & body.replace("\n", "\n  "))
-    if validMessages.len > 0:
+    if validMessages.len > 0 and not peek:
       let harness = detectHarness(cfg)
       lines.add("")
       lines.add("[RHIZO NEXT-STEP ACTION]:")
@@ -1273,7 +1279,7 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       lines.add("- See SKILL.md Step 2 for complete harness-specific integration playbooks.")
     return lines.join("\n")
 
-  if validMessages.len > 0:
+  if validMessages.len > 0 and not peek:
     let piggy = evaluatePiggyback(cfg, name, 2)
     let rems = piggy.getOrDefault("reminders")
     if rems != nil and rems.kind == JArray and rems.len > 0:
@@ -1292,6 +1298,9 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
   for m in validMessages:
     arr.add(m)
   return $arr
+
+proc doInbox*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false, peek: bool = false): string =
+  doDrain(cfg, name, count, format, forceSteal, peek)
 
 proc doUnregister*(cfg: RhizoConfig, name: string): string =
   let normName = name.toLowerAscii
@@ -5426,7 +5435,8 @@ proc main() =
     echo "  rhizo sweep [--dry-run] [--raw]"
     echo "  rhizo tag <add|remove|set> <tags> [name]"
     echo "  rhizo check-inbox [name]"
-    echo "  rhizo drain [count] [name] [--format json|hook|raw] [--hook]"
+    echo "  rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain] [--json|--hook|--raw]"
+    echo "  rhizo drain [count] [name] [--limit N] [--format json|hook|raw] [--hook]"
     echo "  rhizo ping [--json]"
     echo "  rhizo close [name]"
     echo "  rhizo reset [project] [--all/-a] [--json]"
@@ -5861,19 +5871,27 @@ proc main() =
     else:
       quit(1)
 
-  of "drain":
+  of "drain", "inbox":
     var count = 50
     var explicitName = ""
     var format = "json"
     var forceSteal = false
+    var peek = false
     var positionalIdx = 0
     var i = 1
     while i < args.len:
       let a = args[i]
       if a in ["--force-steal", "--steal"]:
         forceSteal = true
+      elif a in ["--peek", "--no-drain"]:
+        peek = true
+      elif a == "--drain":
+        peek = false
       elif a.startsWith("--format="):
         format = a[9..^1].toLowerAscii
+      elif a == "--format" and i + 1 < args.len:
+        format = args[i+1].toLowerAscii
+        inc i
       elif a in ["--hook", "-H"]:
         format = "hook"
       elif a in ["--json", "-j"]:
@@ -5890,26 +5908,34 @@ proc main() =
       elif (a == "--count" or a == "-c") and i + 1 < args.len:
         count = parseRequiredInt(args[i+1], "--count")
         inc i
+      elif a.startsWith("--limit="):
+        count = parseRequiredInt(a[8..^1], "--limit")
+      elif (a == "--limit" or a == "-l") and i + 1 < args.len:
+        count = parseRequiredInt(args[i+1], "--limit")
+        inc i
       elif not a.startsWith("-"):
         inc positionalIdx
         if positionalIdx == 1:
           try:
             count = parseInt(a)
           except ValueError:
-            var isKnownAgent = false
-            try:
-              var client = connectRedis(cfg.redisUrl)
-              defer: (try: client.close() except CatchableError: discard)
-              if client.sIsMember(cfg.prefix & "active_agents", a.toLowerAscii) == 1 or client.exists(cfg.prefix & "agent:" & a.toLowerAscii):
-                isKnownAgent = true
-            except CatchableError:
-              discard
-            if isKnownAgent:
+            if subcmd == "inbox":
               explicitName = a.toLowerAscii
             else:
-              stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
-              stderr.writeLine("Usage: rhizo drain [count] [name]")
-              quit(1)
+              var isKnownAgent = false
+              try:
+                var client = connectRedis(cfg.redisUrl)
+                defer: (try: client.close() except CatchableError: discard)
+                if client.sIsMember(cfg.prefix & "active_agents", a.toLowerAscii) == 1 or client.exists(cfg.prefix & "agent:" & a.toLowerAscii) or client.exists(cfg.prefix & "inbox:" & a.toLowerAscii):
+                  isKnownAgent = true
+              except CatchableError:
+                discard
+              if isKnownAgent:
+                explicitName = a.toLowerAscii
+              else:
+                stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
+                stderr.writeLine("Usage: rhizo drain [count] [name]")
+                quit(1)
         elif positionalIdx == 2:
           if explicitName.len == 0:
             explicitName = a.toLowerAscii
@@ -5917,7 +5943,8 @@ proc main() =
             try:
               count = parseInt(a)
             except ValueError:
-              stderr.writeLine("Error: Invalid count '" & a & "' for drain command. Expected an integer.")
+              stderr.writeLine("Error: Invalid count '" & a & "' for " & subcmd & " command. Expected an integer.")
+              stderr.writeLine("Usage: rhizo " & subcmd & " [name] [count]")
               quit(1)
       inc i
 
@@ -5925,7 +5952,7 @@ proc main() =
     if name.len == 0:
       stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name, or export RHIZO_AGENT_NAME=<name>.")
       quit(1)
-    let output = doDrain(cfg, name, count, format, forceSteal)
+    let output = doDrain(cfg, name, count, format, forceSteal, peek)
     if format == "hook" and output.len == 0:
       discard
     else:
@@ -8394,6 +8421,8 @@ proc main() =
       suggestion = "audit"
     elif lowCmd in ["pop", "consume"]:
       suggestion = "drain"
+    elif lowCmd in ["mail", "mailbox", "messages"]:
+      suggestion = "inbox"
     elif lowCmd in ["clean", "gc", "purge"]:
       suggestion = "sweep"
     elif lowCmd in ["reminders", "sticky", "banner", "advisory", "notice", "alert", "warn"]:

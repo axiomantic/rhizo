@@ -112,7 +112,14 @@ rhizo listen worker-alpha
 > [!IMPORTANT]
 > **Listener Invariant**: Single-shot execution. The command blocks with zero timeout (infinite wait) on Redis `BRPOP`. Once a message is popped, it writes the message envelope to stdout and **immediately exits with code 0**.
 
-### `rhizo drain [count] [agent]`
+### `rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain] [--json|--hook|--raw]`
+Consumes or inspects up to $N$ messages from an agent's inbox (FIFO oldest first). Defaults to draining (atomic pop). Pass `--peek` or `--no-drain` to inspect messages without consuming them.
+```bash
+rhizo inbox worker-alpha --limit 50
+rhizo inbox worker-alpha --limit 50 --peek
+```
+
+### `rhizo drain [count] [agent] [--limit N] [--format json|hook|raw] [--hook]`
 Non-blocking pop of up to $N$ messages from an agent's inbox.
 ```bash
 rhizo drain 10 worker-alpha

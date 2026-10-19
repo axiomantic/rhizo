@@ -485,7 +485,7 @@ rhizo remind add "MUST run vine gate before completing any task" \
   --cadence 15m \
   --ttl 4h
 ```
-- **Opportunistic Piggyback**: When an agent drains or listens (`rhizo drain`, `rhizo listen`), Rhizo automatically attaches the top active advisories to the incoming message payload if the agent's cadence window has elapsed.
+- **Opportunistic Piggyback**: When an agent drains or listens (`rhizo drain`, `rhizo inbox`, `rhizo listen`), Rhizo automatically attaches the top active advisories to the incoming message payload if the agent's cadence window has elapsed.
 - **Cadence Anti-Fatigue**: Reminders are not repeated on every message. Once shown, the agent enters a cooldown window (`--cadence 15m`), keeping messages clean.
 - **Standalone Fallback**: If an agent is idle or receives no peer messages across its cadence window, `rhizo remind tick` dispatches a standalone HMAC-signed broadcast into its inbox.
 
