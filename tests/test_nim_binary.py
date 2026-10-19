@@ -5738,7 +5738,8 @@ secret = "my_inline_secret_test_555"
             ])
             _, stderr_codex = proc_codex.communicate(timeout=5)
             self.assertEqual(proc_codex.returncode, 0)
-            self.assertIn("Autonomous Stop Hook", stderr_codex)
+            self.assertIn("Codex Native Wakeup", stderr_codex)
+            self.assertIn("RHIZO_WAKE", stderr_codex)
             self.assertNotIn("Subagent", stderr_codex)
 
             # 4. Antigravity harness detection
@@ -5868,6 +5869,156 @@ secret = "my_inline_secret_test_555"
         self.assertEqual(probe_json["task_progress"], "50% done")
         self.assertGreater(probe_json["task_lease_remaining_sec"], 0)
 
+    def test_71_codex_native_wakeup_protocol(self):
+        """Verify the complete Codex-native wakeup protocol (RHIZO_WAKE).
+
+        Covers:
+        - Session mapping CRUD, reverse lookup by agent name, and thread-id extraction
+        - rhizo session resolve with text and JSON formats
+        - Sender behavior: actionable task vs routine ACK guidance
+        - Queued message with no listener
+        - Message consumed by completed listener with empty inbox
+        - Multiple messages & arrival during processing/rearming
+        - Existing live listener preservation with no duplicate created
+        - Missing/stale session mapping error handling
+        - Project isolation and cleanup
+        """
+        thread_id = "01934e8f-7c12-70b0-a59e-e3146e297801"
+        session_key = f"codex:{thread_id}"
+        codex_agent = f"worker_codex_{int(time.time() * 1000)}"
+        sender_agent = f"sender_{int(time.time() * 1000)}"
+
+        try:
+            # 1. Session Registration
+            set_res = self.run_rhizo(["session", "set", session_key, codex_agent])
+            self.assertEqual(set_res.returncode, 0)
+            self.assertIn(f"OK [session] {session_key} -> {codex_agent}", set_res.stdout)
+
+            # 2. Reverse resolution: session key -> agent name (backward compat)
+            get_by_key = self.run_rhizo(["session", "get", session_key])
+            self.assertEqual(get_by_key.returncode, 0)
+            self.assertEqual(get_by_key.stdout.strip(), codex_agent)
+
+            # 3. Reverse resolution: agent name -> session key
+            get_by_agent = self.run_rhizo(["session", "get", codex_agent])
+            self.assertEqual(get_by_agent.returncode, 0)
+            self.assertEqual(get_by_agent.stdout.strip(), session_key)
+
+            # 4. Thread ID extraction
+            get_thread_agent = self.run_rhizo(["session", "get", codex_agent, "--thread-id"])
+            self.assertEqual(get_thread_agent.returncode, 0)
+            self.assertEqual(get_thread_agent.stdout.strip(), thread_id)
+
+            get_thread_key = self.run_rhizo(["session", "get", session_key, "--thread-id"])
+            self.assertEqual(get_thread_key.returncode, 0)
+            self.assertEqual(get_thread_key.stdout.strip(), thread_id)
+
+            # 5. rhizo session resolve (text and JSON)
+            res_resolve_text = self.run_rhizo(["session", "resolve", codex_agent])
+            self.assertEqual(res_resolve_text.returncode, 0)
+            self.assertIn("Session Resolution:", res_resolve_text.stdout)
+            self.assertIn(f"- Agent           : {codex_agent}", res_resolve_text.stdout)
+            self.assertIn("- Harness         : codex", res_resolve_text.stdout)
+            self.assertIn(f"- Thread ID       : {thread_id}", res_resolve_text.stdout)
+            self.assertIn('send_message_to_thread(thread_id="' + thread_id + '", message="RHIZO_WAKE")', res_resolve_text.stdout)
+
+            res_resolve_json = self.run_rhizo(["session", "resolve", codex_agent, "--json"])
+            self.assertEqual(res_resolve_json.returncode, 0)
+            sess_info = json.loads(res_resolve_json.stdout.strip())
+            self.assertEqual(sess_info["agent"], codex_agent)
+            self.assertEqual(sess_info["harness"], "codex")
+            self.assertEqual(sess_info["thread_id"], thread_id)
+            self.assertTrue(sess_info["native_wakeup_required"])
+            self.assertEqual(sess_info["wake_trigger"], "RHIZO_WAKE")
+            self.assertEqual(sess_info["wake_tool_call"]["tool"], "send_message_to_thread")
+            self.assertEqual(sess_info["wake_tool_call"]["parameters"]["thread_id"], thread_id)
+            self.assertEqual(sess_info["wake_tool_call"]["parameters"]["message"], "RHIZO_WAKE")
+
+            # 6. Sender sends actionable task to Codex recipient
+            send_res = self.run_rhizo(["send", codex_agent, "Feature X", "Build the widget", "--from", sender_agent])
+            self.assertEqual(send_res.returncode, 0)
+            self.assertIn("[RHIZO CODEX-WAKE ACTION]:", send_res.stdout)
+            self.assertIn(f"send_message_to_thread(thread_id=\"{thread_id}\", message=\"RHIZO_WAKE\")", send_res.stdout)
+            self.assertIn("Send one wakeup per actionable batch. Do not send wakeups for routine ACKs.", send_res.stdout)
+
+            # 7. Sender sends task with --json
+            send_json_res = self.run_rhizo(["send", codex_agent, "Feature Y", "Build part 2", "--from", sender_agent, "--json"])
+            self.assertEqual(send_json_res.returncode, 0)
+            send_data = json.loads(send_json_res.stdout.strip())
+            self.assertEqual(send_data["recipient"], codex_agent)
+            self.assertTrue(send_data["native_wakeup_required"])
+            self.assertFalse(send_data["is_routine_ack"])
+            self.assertEqual(send_data["wake_trigger"], "RHIZO_WAKE")
+            self.assertEqual(send_data["wake_tool_call"]["parameters"]["thread_id"], thread_id)
+
+            # 8. Sender sends routine ACK reply
+            reply_res = self.run_rhizo(["reply", "--to", codex_agent, "--subject", "Re: Done", "--body", "ACK", "--from", sender_agent])
+            self.assertEqual(reply_res.returncode, 0)
+            self.assertIn("DO NOT wake the peer (prevents ACK ping-pong loops)", reply_res.stdout)
+
+            # 9. Queued message without listener: recipient wakes up, drains, and processes backlog
+            drain_res = self.run_rhizo(["drain", "10", codex_agent, "--json"])
+            self.assertEqual(drain_res.returncode, 0)
+            drained_msgs = json.loads(drain_res.stdout.strip())
+            self.assertEqual(len(drained_msgs), 3)
+            self.assertEqual(drained_msgs[0]["subject"], "Feature X")
+            self.assertEqual(drained_msgs[1]["subject"], "Feature Y")
+
+            # 10. Message consumed by completed listener, empty inbox
+            # Launch listener in background with test environment
+            listener_proc = subprocess.Popen(
+                [BIN_PATH, "listen", codex_agent, "5", "--notify"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env
+            )
+            time.sleep(0.3)
+
+            # Sender dispatches message while listener is active
+            self.run_rhizo(["send", codex_agent, "Live Task", "Payload while listening", "--from", sender_agent])
+
+            # Wait for listener to complete and capture output
+            stdout, stderr = listener_proc.communicate(timeout=5)
+            self.assertEqual(listener_proc.returncode, 0)
+            consumed_msg = json.loads(stdout.strip())
+            self.assertEqual(consumed_msg["subject"], "Live Task")
+
+            # Crucial assertion: Redis inbox is now EMPTY because the listener consumed it!
+            drain_empty = self.run_rhizo(["drain", "10", codex_agent, "--json"])
+            self.assertEqual(drain_empty.returncode, 0)
+            self.assertEqual(json.loads(drain_empty.stdout.strip()), [])
+
+            # 11. Existing live listener: verify duplicate listener prevention
+            active_listener = subprocess.Popen(
+                [BIN_PATH, "listen", codex_agent, "10"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env
+            )
+            time.sleep(0.3)
+            try:
+                # Attempt to launch duplicate listener
+                dup_res = self.run_rhizo(["listen", codex_agent, "2"])
+                self.assertNotEqual(dup_res.returncode, 0)
+                self.assertIn(f"Listener already active for agent '{codex_agent}'", dup_res.stderr)
+                self.assertIn("CRITICAL GUARD FOR AI ASSISTANTS", dup_res.stderr)
+            finally:
+                active_listener.terminate()
+                active_listener.communicate()
+
+            # 12. Missing / unconfigured session lookup error handling
+            bad_lookup = self.run_rhizo(["session", "get", "non_existent_random_agent"])
+            self.assertNotEqual(bad_lookup.returncode, 0)
+            self.assertIn("Session not found", bad_lookup.stderr)
+
+        finally:
+            self.run_rhizo(["session", "remove", session_key])
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}inbox:{codex_agent}"], capture_output=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}listener:{codex_agent}"], capture_output=True)
+
 
 if __name__ == "__main__":
     unittest.main()
+

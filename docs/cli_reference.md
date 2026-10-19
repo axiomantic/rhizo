@@ -254,3 +254,33 @@ Evaluates and fires due pulses, dispatching them to target agent inboxes and adv
 ### `rhizo pulse remove <id>`
 Deletes a registered pulse schedule from the cluster.
 
+---
+
+## 10. Session Mapping & Codex-Native Wakeup Resolution
+
+### `rhizo session set <session_key> <agent_name>`
+Associates a harness-specific session key (e.g. `codex:<thread_id>`, `claude:<session_id>`, `opencode:<session_id>`) with an agent name in local and Redis registries.
+```bash
+rhizo session set codex:01934e8f-7c12-70b0-a59e-e3146e297801 codex_worker
+```
+
+### `rhizo session get <agent_name|session_key> [--thread-id] [--json]`
+Retrieves session metadata by either session key or agent name.
+- Querying by session key returns the registered agent name (backward compatible).
+- Querying by agent name returns the registered session key.
+- Passing `--thread-id` extracts the verified thread identifier (e.g. for native Codex tools).
+- Passing `--json` outputs structured session resolution.
+
+### `rhizo session resolve <agent_name|session_key> [--json]`
+Performs full session resolution including harness detection, thread ID, project ownership, and structured native wakeup guidance:
+```bash
+rhizo session resolve codex_worker --json
+```
+
+### `rhizo session remove <session_key>`
+Removes a session mapping from both local and Redis stores.
+
+### `rhizo session list [--json]`
+Lists all registered sessions across the cluster.
+
+

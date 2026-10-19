@@ -724,6 +724,17 @@ proc getLocalSessionAgent*(sessionKey: string): string =
       return node.getStr().toLowerAscii
   return ""
 
+proc getLocalSessionKeyForAgent*(agentName: string): string =
+  let normAgent = agentName.toLowerAscii
+  let m = loadLocalSessionMap()
+  for key, val in m.pairs:
+    if val.kind == JObject and val.hasKey("agent"):
+      if val["agent"].getStr().toLowerAscii == normAgent:
+        return key
+    elif val.kind == JString and val.getStr().toLowerAscii == normAgent:
+      return key
+  return ""
+
 proc getLocalSessionProject*(sessionKey: string): string =
   let m = loadLocalSessionMap()
   if m.hasKey(sessionKey):
@@ -756,7 +767,113 @@ proc getRedisSessionMapping*(cfg: RhizoConfig, sessionKey: string): string =
     discard
   return ""
 
-proc setRedisSessionMapping*(cfg: RhizoConfig, sessionKey, agentName: string) =
+proc getRedisSessionKeyForAgent*(cfg: RhizoConfig, agentName: string): string =
+  let normAgent = agentName.toLowerAscii
+  var client: Redis
+  try:
+    client = openRedisClient(cfg.redisUrl)
+  except CatchableError:
+    return ""
+  defer:
+    try: client.close() except CatchableError: discard
+  try:
+    let val = client.hGet(cfg.prefix & "agent_sessions", normAgent)
+    if val != redisNil and val.len > 0:
+      return val
+    # Fallback scan of sessions hash if agent_sessions didn't have it
+    let allSessions = client.hGetAll(cfg.prefix & "sessions")
+    var idx = 0
+    while idx < allSessions.len:
+      let k = allSessions[idx]
+      let v = if idx + 1 < allSessions.len: allSessions[idx + 1] else: ""
+      if v.len > 0:
+        try:
+          let parsed = parseJson(v)
+          if parsed.kind == JObject and parsed.hasKey("agent") and parsed["agent"].getStr().toLowerAscii == normAgent:
+            return k
+        except CatchableError:
+          if v.toLowerAscii == normAgent:
+            return k
+      idx += 2
+  except CatchableError:
+    discard
+  return ""
+
+proc getAgentSessionKey*(cfg: RhizoConfig, agentName: string): string =
+  let redisKey = getRedisSessionKeyForAgent(cfg, agentName)
+  if redisKey.len > 0: return redisKey
+  return getLocalSessionKeyForAgent(agentName)
+
+type
+  ResolvedSession* = object
+    sessionKey*: string
+    agent*: string
+    harness*: string
+    threadId*: string
+    project*: string
+
+proc resolveAgentSession*(cfg: RhizoConfig, identifier: string): ResolvedSession =
+  let raw = identifier.strip()
+  if raw.len == 0: return
+  var key = ""
+  var agent = ""
+  var project = ""
+
+  if raw.contains(":"):
+    key = raw
+    agent = getLocalSessionAgent(key)
+    if agent.len == 0:
+      agent = getRedisSessionMapping(cfg, key)
+    project = getLocalSessionProject(key)
+  else:
+    agent = raw.toLowerAscii
+    key = getAgentSessionKey(cfg, agent)
+    if key.len > 0:
+      project = getLocalSessionProject(key)
+
+  if key.len > 0 and (project.len == 0 or agent.len == 0):
+    try:
+      var client = openRedisClient(cfg.redisUrl)
+      defer: (try: client.close() except CatchableError: discard)
+      let v = client.hGet(cfg.prefix & "sessions", key)
+      if v != redisNil and v.len > 0:
+        try:
+          let parsed = parseJson(v)
+          if parsed.kind == JObject:
+            if project.len == 0 and parsed.hasKey("project"):
+              project = parsed["project"].getStr().toLowerAscii
+            if agent.len == 0 and parsed.hasKey("agent"):
+              agent = parsed["agent"].getStr().toLowerAscii
+        except CatchableError: discard
+    except CatchableError: discard
+
+  result.sessionKey = key
+  result.agent = agent
+  result.project = project
+
+  if key.startsWith("codex:"):
+    result.harness = "codex"
+    result.threadId = key[6..^1]
+  elif key.startsWith("claude:"):
+    result.harness = "claude"
+    result.threadId = key[7..^1]
+  elif key.startsWith("opencode:"):
+    result.harness = "opencode"
+    result.threadId = key[9..^1]
+  elif key.startsWith("pi:"):
+    result.harness = "pi"
+    result.threadId = key[3..^1]
+  elif key.startsWith("agy:"):
+    result.harness = "antigravity"
+    result.threadId = key[4..^1]
+  elif key.startsWith("cursor:"):
+    result.harness = "cursor"
+    result.threadId = key[7..^1]
+  elif key.len > 0:
+    result.harness = "unknown"
+    result.threadId = ""
+
+proc setRedisSessionMapping*(cfg: RhizoConfig, sessionKey, agentName: string, project: string = "", cwd: string = "") =
   var client: Redis
   try:
     client = openRedisClient(cfg.redisUrl)
@@ -769,6 +886,8 @@ proc setRedisSessionMapping*(cfg: RhizoConfig, sessionKey, agentName: string) =
     var entry = newJObject()
     entry["agent"] = %normAgent
     entry["session_id"] = %sessionKey
+    if project.len > 0: entry["project"] = %project
+    if cwd.len > 0: entry["cwd"] = %cwd
     entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
     discard client.hSet(cfg.prefix & "sessions", sessionKey, $entry)
     discard client.hSet(cfg.prefix & "agent_sessions", normAgent, sessionKey)
@@ -787,6 +906,15 @@ proc removeRedisSessionMapping*(cfg: RhizoConfig, sessionKey: string, agentName:
     discard client.hDel(cfg.prefix & "sessions", @[sessionKey])
     if agentName.len > 0:
       discard client.hDel(cfg.prefix & "agent_sessions", @[agentName.toLowerAscii])
+    else:
+      let allAgents = client.hGetAll(cfg.prefix & "agent_sessions")
+      var idx = 0
+      while idx < allAgents.len:
+        let aName = allAgents[idx]
+        let sKey = if idx + 1 < allAgents.len: allAgents[idx + 1] else: ""
+        if sKey == sessionKey:
+          discard client.hDel(cfg.prefix & "agent_sessions", @[aName])
+        idx += 2
   except CatchableError:
     discard
 
@@ -1267,11 +1395,13 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       lines.add("  rhizo reply --to <sender> --subject \"Re: <subj>\" --body \"<result>\" --reply-to \"<id>\"")
       if harness in ["opencode", "pi"]:
         lines.add("- Note: Extension fiber automatically receives new tasks; DO NOT run a blocking 'rhizo listen'.")
+      elif harness == "codex":
+        lines.add("- Codex Idle Quiescence: Arm a supervised single-shot listener ('rhizo listen <agent>'); senders resume idle turns via native RHIZO_WAKE.")
       else:
         lines.add("- If you must immediately await the next task, append --listen:")
         lines.add("  rhizo reply ... --listen")
-        if harness in ["codex", "claude", "cursor", "copilot"]:
-          lines.add("- Autonomous Stop Hooks: Ensure stop hook is installed via 'rhizo hook install --" & (if harness == "codex": "codex" else: "claude") & "' or append --listen.")
+        if harness in ["claude", "cursor", "copilot"]:
+          lines.add("- Autonomous Stop Hooks: Ensure stop hook is installed via 'rhizo hook install --claude' or append --listen.")
         elif harness == "antigravity":
           lines.add("- Antigravity: Re-arm reactive listener via run_command(..., IsDaemon=true) or append --listen.")
       lines.add("- If disconnecting or shutting down, unregister cleanly:")
@@ -1621,7 +1751,7 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
     saveLocalSessionMapping(sid, name, cfg.project, getCurrentDir())
-    setRedisSessionMapping(cfg, sid, name)
+    setRedisSessionMapping(cfg, sid, name, cfg.project, getCurrentDir())
 
   discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
   try:
@@ -1984,6 +2114,9 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         let isAlive = client.exists(cfg.prefix & "heartbeat:" & resolvedTo)
         let hasListener = client.exists(cfg.prefix & "listener:" & resolvedTo)
         let depth = try: client.lLen(cfg.prefix & "inbox:" & resolvedTo) except CatchableError: 0
+        let sess = resolveAgentSession(cfg, resolvedTo)
+        let isCodex = sess.harness == "codex" and sess.threadId.len > 0
+        let isAck = msgType in ["reply", "ack"] or complete
         var outObj = newJObject()
         outObj["status"] = %"ENQUEUED"
         outObj["id"] = %id
@@ -1993,6 +2126,18 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         outObj["recipient_status"] = %(if isAlive: "ACTIVE" else: "OFFLINE")
         outObj["listener_attached"] = %hasListener
         outObj["inbox_depth"] = %depth
+        if isCodex:
+          outObj["codex_thread_id"] = %sess.threadId
+          outObj["native_wakeup_required"] = %(not isAck)
+          outObj["is_routine_ack"] = %isAck
+          outObj["wake_trigger"] = %"RHIZO_WAKE"
+          var toolCall = newJObject()
+          toolCall["tool"] = %"send_message_to_thread"
+          var params = newJObject()
+          params["thread_id"] = %sess.threadId
+          params["message"] = %"RHIZO_WAKE"
+          toolCall["parameters"] = params
+          outObj["wake_tool_call"] = toolCall
         echo $outObj
     else: # text
       if isTargetMulticast:
@@ -2006,11 +2151,27 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         let isAlive = client.exists(cfg.prefix & "heartbeat:" & resolvedTo)
         let hasListener = client.exists(cfg.prefix & "listener:" & resolvedTo)
         let depth = try: client.lLen(cfg.prefix & "inbox:" & resolvedTo) except CatchableError: 0
+        let sess = resolveAgentSession(cfg, resolvedTo)
+        let isCodex = sess.harness == "codex" and sess.threadId.len > 0
+        let isAck = msgType in ["reply", "ack"] or complete
         let statusStr = if isAlive: "ACTIVE" else: "OFFLINE"
         let listenerStr = if hasListener: "LISTENING" else: "NO_LISTENER"
         let aliasNote = if resolvedTo != normTo: " (aliased from @" & normTo & ")" else: ""
         echo "ENQUEUED " & id & " -> " & resolvedTo & aliasNote & " (status: " & statusStr & ", listener: " & listenerStr & ", inbox_depth: " & $depth & ")"
-        if not hasListener:
+        if isCodex:
+          echo ""
+          echo "[RHIZO CODEX-WAKE ACTION]:"
+          echo "- Recipient '@" & resolvedTo & "' is registered to Codex thread '" & sess.threadId & "'."
+          if isAck:
+            echo "- Note: If this reply is a routine ACK, DO NOT wake the peer (prevents ACK ping-pong loops)."
+            echo "- If the recipient is actively awaiting this result to proceed, invoke your native tool:"
+            echo "    send_message_to_thread(thread_id=\"" & sess.threadId & "\", message=\"RHIZO_WAKE\")"
+          else:
+            echo "- Native wakeup required: Background/supervised listeners in Codex do not resume idle turns."
+            echo "- To wake this idle recipient, invoke your native messaging tool:"
+            echo "    send_message_to_thread(thread_id=\"" & sess.threadId & "\", message=\"RHIZO_WAKE\")"
+            echo "- Note: Send one wakeup per actionable batch. Do not send wakeups for routine ACKs."
+        elif not hasListener:
           stderr.writeLine("⚠️  [RHIZO WARNING] Recipient '" & resolvedTo & "' has no active listener attached! Message queued in inbox (depth: " & $depth & "), but will not be processed until a listener is armed.")
 
   if rearmListen:
@@ -2377,8 +2538,8 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         of "antigravity":
           stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
         of "codex":
-          stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --codex")
-          stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
+          stderr.writeLine("  - Tier 3 (Codex Native Wakeup): Arm supervised single-shot listener ('" & exactCmd & "'); senders wake idle chats via native RHIZO_WAKE.")
+          stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly. Do not wrap in a loop.")
         of "claude", "cursor", "copilot":
           stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --claude")
           stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
@@ -4982,7 +5143,7 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
       reason.add("If you yield without a listener, you will become deaf to peer updates and incoming task dispatches.\n\n")
       reason.add("ACTION REQUIRED RIGHT NOW: Launch a background listener before concluding your turn:\n")
       reason.add("  Command: rhizo listen " & normName & "\n")
-      reason.add("  Capability Tier: In Codex/Claude, install autonomous turn-end stop hooks ('rhizo hook install --codex' or '--claude') or arm a session listener. In Antigravity, use run_command(..., IsDaemon=true, WaitMsBeforeAsync=500).")
+      reason.add("  Capability Tier: In Claude, install autonomous turn-end stop hooks ('rhizo hook install --claude'). In Codex, arm a single-shot listener; senders wake idle sessions via native RHIZO_WAKE. In Antigravity, use run_command(..., IsDaemon=true, WaitMsBeforeAsync=500).")
 
       var jOut = newJObject()
       jOut["decision"] = %"block"
@@ -5446,6 +5607,7 @@ proc main() =
     echo "  rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
     echo "  rhizo guide <install|uninstall|check> [path]"
     echo "  rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local]"
+    echo "  rhizo session <set|get|resolve|remove|list> [args...]"
     echo ""
     echo "Global Options:"
     echo "  --version, -v         Print version and exit"
@@ -6057,9 +6219,10 @@ proc main() =
 
   of "session":
     if args.len < 2:
-      stderr.writeLine("Usage: rhizo session <set|get|remove|list> [args...]")
+      stderr.writeLine("Usage: rhizo session <set|get|resolve|remove|list> [args...]")
       stderr.writeLine("  rhizo session set <prefix:session_id> <agent_name>")
-      stderr.writeLine("  rhizo session get <prefix:session_id>")
+      stderr.writeLine("  rhizo session get <session_key|agent_name> [--thread-id] [--json]")
+      stderr.writeLine("  rhizo session resolve <agent_name|session_key> [--json]")
       stderr.writeLine("  rhizo session remove <prefix:session_id>")
       stderr.writeLine("  rhizo session list [--json]")
       quit(1)
@@ -6073,22 +6236,82 @@ proc main() =
         quit(1)
       let key = args[2]
       let agent = args[3]
-      saveLocalSessionMapping(key, agent)
-      setRedisSessionMapping(cfg, key, agent)
+      saveLocalSessionMapping(key, agent, cfg.project, getCurrentDir())
+      setRedisSessionMapping(cfg, key, agent, cfg.project, getCurrentDir())
       echo "OK [session] " & key & " -> " & agent
 
-    of "get":
+    of "get", "resolve":
       if args.len < 3:
-        stderr.writeLine("Error: 'rhizo session get' requires <session_key>")
+        stderr.writeLine("Error: 'rhizo session " & action & "' requires <session_key_or_agent_name>")
         quit(1)
-      let key = args[2]
-      var agent = getLocalSessionAgent(key)
-      if agent.len == 0:
-        agent = getRedisSessionMapping(cfg, key)
-      if agent.len == 0:
-        stderr.writeLine("Error: Session key not found: " & key)
+      let asJson = ("--json" in args) or ("-j" in args)
+      let needThreadId = "--thread-id" in args
+      var targetId = ""
+      for idx in 2..<args.len:
+        if not args[idx].startsWith("-"):
+          targetId = args[idx]
+          break
+      if targetId.len == 0:
+        stderr.writeLine("Error: Missing session key or agent name")
         quit(1)
-      echo agent
+
+      let sess = resolveAgentSession(cfg, targetId)
+      if sess.sessionKey.len == 0 and sess.agent.len == 0:
+        stderr.writeLine("Error: Session not found for identifier: " & targetId)
+        quit(1)
+
+      if needThreadId:
+        if sess.threadId.len > 0:
+          echo sess.threadId
+        else:
+          stderr.writeLine("Error: No thread ID available for session '" & sess.sessionKey & "' (harness: " & sess.harness & ")")
+          quit(1)
+      elif asJson:
+        var outObj = newJObject()
+        outObj["session_key"] = %sess.sessionKey
+        outObj["agent"] = %sess.agent
+        outObj["harness"] = %sess.harness
+        outObj["thread_id"] = %sess.threadId
+        if sess.project.len > 0:
+          outObj["project"] = %sess.project
+        let isCodex = sess.harness == "codex" and sess.threadId.len > 0
+        outObj["native_wakeup_required"] = %isCodex
+        if isCodex:
+          outObj["wake_trigger"] = %"RHIZO_WAKE"
+          var toolCall = newJObject()
+          toolCall["tool"] = %"send_message_to_thread"
+          var p = newJObject()
+          p["thread_id"] = %sess.threadId
+          p["message"] = %"RHIZO_WAKE"
+          toolCall["parameters"] = p
+          outObj["wake_tool_call"] = toolCall
+        echo $outObj
+      else:
+        if action == "resolve":
+          echo "Session Resolution:"
+          echo "- Agent           : " & (if sess.agent.len > 0: sess.agent else: "(none)")
+          echo "- Session Key     : " & (if sess.sessionKey.len > 0: sess.sessionKey else: "(none)")
+          echo "- Harness         : " & (if sess.harness.len > 0: sess.harness else: "unknown")
+          if sess.threadId.len > 0:
+            echo "- Thread ID       : " & sess.threadId
+          if sess.project.len > 0:
+            echo "- Project         : " & sess.project
+          if sess.harness == "codex" and sess.threadId.len > 0:
+            echo "- Native Wakeup   : Required"
+            echo "  Tool Call       : send_message_to_thread(thread_id=\"" & sess.threadId & "\", message=\"RHIZO_WAKE\")"
+        else:
+          if targetId.contains(":"):
+            if sess.agent.len > 0:
+              echo sess.agent
+            else:
+              stderr.writeLine("Error: Session key not found: " & targetId)
+              quit(1)
+          else:
+            if sess.sessionKey.len > 0:
+              echo sess.sessionKey
+            else:
+              stderr.writeLine("Error: Session not found for agent: " & targetId)
+              quit(1)
 
     of "remove", "rm", "del", "clear":
       if args.len < 3:
