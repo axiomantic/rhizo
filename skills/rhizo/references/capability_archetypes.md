@@ -38,23 +38,35 @@ This document maps runtime tool capabilities to their exact invocation patterns.
 
 ---
 
-## Archetype 3: Autonomous Turn-End Continuation Hooks
-- **Profile**: Harness supports lifecycle event hooks invoked at the end of each assistant turn (e.g. Claude Code Stop Hook, OpenAI Codex Stop Hook).
-- **Mechanism**: Harness automatically runs a native hook (`claude_stop_hook.py`, `codex_stop_hook.py`, or `rhizo hook codex-stop`) whenever the turn ends. If a message or pending work item exists in the inbox, the hook returns `{"decision": "block", "reason": ...}` to immediately trigger a continuation turn, seamlessly resuming execution without human intervention.
+## Archetype 3A: Autonomous Turn-End Continuation Hooks (Claude Code)
+- **Profile**: Harness supports lifecycle event hooks invoked at the end of each assistant turn (e.g. Claude Code Stop Hook).
+- **Mechanism**: Harness automatically runs a native hook (`claude_stop_hook.py` or `rhizo hook install --claude`) whenever an active turn ends. If a message or pending work item exists in the inbox, the hook returns `{"decision": "block", "reason": ...}` to immediately trigger a continuation turn, seamlessly resuming execution without human intervention.
 - **Rule**:
   <INVARIANT>
   Subagents are tools for sessions to run ad-hoc tasks, NEVER cluster swarm workers or listener relays. Cluster swarm workers operate as sovereign sessions coordinated via Rhizo, utilizing autonomous turn-end hooks or native listeners.
   </INVARIANT>
-  <INVARIANT>
-  Zero Token Waste: Autonomous turn-end hooks operate outside the LLM context window with 0 prompt token overhead, eliminating subagent initialization costs.
-  </INVARIANT>
 - **Tool Action**:
-  Install the appropriate hook once during session setup:
   ```bash
   rhizo hook install --claude   # For Claude Code
-  rhizo hook install --codex    # For OpenAI Codex
   ```
-  *(Or execute single-shot `rhizo listen <name>` in dedicated worker terminals).*
+
+---
+
+## Archetype 3B: Codex-Native Wakeup Protocol (`RHIZO_WAKE`)
+- **Profile**: OpenAI Codex Desktop / CLI.
+- **Mechanism**: On Codex Desktop, background or supervised `rhizo listen` subprocesses exit with code 0 upon message receipt, but **subprocess completion does not resume an idle chat turn**. Stop hooks also only evaluate during active turn endings and cannot listen while idle. Codex natively provides `send_message_to_thread(thread_id, message="RHIZO_WAKE")` to resume idle threads.
+- **Rule**:
+  <INVARIANT>
+  Sender sends task via Rhizo, resolves recipient Codex thread ID, and sends exact 'RHIZO_WAKE' via native tool. Recipient retrieves completed listener output first, drains remaining inbox, processes tasks, acknowledges without duplicate action, and rearms one supervised foreground single-shot listener.
+  </INVARIANT>
+- **Sender Action**:
+  ```bash
+  rhizo send <agent> "<subject>" "<body>"
+  # From structured output or 'rhizo session get <agent> --thread-id', call native tool:
+  # send_message_to_thread(thread_id="<thread_id>", message="RHIZO_WAKE")
+  ```
+- **Recipient Action**:
+  See complete protocol in [references/codex_wakeup_protocol.md](codex_wakeup_protocol.md).
 
 ---
 

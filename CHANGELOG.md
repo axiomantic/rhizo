@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Codex-Native Wakeup Protocol (`RHIZO_WAKE`)**:
+  - Implemented compact, zero-polling wakeup protocol for OpenAI Codex Desktop and CLI using the exact shorthand `RHIZO_WAKE`.
+  - Added reverse session resolution functions (`getLocalSessionKeyForAgent`, `getRedisSessionKeyForAgent`, `resolveAgentSession`) supporting bidirectional lookups between session keys and agent names.
+  - Enhanced `rhizo session get <agent|session_key>` to support reverse lookups, `--thread-id` extraction, and `--json` structured output.
+  - Added `rhizo session resolve <agent|session_key> [--json]` for deep session inspection, thread ID resolution, and native wakeup guidance.
+  - Enhanced `rhizo send` to detect Codex recipients and output structured `[RHIZO CODEX-WAKE ACTION]` blocks (and `wake_tool_call` in `--json`), providing exact parameters for `send_message_to_thread(thread_id="<id>", message="RHIZO_WAKE")`.
+  - Enhanced `rhizo reply` with routine ACK guidance prohibiting wakeups on routine acknowledgments to eliminate ACK ping-pong loops.
+  - Added comprehensive protocol documentation in `skills/rhizo/references/codex_wakeup_protocol.md` and updated `SKILL.md` Section 3 / 3.5.
+  - Added comprehensive test coverage in `tests/test_nim_binary.py` (`test_71_codex_native_wakeup_protocol`).
+
+### Changed
+- Updated conflicting Codex guidance in `src/rhizo.nim`, `SKILL.md`, and `capability_archetypes.md` that previously treated Stop hooks or background process completion as proof of autonomous idle turn resumption.
+
 ## [0.2.23] - 2026-10-19
 
 ### Added
