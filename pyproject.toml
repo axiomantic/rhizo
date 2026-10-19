@@ -1,6 +1,6 @@
 [project]
 name = "rhizo"
-version = "0.2.22"
+version = "0.2.23"
 description = "Fast, daemonless, multi-agent coordination layer and secure inter-assistant messaging bus"
 readme = "README.md"
 requires-python = ">=3.10"

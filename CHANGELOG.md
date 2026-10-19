@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-10-19
+
 ### Added
 - **First-Class `rhizo inbox` Subcommand (`src/rhizo.nim`, `scripts/peek.lua`, `tests/test_nim_binary.py`)**:
   - Added dedicated `rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain]` command for consuming or inspecting agent inboxes.
