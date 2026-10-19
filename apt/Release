@@ -6,8 +6,8 @@ Architectures: amd64 arm64
 Components: main
 Description: Axiomantic Rhizo Debian/Ubuntu APT Repository
 MD5Sum:
- c15316e2597a13b03852a60ee9924770 1168 Packages
- 2cb659964f1752419187e999c3ec1482 526 Packages.gz
+ 0e3436efd4fbd23720e5adaea56ad7b4 1168 Packages
+ 27d92d59af295f7fd8b5e16eba554cd9 522 Packages.gz
 SHA256:
- c62e80187b535088976a71839be378a82c44b73da5f9455f4ebd13992d56ba76 1168 Packages
- 871d6c7ab6802af5627c34ba21094217321308cc0bbfcfc4e9f66449d4977b58 526 Packages.gz
+ 6b90317f3558e11d74144534a30b001ac20f5c6912b7223da414b56c389d91a2 1168 Packages
+ 2a60afa2ad522abf5b30e4c9fa2b2c89e3a4ef94295a6eac3c2ac918ee982eb5 522 Packages.gz
