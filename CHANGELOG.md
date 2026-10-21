@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Swarm Reassignment & Repurposing Directives (`src/rhizo.nim`, `tests/test_coordination_invariants.py`)**:
+  - Implemented `rhizo reassign <worker> --project <project> --role <role> [--tags <tags>] [--queue <queue>] [--json]` (aliased as `rhizo repurpose`) for dynamically redirecting active cluster workers to new projects and roles.
+  - Dispatches authenticated `SWARM_REASSIGN` directive payloads over Redis with automatic tag configuration.
+  - Enhanced `doListen` with specialized `[RHIZO SWARM REASSIGNMENT DIRECTIVE DELIVERED]` lifecycle rider, instructing workers to run `rhizo tag add`, broadcast `WORKER_READY`, and re-arm listeners.
+  - Added `test_37_rhizo_reassign_swarm_directive` to test suite.
 - **Task Roadmap CLI & Botanical Auto-Sowing (`src/rhizo.nim`, `tests/test_coordination_invariants.py`)**:
   - Implemented `rhizo roadmap` and `rhizo task roadmap` subcommands supporting `--json`, `--markdown`, `--write`, and `--sync`.
   - Added automated botanical seed sowing (`autoSowGardenTask`) into `.garden/seeds/<task_id>.toml` on `rhizo task create`.

@@ -2565,19 +2565,31 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           else:
             exactCmd.add(" " & a)
 
+        let isReassign = (rawMsgType == "reassign" or subject.toUpperAscii() == "SWARM_REASSIGN")
         stderr.writeLine("")
         stderr.writeLine("================================================================================")
-        stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
+        if isReassign:
+          stderr.writeLine("🔄 [RHIZO SWARM REASSIGNMENT DIRECTIVE DELIVERED] 🔄")
+        else:
+          stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
         stderr.writeLine("[RHIZO LIFECYCLE NOTICE]")
         stderr.writeLine("Listener Identity: @" & name & " (this is YOU)")
         stderr.writeLine("Delivered Message: '" & id & "' from @" & fromAgent)
         stderr.writeLine("Subject: " & (if subject.len > 0: subject else: "<no subject>"))
         stderr.writeLine("Detected harness: " & harness)
         stderr.writeLine("Listener Process Status: EXITED (0) after delivering payload")
-        stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
-        stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
-        stderr.writeLine("   operator in this chat window ALWAYS takes absolute precedence over cluster tasks.")
-        stderr.writeLine("2. ARM NOW & IMMEDIATE BACKGROUND LISTENER (DO NOT YIELD TURN):")
+        if isReassign:
+          stderr.writeLine("MANDATED REASSIGNMENT WORKFLOW:")
+          stderr.writeLine("1. Extract project, role, tags, and queue from message payload.")
+          stderr.writeLine("2. Update your agent tags: rhizo tag add <tags>")
+          stderr.writeLine("3. Announce readiness to orchestrator:")
+          stderr.writeLine("   rhizo send --to @" & fromAgent & " --subject \"WORKER_READY\" --body \"Worker @" & name & " reassigned and ready.\"")
+          stderr.writeLine("4. Re-arm listener for sprint tasks: " & exactCmd)
+        else:
+          stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
+          stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
+          stderr.writeLine("   operator in this chat window ALWAYS takes absolute precedence over cluster tasks.")
+          stderr.writeLine("2. ARM NOW & IMMEDIATE BACKGROUND LISTENER (DO NOT YIELD TURN):")
         stderr.writeLine("   - In background-capable harnesses (Antigravity): Launch your background listener ('" & exactCmd & "')")
         stderr.writeLine("     IMMEDIATELY right now in this very turn BEFORE writing code.")
         stderr.writeLine("   - CRITICAL ANTIGRAVITY NON-YIELD INVARIANT: When you launch the background listener, your harness will say:")
@@ -4655,6 +4667,55 @@ proc doReroute*(cfg: RhizoConfig, fromAgent, toAgent: string, mode: string = "al
   except CatchableError:
     return res
 
+proc doReassign*(cfg: RhizoConfig, targetWorker, targetProject, targetRole: string, extraTags: seq[string] = @[], queue: string = "", jsonOutput: bool = false): string =
+  let normWorker = sanitizeIdentifier(targetWorker)
+  let normProject = targetProject.toLowerAscii()
+  let normRole = targetRole.toLowerAscii()
+  var allTags = @[normProject, normRole]
+  for t in extraTags:
+    let st = t.strip().toLowerAscii()
+    if st.len > 0 and st notin allTags:
+      allTags.add(st)
+  let effectiveQueue = if queue.len > 0: queue else: "queue:" & normProject & ":tasks"
+
+  var bodyObj = newJObject()
+  bodyObj["action"] = %"SWARM_REASSIGN"
+  bodyObj["project"] = %normProject
+  bodyObj["role"] = %normRole
+  var jTags = newJArray()
+  for t in allTags: jTags.add(%t)
+  bodyObj["tags"] = jTags
+  bodyObj["queue"] = %effectiveQueue
+
+  let fromAgent = getActiveAgentName(cfg, fallbackDefault = false)
+  let effectiveFrom = if fromAgent.len > 0: fromAgent else: normProject & "-orchestrator"
+
+  discard doSend(
+    cfg = cfg,
+    toAgent = normWorker,
+    msgType = "reassign",
+    fromAgent = effectiveFrom,
+    subject = "SWARM_REASSIGN",
+    body = pretty(bodyObj),
+    tags = @[],
+    urgency = "high",
+    echoResult = false
+  )
+
+  if jsonOutput:
+    var jRes = newJObject()
+    jRes["status"] = %"DISPATCHED"
+    jRes["action"] = %"SWARM_REASSIGN"
+    jRes["worker"] = %normWorker
+    jRes["project"] = %normProject
+    jRes["role"] = %normRole
+    jRes["tags"] = jTags
+    jRes["queue"] = %effectiveQueue
+    jRes["from"] = %effectiveFrom
+    return pretty(jRes)
+
+  return "Dispatched SWARM_REASSIGN directive to @" & normWorker & " for project '" & normProject & "' (" & normRole & ") on queue '" & effectiveQueue & "'."
+
 proc doPoke*(cfg: RhizoConfig, targetAgent: string, optCmd: string = "", force: bool = false, dryRun: bool = false, jsonOut: bool = false): string =
   let scopedTarget = ensureProjectScopedName(cfg, targetAgent)
   let cmd = if optCmd.len > 0: optCmd else: "rhizo listen " & scopedTarget
@@ -5744,6 +5805,7 @@ proc main() =
     echo "  rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
     echo "  rhizo sweep [--dry-run] [--raw]"
     echo "  rhizo tag <add|remove|set> <tags> [name]"
+    echo "  rhizo reassign <worker> --project <project> --role <role> [--tags <tags>] [--queue <queue>]"
     echo "  rhizo check-inbox [name]"
     echo "  rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain] [--json|--hook|--raw]"
     echo "  rhizo drain [count] [name] [--limit N] [--format json|hook|raw] [--hook]"
@@ -8788,6 +8850,47 @@ proc main() =
     let fromAgent = positional[0]
     let toAgent = positional[1]
     echo doReroute(cfg, fromAgent, toAgent, mode, jsonOut)
+
+  of "reassign", "repurpose":
+    var worker = ""
+    var project = ""
+    var role = ""
+    var tags: seq[string] = @[]
+    var queue = ""
+    var jsonOut = false
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["--project", "-p"] and i + 1 < args.len:
+        inc i; project = args[i]
+      elif a.startsWith("--project="):
+        project = a[10..^1]
+      elif a in ["--role", "-r"] and i + 1 < args.len:
+        inc i; role = args[i]
+      elif a.startsWith("--role="):
+        role = a[7..^1]
+      elif a in ["--tags", "-t"] and i + 1 < args.len:
+        inc i; tags.add(args[i].split(","))
+      elif a.startsWith("--tags="):
+        tags.add(a[7..^1].split(","))
+      elif a in ["--queue", "-q"] and i + 1 < args.len:
+        inc i; queue = args[i]
+      elif a.startsWith("--queue="):
+        queue = a[8..^1]
+      elif a in ["--json", "-j"]:
+        jsonOut = true
+      elif not a.startsWith("-") and worker.len == 0:
+        worker = a
+      inc i
+
+    if project.len == 0 and cfg.project.len > 0 and cfg.project != "default":
+      project = cfg.project
+
+    if worker.len == 0 or project.len == 0 or role.len == 0:
+      stderr.writeLine("Usage: rhizo reassign <worker> --project <project> --role <role> [--tags <t1,t2>] [--queue <queue>] [--json]")
+      quit(1)
+
+    echo doReassign(cfg, worker, project, role, tags, queue, jsonOut)
 
   of "hook":
     if args.len < 2:

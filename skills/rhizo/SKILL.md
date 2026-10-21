@@ -315,6 +315,7 @@ Never use shell loops (`while true; do rhizo listen; done`), `&` backgrounding, 
 | **Resolve Session** | `rhizo session resolve <agent\|session_key> [--json]` | Deep session resolution: harness, thread ID, project, and native wakeup guidance. |
 | **Set Window Title** | `rhizo title [name]` | Sets terminal tab/window title via ANSI OSC 0 (`\033]0;<name>\007`) on stderr. |
 | **Doorbell Wakeup**  | `rhizo poke <agent> [--cmd <cmd>] [--force] [--dry-run] [--json] [-- <cmd...>]` | Injects wakeup keystroke into worker's window (Ghostty, tmux, Terminal, iTerm2, GUI). Supports `-- <cmd...>`. |
+| **Reassign Worker** | `rhizo reassign <worker> --project <p> --role <r> [--tags <t>] [--queue <q>]` | Dynamically reassigns an active cluster worker session to a new project/role without reopening terminal tabs. |
 
 ---
 

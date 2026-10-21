@@ -2173,6 +2173,39 @@ class TestCoordinationInvariants(unittest.TestCase):
             finally:
                 self.run_cmd(["close", worker])
 
+    def test_37_rhizo_reassign_swarm_directive(self):
+        worker = f"worker-reassign-{int(time.time())}"
+        self.run_cmd(["open", worker, "generic"])
+        try:
+            # 1. Dispatch reassign directive
+            res = self.run_cmd([
+                "reassign", worker,
+                "--project", "dependanim",
+                "--role", "architect",
+                "--tags", "systems,semver",
+                "--json"
+            ])
+            self.assertEqual(res.returncode, 0)
+            data = json.loads(res.stdout.strip())
+            self.assertEqual(data["status"], "DISPATCHED")
+            self.assertEqual(data["project"], "dependanim")
+            self.assertEqual(data["role"], "architect")
+            self.assertIn("systems", data["tags"])
+
+            # 2. Check worker inbox received the message
+            res_drain = self.run_cmd(["drain", "1", worker, "--json"])
+            self.assertEqual(res_drain.returncode, 0)
+            msg = json.loads(res_drain.stdout.strip())
+            self.assertIsInstance(msg, dict)
+            self.assertEqual(msg["type"], "reassign")
+            self.assertEqual(msg["subject"], "SWARM_REASSIGN")
+            payload = json.loads(msg["body"])
+            self.assertEqual(payload["project"], "dependanim")
+            self.assertEqual(payload["role"], "architect")
+            self.assertIn("systems", payload["tags"])
+        finally:
+            self.run_cmd(["close", worker])
+
 
 if __name__ == "__main__":
     unittest.main()
