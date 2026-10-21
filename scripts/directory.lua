@@ -20,15 +20,30 @@ if filter and filter ~= "" and filter ~= "*" and filter ~= "@all" then
         seen[a] = true
         table.insert(agents, a)
     end
-    -- Also scan active_agents for matching project field
+    -- Check if filter_tag is an exact agent name in active_agents
+    if redis.call('SISMEMBER', prefix .. 'active_agents', filter_tag) == 1 then
+        if not seen[filter_tag] then
+            seen[filter_tag] = true
+            table.insert(agents, filter_tag)
+        end
+    end
+    -- Also scan active_agents for matching project field or agent name
     local all_active = redis.call('SMEMBERS', prefix .. 'active_agents')
     for _, a in ipairs(all_active) do
         if not seen[a] then
+            local a_low = string.lower(a)
             local a_proj = redis.call('HGET', prefix .. 'agent:' .. a, 'project')
-            if a_proj and string.lower(a_proj) == filter_tag then
+            if a_low == filter_tag or (a_proj and string.lower(a_proj) == filter_tag) then
                 seen[a] = true
                 table.insert(agents, a)
             end
+        end
+    end
+    -- Also check if agent:<filter_tag> or listener:<filter_tag> exists directly
+    if not seen[filter_tag] then
+        if redis.call('EXISTS', prefix .. 'agent:' .. filter_tag) == 1 or redis.call('EXISTS', prefix .. 'listener:' .. filter_tag) == 1 then
+            seen[filter_tag] = true
+            table.insert(agents, filter_tag)
         end
     end
 else
@@ -88,6 +103,13 @@ for _, agent in ipairs(agents) do
     local has_listener = 0
     if listener_raw and listener_raw ~= false and listener_raw ~= "" then
         has_listener = 1
+    end
+
+    -- Active Listener Liveness:
+    -- If an agent maintains an active listener process in Redis (listener:<name> exists with valid TTL),
+    -- it is actively listening on the bus and ready to receive messages. Never mark as STALE while actively listening.
+    if has_listener == 1 then
+        alive = 1
     end
 
     -- Format: agent|alive|tags|state|activity|has_listener|elapsed|project

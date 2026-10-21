@@ -1,7 +1,7 @@
 # Unified Work Item State Machine (WISM) Specification
 
 > **Formal State Machine, Distributed Leases & DAG Orchestration**  
-> *A normative specification governing task lifecycles, atomic Lua state transitions, monotonic fencing leases, and Two-Key integration across Rhizo, Garden, and Vine.*
+> *A normative specification governing task lifecycles, atomic Lua state transitions, monotonic fencing leases, and Three-Key integration across Rhizo, Garden, and Vine.*
 
 ---
 
@@ -27,7 +27,7 @@ stateDiagram-v2
     IN_PROGRESS --> ORPHANED : Lease expires without progress
 
     GATE_EVALUATING --> IN_PROGRESS : Gate failed (Tests red or merge conflict)
-    GATE_EVALUATING --> READY_TO_WEAVE : Two-Key Gate PASSED (Cryptographic gate token stamped)
+    GATE_EVALUATING --> READY_TO_WEAVE : Three-Key Gate PASSED (Cryptographic gate token stamped)
 
     READY_TO_WEAVE --> COMPLETED : vine weave && rhizo task complete (Unblocks downstream DAG children)
 
@@ -81,7 +81,7 @@ stateDiagram-v2
   | GATE_EVALUATING |
   +-----------------+
           │
-          │ Two-Key Gate PASSED (Key 1 merge-tree + Key 2 live test suite green)
+          │ Three-Key Gate PASSED (Key 1 merge-tree + Key 2 test suite + Key 3 adversarial audit)
           ▼
   +----------------+
   | READY_TO_WEAVE |
@@ -106,8 +106,8 @@ stateDiagram-v2
 | **`DELIVERED`** | `rhizo listen` pop | Worker popped task envelope from queue. Emits atomic transport receipt `{pfx}receipt:<id>`. | **180s Receipt Timeout**: If worker fails to claim within 180s, task transitions to `ORPHANED`. |
 | **`CLAIMED`** | `rhizo task claim <id>` | Worker acquires task ownership, increments attempts, and obtains monotonic fencing lease. | Configurable lease timeout (default 1800s). |
 | **`IN_PROGRESS`** | `vine new <id>` | Worker enters isolated strand and executes implementation. `rhizo task progress` extends lease. | Lease expiration without progress transitions to `ORPHANED`. |
-| **`GATE_EVALUATING`** | `vine gate` | Worker executes Two-Key Gate (Key 1 merge-tree conflict check + Key 2 project test suite). | Test failure returns task to `IN_PROGRESS` with error diagnostics. |
-| **`READY_TO_WEAVE`** | `vine gate` exit 0 | Two-Key Gate passes 100% green. Cryptographic `gate_token` stamped into task record. | Ready for Lead Orchestrator trunk integration. |
+| **`GATE_EVALUATING`** | `vine gate` | Worker executes Three-Key Gate (Key 1 merge-tree conflict check + Key 2 project test suite + Key 3 adversarial audit ratification). | Test failure returns task to `IN_PROGRESS` with error diagnostics. |
+| **`READY_TO_WEAVE`** | `vine gate` exit 0 | Three-Key Gate passes 100% green. Cryptographic `gate_token` stamped into task record. | Ready for Lead Orchestrator trunk integration. |
 | **`COMPLETED`** | `rhizo task complete <id>` | Task finalized. Atomically unblocks downstream dependent child tasks, auto-promoting them to `QUEUED`. | Terminal state. |
 | **`ORPHANED`** | Watchdog sweep | Task lease expired without progress or claim timed out. Increments attempt counter. | If `attempts < 3`: auto-requeued to `QUEUED`. If `attempts >= 3`: moved to `DEAD_LETTER`. |
 | **`YIELDED`** | `rhizo task yield <id>` | Worker cooperatively relinquishes task due to blockers or resource conflicts. | Returned to `QUEUED` with zero penalty to retry counter. |

@@ -1887,6 +1887,292 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         shutil.rmtree(empty_dir, ignore_errors=True)
 
+    # -------------------------------------------------------------------------
+    # Problem 34: Codex Listener Workflow Cases (Queued vs Consumed Messages)
+    # -------------------------------------------------------------------------
+    def test_34_codex_listener_workflow_cases(self):
+        """Verify the exact 7-step Codex recipient workflow across two cases:
+        Case A: Message remains queued in the inbox (no listener was active).
+        Case B: Listener already consumed message and exited (inbox empty).
+        In both cases, verify that the receiver processes the message and leaves exactly one listener waiting afterward.
+        """
+        codex_agent = f"codex_agent_{int(time.time() * 1000)}"
+        sender_agent = f"sender_agent_{int(time.time() * 1000)}"
+        project = "coord_test"
+
+        # Register agents
+        res_open = self.run_cmd(["open", codex_agent, "worker"])
+        self.assertEqual(res_open.returncode, 0)
+        res_open_sender = self.run_cmd(["open", sender_agent, "sender"])
+        self.assertEqual(res_open_sender.returncode, 0)
+
+        try:
+            # =================================================================
+            # Case A: Message remains queued in inbox (no listener active)
+            # =================================================================
+            # 1. Sender sends message to codex_agent
+            res_send_a = self.run_cmd([
+                "send", "--to", codex_agent, "--from", sender_agent,
+                "--subject", "Task Case A", "--body", "Work from inbox queue"
+            ])
+            self.assertEqual(res_send_a.returncode, 0)
+
+            # 2. Recipient executes 7-step workflow:
+            # Step 1: No completed listener output.
+            # Step 2: Drain and process remaining inbox.
+            res_drain_a = self.run_cmd(["drain", "50", codex_agent, "--json"])
+            self.assertEqual(res_drain_a.returncode, 0)
+            msgs_a = json.loads(res_drain_a.stdout.strip())
+            self.assertEqual(len(msgs_a), 1)
+            self.assertEqual(msgs_a[0]["subject"], "Task Case A")
+
+            # Process & acknowledge
+            res_reply_a = self.run_cmd([
+                "reply", "--to", sender_agent, "--from", codex_agent,
+                "--subject", "Re: Task Case A", "--body", "Task A processed",
+                "--reply-to", msgs_a[0]["id"]
+            ])
+            self.assertEqual(res_reply_a.returncode, 0)
+
+            # Step 3: Refresh agent registration
+            res_refresh_a = self.run_cmd(["open", codex_agent, "worker"])
+            self.assertEqual(res_refresh_a.returncode, 0)
+
+            # Step 4: Probe listener (none running)
+            res_probe_a = self.run_cmd(["probe", codex_agent, "--json"])
+            self.assertEqual(res_probe_a.returncode, 0)
+            probe_data_a = json.loads(res_probe_a.stdout.strip())
+            self.assertIn(probe_data_a["status"], ["NO_LISTENER", "DEAD"])
+
+            # Step 5: Start one supervised foreground single-shot listener:
+            # rhizo --project <project> listen <agent> --quiet
+            listener_proc_a = subprocess.Popen(
+                [BIN_PATH, "--project", project, "listen", codex_agent, "--quiet"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                cwd=self.test_home
+            )
+            time.sleep(0.3)
+
+            # Step 6 & 7: Verify listener remains blocked waiting, with exactly ONE listener waiting afterward
+            res_probe_live_a = self.run_cmd(["probe", codex_agent, "--json"])
+            self.assertEqual(res_probe_live_a.returncode, 0)
+            probe_live_data_a = json.loads(res_probe_live_a.stdout.strip())
+            self.assertEqual(probe_live_data_a["status"], "HEALTHY")
+
+            # Verify duplicate attempt is rejected
+            res_dup_a = self.run_cmd(["listen", codex_agent, "1"])
+            self.assertNotEqual(res_dup_a.returncode, 0)
+            self.assertIn("Listener already active", res_dup_a.stderr)
+
+            # Clean up Case A listener
+            listener_proc_a.terminate()
+            listener_proc_a.communicate()
+            time.sleep(0.2)
+
+            # =================================================================
+            # Case B: Listener already consumed message and exited (inbox empty)
+            # =================================================================
+            # 1. Receiver has a listener running in background
+            listener_proc_b = subprocess.Popen(
+                [BIN_PATH, "--project", project, "listen", codex_agent, "--quiet"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                cwd=self.test_home
+            )
+            time.sleep(0.3)
+
+            # 2. Sender dispatches message while listener is active
+            res_send_b = self.run_cmd([
+                "send", "--to", codex_agent, "--from", sender_agent,
+                "--subject", "Task Case B", "--body", "Work consumed by listener"
+            ])
+            self.assertEqual(res_send_b.returncode, 0)
+
+            # 3. Listener consumes message and exits with 0
+            stdout_b, stderr_b = listener_proc_b.communicate(timeout=5)
+            self.assertEqual(listener_proc_b.returncode, 0)
+
+            # 4. Recipient executes 7-step workflow:
+            # Step 1: Retrieve completed supervised listener output
+            self.assertTrue(len(stdout_b.strip()) > 0)
+            consumed_b = json.loads(stdout_b.strip())
+            self.assertEqual(consumed_b["subject"], "Task Case B")
+
+            # Step 2: Drain inbox - Crucial verification: inbox is EMPTY!
+            res_drain_b = self.run_cmd(["drain", "50", codex_agent, "--json"])
+            self.assertEqual(res_drain_b.returncode, 0)
+            msgs_b = json.loads(res_drain_b.stdout.strip())
+            self.assertEqual(len(msgs_b), 0, "Inbox must be empty because listener already consumed the message")
+
+            # Process & acknowledge delivered message from listener output
+            res_reply_b = self.run_cmd([
+                "reply", "--to", sender_agent, "--from", codex_agent,
+                "--subject", "Re: Task Case B", "--body", "Task B processed from listener output",
+                "--reply-to", consumed_b["id"]
+            ])
+            self.assertEqual(res_reply_b.returncode, 0)
+
+            # Step 3: Refresh agent registration
+            res_refresh_b = self.run_cmd(["open", codex_agent, "worker"])
+            self.assertEqual(res_refresh_b.returncode, 0)
+
+            # Step 4: Probe listener (exited, so DEAD or NO_LISTENER)
+            res_probe_b = self.run_cmd(["probe", codex_agent, "--json"])
+            self.assertEqual(res_probe_b.returncode, 0)
+            probe_data_b = json.loads(res_probe_b.stdout.strip())
+            self.assertIn(probe_data_b["status"], ["NO_LISTENER", "DEAD"])
+
+            # Step 5: Start one supervised foreground single-shot listener:
+            # rhizo --project <project> listen <agent> --quiet
+            listener_proc_b2 = subprocess.Popen(
+                [BIN_PATH, "--project", project, "listen", codex_agent, "--quiet"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                cwd=self.test_home
+            )
+            time.sleep(0.3)
+
+            # Step 6 & 7: Verify listener remains blocked waiting, with exactly ONE listener waiting afterward
+            res_probe_live_b = self.run_cmd(["probe", codex_agent, "--json"])
+            self.assertEqual(res_probe_live_b.returncode, 0)
+            probe_live_data_b = json.loads(res_probe_live_b.stdout.strip())
+            self.assertEqual(probe_live_data_b["status"], "HEALTHY")
+
+            # Verify duplicate attempt is rejected
+            res_dup_b = self.run_cmd(["listen", codex_agent, "1"])
+            self.assertNotEqual(res_dup_b.returncode, 0)
+            self.assertIn("Listener already active", res_dup_b.stderr)
+
+            # Clean up Case B listener
+            listener_proc_b2.terminate()
+            listener_proc_b2.communicate()
+
+        finally:
+            self.run_cmd(["close", codex_agent])
+            self.run_cmd(["close", sender_agent])
+
+    # -------------------------------------------------------------------------
+    # Problem 35: Target Agent Name Resolution & Active Listener Liveness in `rhizo who`
+    # -------------------------------------------------------------------------
+    def test_35_who_query_and_active_listener_liveness(self):
+        """Verify that `rhizo who <agent>` resolves target across projects and active listeners are never STALE."""
+        worker = "autopxd-architect-test"
+        worker_proj = "python-autopxd2"
+
+        # 1. Register worker in project python-autopxd2
+        res_open = self.run_cmd(["open", worker, "architect", "--project", worker_proj])
+        self.assertEqual(res_open.returncode, 0)
+
+        try:
+            # 2. Query from a different project (coord_test) with specific agent name
+            res_who_specific = self.run_cmd(["who", worker, "--json"])
+            self.assertEqual(res_who_specific.returncode, 0)
+            data = json.loads(res_who_specific.stdout.strip())
+            self.assertEqual(len(data), 1)
+            self.assertEqual(data[0]["agent"], worker)
+            self.assertEqual(data[0]["project"], worker_proj)
+            self.assertEqual(data[0]["status"], "ACTIVE")
+
+            # 3. Advance virtual time by 300s so heartbeat TTL (150s) elapses
+            self.run_cmd(["time", "advance", "300"])
+
+            # 4. Without a listener, it should now report STALE
+            res_stale = self.run_cmd(["who", worker, "--json"])
+            self.assertEqual(res_stale.returncode, 0)
+            data_stale = json.loads(res_stale.stdout.strip())
+            self.assertEqual(len(data_stale), 1)
+            self.assertEqual(data_stale[0]["status"], "STALE")
+            self.assertEqual(data_stale[0]["listener"], "NO_LISTENER")
+
+            # 5. Start active listener process
+            listener_proc = subprocess.Popen(
+                [BIN_PATH, "--project", worker_proj, "listen", worker, "--quiet"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                cwd=self.test_home
+            )
+            time.sleep(0.3)
+
+            try:
+                # 6. With active listener, rhizo who MUST report ACTIVE and LISTENING even after 300s elapsed
+                res_live = self.run_cmd(["who", worker, "--json"])
+                self.assertEqual(res_live.returncode, 0)
+                data_live = json.loads(res_live.stdout.strip())
+                self.assertEqual(len(data_live), 1)
+                self.assertEqual(data_live[0]["status"], "ACTIVE")
+                self.assertEqual(data_live[0]["listener"], "LISTENING")
+
+                # Also verify `rhizo who --all --json` includes the active listener as ACTIVE
+                res_all = self.run_cmd(["who", "--all", "--json"])
+                self.assertEqual(res_all.returncode, 0)
+                data_all = json.loads(res_all.stdout.strip())
+                match = next((a for a in data_all if a.get("agent") == worker), None)
+                self.assertIsNotNone(match)
+                self.assertEqual(match["status"], "ACTIVE")
+                self.assertEqual(match["listener"], "LISTENING")
+            finally:
+                listener_proc.terminate()
+                listener_proc.communicate()
+
+        finally:
+            self.run_cmd(["close", worker])
+
+    def test_36_task_roadmap_and_garden_autosow(self):
+        """Invariant: rhizo task creation and completion automatically sync with Garden's seed ledger."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 1. Initialize .garden directory in temp project
+            garden_dir = os.path.join(temp_dir, ".garden")
+            seeds_dir = os.path.join(garden_dir, "seeds")
+            os.makedirs(seeds_dir, exist_ok=True)
+
+            task_id = "test-task-autosow-1"
+            task_title = "Automated Task for Roadmap Sync"
+
+            # 2. Run rhizo task create inside the project dir
+            res_create = self.run_cmd(["task", "create", task_id, "--title", task_title], cwd=temp_dir)
+            self.assertEqual(res_create.returncode, 0)
+
+            # 3. Verify seed was auto-sown into .garden/seeds/
+            seed_path = os.path.join(seeds_dir, f"{task_id}.toml")
+            self.assertTrue(os.path.exists(seed_path), f"Seed {seed_path} should be auto-sown by rhizo task create")
+            with open(seed_path, "r") as f:
+                content = f.read()
+            self.assertIn(task_id, content)
+            self.assertIn("DISPATCHED", content)
+
+            # 4. Verify rhizo roadmap or rhizo task roadmap works
+            res_roadmap = self.run_cmd(["roadmap", "--json"], cwd=temp_dir)
+            self.assertEqual(res_roadmap.returncode, 0)
+            data = json.loads(res_roadmap.stdout.strip())
+            self.assertIn("seasons", data)
+
+            # 5. Claim and complete task
+            worker = f"worker-roadmap-{int(time.time())}"
+            self.run_cmd(["open", worker])
+            try:
+                res_claim = self.run_cmd(["task", "claim", task_id, "--worker", worker, "--no-vine"])
+                self.assertEqual(res_claim.returncode, 0)
+
+                res_comp = self.run_cmd(["task", "complete", task_id, "--worker", worker, "--skip-gate"], cwd=temp_dir)
+                self.assertEqual(res_comp.returncode, 0)
+
+                # 6. Verify seed was auto-harvested to WOVEN
+                with open(seed_path, "r") as f:
+                    updated_content = f.read()
+                self.assertIn("status = \"WOVEN\"", updated_content)
+            finally:
+                self.run_cmd(["close", worker])
+
 
 if __name__ == "__main__":
     unittest.main()

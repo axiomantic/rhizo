@@ -1712,6 +1712,58 @@ proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 
   discard runLuaScript(cfg.redisUrl, reserveNameLua, reserveNameSha, [cfg.prefix, candidate, $ttl])
   return (name: candidate, prefix: pfx, codename: fallbackWord)
 
+proc isOrchestratorAgent*(name: string): bool =
+  let n = name.toLowerAscii
+  result = n.endsWith("orchestrator") or n == "orchestrator" or n.contains("-orchestrator") or n.contains("_orchestrator")
+
+proc checkRedisPersistenceAdvisory*(cfg: RhizoConfig, agentName: string, client: Redis = nil) =
+  if not cfg.checkPersistence:
+    return
+  if not isOrchestratorAgent(agentName):
+    return
+
+  var localClient = client
+  var needClose = false
+  if localClient == nil:
+    try:
+      localClient = openRedisClient(cfg.redisUrl)
+      needClose = true
+    except CatchableError:
+      return
+
+  defer:
+    if needClose and localClient != nil:
+      try: localClient.close() except CatchableError: discard
+
+  try:
+    let aofRes = localClient.configGet("appendonly")
+    var aofVal = ""
+    if aofRes.len >= 2:
+      aofVal = aofRes[1].toLowerAscii
+    elif aofRes.len == 1:
+      aofVal = aofRes[0].toLowerAscii
+
+    if aofVal == "no":
+      let saveRes = localClient.configGet("save")
+      var saveVal = ""
+      if saveRes.len >= 2:
+        saveVal = saveRes[1].strip()
+      elif saveRes.len == 1:
+        saveVal = saveRes[0].strip()
+
+      stderr.writeLine("\n[RHIZO ADVISORY] Redis persistence (AOF) is currently disabled on this instance (appendonly = no).")
+      if saveVal.len > 0:
+        stderr.writeLine("  Snapshotting (RDB) is active (" & saveVal & "), but unpersisted queue/lock state between snapshots may be lost on crash.")
+      else:
+        stderr.writeLine("  No persistence is enabled (memory-only mode). All agent state, task queues, and locks will be lost if Redis restarts.")
+      stderr.writeLine("  To automatically enable append-only file (AOF) persistence:")
+      stderr.writeLine("    rhizo config redis-persistence --enable")
+      stderr.writeLine("  To permanently silence this advisory check for orchestrator sessions:")
+      stderr.writeLine("    rhizo config redis-persistence --disable-warning")
+      stderr.writeLine("  (or set check_persistence = false under [redis] in ~/.config/rhizo/config.toml, or export RHIZO_CHECK_PERSISTENCE=0)\n")
+  except CatchableError:
+    discard
+
 proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = false, listenTimeoutSec: int = -1, forceSteal: bool = false) =
   cleanupOldTmpFiles()
   randomize()
@@ -1772,6 +1824,8 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   echo "- Engine     : Nim Native (EVALSHA cached)"
   echo "- Status     : Active & Listening on inbox"
   echo "===================================================="
+
+  checkRedisPersistenceAdvisory(cfg, name, client)
 
   if backlog.len > 2 and backlog != "[]":
     echo "\n[PENDING BACKLOG]:"
@@ -1912,8 +1966,8 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
   let lifecycle = vj.getOrDefault("lifecycle_state").getStr("").toUpperAscii()
   let gatePassedBool = vj.getOrDefault("gate_passed").getBool(false)
 
-  let statusOk = (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE"]) or
-                 (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE"]) or
+  let statusOk = (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED"]) or
+                 (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED"]) or
                  gatePassedBool
 
   var token = explicitGateToken
@@ -1927,8 +1981,8 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
   if not (statusOk and tokenOk):
     let currentStatus = if status.len > 0: status elif lifecycle.len > 0: lifecycle else: "UNVERIFIED"
     let msg = "[VINE GATE ERROR] Task cannot be marked complete.\n" &
-              "The Two-Key Gate has not been passed in this strand (manifest status: " & currentStatus & ").\n" &
-              "Run `vine gate` and resolve all test/merge failures first."
+              "The Three-Key Gate has not been passed in this strand (manifest status: " & currentStatus & ").\n" &
+              "Run `vine gate` and resolve all test/merge/audit failures first."
     return (false, "", msg)
 
   # Cryptographic Gate Certificate Verification (Harmonized with Vine)
@@ -2252,6 +2306,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   setTerminalTitle(name & " (listening)")
   checkSupervisionAttached(name, force or continuous)
   resetWatchdogStreak(cfg, name)
+  checkRedisPersistenceAdvisory(cfg, name, client)
   let secret = getSecret(cfg)
   let inboxKey = cfg.prefix & "inbox:" & name
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
@@ -2262,6 +2317,8 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
   try:
     discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
+    let nowSec = getTime().toUnix()
+    discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
   except CatchableError as e:
     stderr.writeLine("Redis error: " & e.msg)
     quit(1)
@@ -2273,6 +2330,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       let projTag = if cfg.project.len > 0: cfg.project else: "default"
       discard client.hSet(cfg.prefix & "agent:" & name, "tags", projTag)
       discard client.sadd(cfg.prefix & "tag:" & projTag, name)
+    let existingProj = client.hGet(cfg.prefix & "agent:" & name, "project")
+    if existingProj == redisNil or existingProj.len == 0:
+      let proj = if cfg.project.len > 0: cfg.project else: "default"
+      discard client.hSet(cfg.prefix & "agent:" & name, "project", proj)
+      discard client.sadd(cfg.prefix & "tag:" & proj, name)
   except CatchableError as e:
     stderr.writeLine("Redis error: " & e.msg)
     quit(1)
@@ -2309,6 +2371,8 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         # Re-register heartbeat & listener lock on new connection
         try:
           discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
+          let nowSec = getTime().toUnix()
+          discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
           discard client.sadd(cfg.prefix & "active_agents", name)
           discard client.setEx(listenerKey, hbTtl, listenerJson)
         except CatchableError:
@@ -2325,6 +2389,8 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         # Internal chunk timeout: renew heartbeat & listener lock silently in Redis only if still owner
         try:
           discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
+          let nowSec = getTime().toUnix()
+          discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
           discard client.sadd(cfg.prefix & "active_agents", name)
           let currentVal = client.get(cfg.prefix & "listener:" & name)
           var isMyLock = false
@@ -4080,6 +4146,88 @@ proc resolveVal(val: string): string =
       return val
   return val
 
+proc autoSowGardenTask*(taskId: string, title: string, tags: seq[string] = @[], season: string = "current", projectDir: string = "") =
+  try:
+    let root = if projectDir.len > 0: projectDir else: getCurrentDir()
+    var cur = root
+    var gardenDir = ""
+    while cur.len > 0:
+      if dirExists(cur / ".garden"):
+        gardenDir = cur / ".garden"
+        break
+      let parent = cur.parentDir()
+      if parent == cur: break
+      cur = parent
+    if gardenDir.len == 0:
+      return
+
+    let seedsDir = gardenDir / "seeds"
+    createDir(seedsDir)
+    let seedFile = seedsDir / (taskId & ".toml")
+    if not fileExists(seedFile):
+      var content = "id = \"" & taskId & "\"\n"
+      content &= "title = \"" & (if title.len > 0: title else: taskId) & "\"\n"
+      content &= "season = \"" & season & "\"\n"
+      content &= "sunlight = \"medium\"\n"
+      var tagStrs: seq[string] = @[]
+      for t in tags: tagStrs.add("\"" & t & "\"")
+      content &= "tags = [" & tagStrs.join(", ") & "]\n"
+      content &= "status = \"DISPATCHED\"\n"
+      let nowIso = now().utc().format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+      content &= "created_at = \"" & nowIso & "\"\n"
+      content &= "updated_at = \"" & nowIso & "\"\n"
+      writeFile(seedFile, content)
+      # Trigger roadmap sync if garden binary is present
+      discard execCmdEx("garden roadmap --sync --project-dir " & quoteShell(cur))
+  except CatchableError:
+    discard
+
+proc autoHarvestGardenTask*(taskId: string, projectDir: string = "") =
+  try:
+    let root = if projectDir.len > 0: projectDir else: getCurrentDir()
+    var cur = root
+    var gardenDir = ""
+    while cur.len > 0:
+      if dirExists(cur / ".garden"):
+        gardenDir = cur / ".garden"
+        break
+      let parent = cur.parentDir()
+      if parent == cur: break
+      cur = parent
+    if gardenDir.len == 0:
+      return
+
+    let seedsDir = gardenDir / "seeds"
+    let candidates = [taskId, "seed-" & taskId]
+    for c in candidates:
+      let seedFile = seedsDir / (c & ".toml")
+      if fileExists(seedFile):
+        var lines = readFile(seedFile).splitLines()
+        var newLines: seq[string] = @[]
+        let nowIso = now().utc().format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        var replacedStatus = false
+        var replacedUpdated = false
+        for l in lines:
+          let trimmed = l.strip()
+          if not replacedStatus and trimmed.startsWith("status") and trimmed.len > 6 and trimmed[6..^1].strip().startsWith("="):
+            newLines.add("status = \"WOVEN\"")
+            replacedStatus = true
+          elif not replacedUpdated and trimmed.startsWith("updated_at") and trimmed.len > 10 and trimmed[10..^1].strip().startsWith("="):
+            newLines.add("updated_at = \"" & nowIso & "\"")
+            replacedUpdated = true
+          else:
+            newLines.add(l)
+        if not replacedStatus:
+          newLines.add("status = \"WOVEN\"")
+        if not replacedUpdated:
+          newLines.add("updated_at = \"" & nowIso & "\"")
+        writeFile(seedFile, newLines.join("\n"))
+        # Trigger roadmap sync if garden binary is present
+        discard execCmdEx("garden roadmap --sync --project-dir " & quoteShell(cur))
+        break
+  except CatchableError:
+    discard
+
 proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
   var evalArgs: seq[string] = @[cfg.prefix, action]
   for a in args: evalArgs.add(a)
@@ -4146,6 +4294,7 @@ proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken
     try: removeFile(legacyTaskFile) except CatchableError: discard
 
   doAuditLog(cfg, worker, "task.complete", taskId & (if gateToken.len > 0: " (" & gateToken & ")" else: ""))
+  autoHarvestGardenTask(taskId, strandPath)
   return res
 
 proc doDecision*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
@@ -5655,6 +5804,7 @@ proc main() =
       of "heartbeat_ttl", "heartbeat": echo $cfg.heartbeatTtl
       of "message_ttl", "ttl": echo $cfg.messageTtl
       of "listen_timeout", "timeout": echo $cfg.listenTimeout
+      of "check_persistence", "persistence": echo $cfg.checkPersistence
       of "profile": echo cfg.profile
       of "config_file", "config": echo cfg.activeConfigFile
       else:
@@ -5662,6 +5812,106 @@ proc main() =
         quit(1)
     of "path", "paths":
       echo formatConfigPaths()
+    of "redis-persistence", "persistence":
+      var mode = "status"
+      var i = 2
+      while i < args.len:
+        let a = args[i].toLowerAscii
+        if a in ["--enable", "enable", "-e"]:
+          mode = "enable"
+        elif a in ["--disable-warning", "--disable", "disable", "disable-warning", "-d"]:
+          mode = "disable"
+        elif a in ["--status", "status", "-s"]:
+          mode = "status"
+        inc i
+
+      case mode
+      of "enable":
+        var client: Redis = nil
+        try:
+          client = openRedisClient(cfg.redisUrl)
+          defer: (try: client.close() except CatchableError: discard)
+          client.configSet("appendonly", "yes")
+          var rewriteMsg = ""
+          try:
+            client.socket.send("*2\r\n$6\r\nCONFIG\r\n$7\r\nREWRITE\r\n")
+            rewriteMsg = client.socket.recvLine().strip()
+          except CatchableError as e:
+            rewriteMsg = "Error: " & e.msg
+
+          if rewriteMsg.startsWith("+OK"):
+            echo "[RHIZO] Append-only file (AOF) persistence enabled and configuration rewritten to redis.conf."
+          else:
+            echo "[RHIZO] Append-only file (AOF) persistence enabled for running Redis instance."
+            if rewriteMsg.len > 0:
+              echo "  (Note: CONFIG REWRITE response: '" & rewriteMsg & "'. If persistence across restarts is needed, ensure 'appendonly yes' is in your redis.conf)"
+        except CatchableError as e:
+          stderr.writeLine("Error enabling Redis persistence: " & e.msg)
+          quit(1)
+
+      of "disable":
+        let usrConfigPath = getUserConfigPath()
+        createDir(usrConfigPath.splitPath.head)
+        var content = ""
+        if fileExists(usrConfigPath):
+          content = readFile(usrConfigPath)
+
+        let toml = parseSimpleToml(content)
+        if toml.hasKey("redis"):
+          var lines = content.splitLines()
+          var inRedis = false
+          var foundKey = false
+          var newLines: seq[string] = @[]
+          for l in lines:
+            let tr = l.strip()
+            if tr.toLowerAscii == "[redis]":
+              inRedis = true
+              newLines.add(l)
+            elif inRedis and tr.startsWith("[") and tr.endsWith("]"):
+              if not foundKey:
+                newLines.add("check_persistence = false")
+                foundKey = true
+              inRedis = false
+              newLines.add(l)
+            elif inRedis and (tr.toLowerAscii.startsWith("check_persistence") or tr.toLowerAscii.startsWith("rhizo_check_persistence")):
+              newLines.add("check_persistence = false")
+              foundKey = true
+            else:
+              newLines.add(l)
+          if inRedis and not foundKey:
+            newLines.add("check_persistence = false")
+            foundKey = true
+          content = newLines.join("\n")
+        else:
+          if content.len > 0 and not content.endsWith("\n"):
+            content.add("\n")
+          content.add("\n[redis]\ncheck_persistence = false\n")
+
+        writeFile(usrConfigPath, content)
+        secureFilePermissions(usrConfigPath)
+        echo "[RHIZO] Disabled Redis persistence advisory check in " & usrConfigPath
+
+      of "status":
+        var client: Redis = nil
+        var aofVal = "unknown"
+        var saveVal = "unknown"
+        try:
+          client = openRedisClient(cfg.redisUrl)
+          defer: (try: client.close() except CatchableError: discard)
+          let aofRes = client.configGet("appendonly")
+          if aofRes.len >= 2: aofVal = aofRes[1]
+          elif aofRes.len == 1: aofVal = aofRes[0]
+
+          let saveRes = client.configGet("save")
+          if saveRes.len >= 2: saveVal = saveRes[1]
+          elif saveRes.len == 1: saveVal = saveRes[0]
+        except CatchableError as e:
+          aofVal = "error (" & e.msg & ")"
+
+        echo "Redis Persistence Status (" & cfg.redisUrl & "):"
+        echo "  Append-Only File (AOF) : " & aofVal
+        echo "  RDB Snapshotting       : " & (if saveVal.len > 0: saveVal else: "disabled")
+        echo "  Orchestrator Advisory  : " & (if cfg.checkPersistence: "enabled" else: "disabled")
     of "init":
       var target = "workspace"
       var force = false
@@ -5684,7 +5934,7 @@ proc main() =
       echo res
     else:
       stderr.writeLine("Unknown config action: " & action)
-      stderr.writeLine("Usage: rhizo config <show|get|path|init>")
+      stderr.writeLine("Usage: rhizo config <show|get|path|init|redis-persistence>")
       quit(1)
 
   of "name", "assign-name", "reserve-name":
@@ -6162,7 +6412,18 @@ proc main() =
         if targetProject.len == 0:
           targetProject = a
       inc i
-    echo doReset(cfg, targetProject, forceAll, isJson)
+  of "roadmap":
+    var passArgs: seq[string] = @[]
+    for a in rawArgs[1..^1]: passArgs.add(quoteShell(a))
+    let (gOut, gCode) = execCmdEx("garden roadmap " & passArgs.join(" "))
+    if gCode == 0:
+      echo gOut.strip()
+      quit(0)
+    let res = doTask(cfg, "list", [])
+    if ("--json" in rawArgs) or ("-j" in rawArgs):
+      echo res
+    else:
+      echo formatTasksTable(res)
 
   of "ping":
     var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
@@ -7645,6 +7906,7 @@ proc main() =
         stderr.writeLine(res)
         quit(1)
       doAuditLog(cfg, getActiveAgentName(cfg, fallbackDefault = true), "task.create", taskId & " - " & title)
+      autoSowGardenTask(taskId, title)
       try:
         let node = parseJson(res)
         let st = node.getOrDefault("state").getStr("QUEUED")
@@ -7798,7 +8060,7 @@ proc main() =
       if worker.len == 0:
         worker = getActiveAgentName(cfg, fallbackDefault = true)
 
-      # Check Vine Two-Key gate if strand was registered
+      # Check Vine Three-Key gate if strand was registered
       let taskDataStr = doTask(cfg, "get", [taskId])
       var strandPath = ""
       try:
@@ -7939,8 +8201,22 @@ proc main() =
       else:
         echo formatTasksTable(res)
 
+    of "roadmap":
+      var passArgs: seq[string] = @[]
+      for a in args[2..^1]: passArgs.add(quoteShell(a))
+      let (gOut, gCode) = execCmdEx("garden roadmap " & passArgs.join(" "))
+      if gCode == 0:
+        echo gOut.strip()
+        quit(0)
+      var jsonOut = false
+      for a in args[2..^1]:
+        if a in ["--json", "-j"]: jsonOut = true
+      let res = doTask(cfg, "list", [])
+      if jsonOut: echo res
+      else: echo formatTasksTable(res)
+
     else:
-      stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, gate-report, complete, yield, current, sweep, get, list")
+      stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, gate-report, complete, yield, current, sweep, get, list, roadmap")
       quit(1)
 
   of "decision":

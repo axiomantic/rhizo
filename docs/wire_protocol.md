@@ -131,7 +131,7 @@ $$\text{Signature} = \text{HMAC-SHA256}\Big(K_{\text{secret}}, \, \texttt{"\{id\
 | `broadcast` | Multicast announcement to all agents. | Broadcast to `channel:all` or `channel:<tag>`. | Informational; does NOT set worker to `BUSY`. |
 | `rpc_request` | Synchronous query awaiting response. | Wakes worker; expects matching `correlation_id` reply. | Holds RPC timeout lease. |
 | `rpc_response`| Response payload answering `rpc_request`. | Delivers response to waiting RPC caller. | Resolves RPC caller promise. |
-| `gate_report` | Two-Key Gate verification outcome. | Delivered to Lead Orchestrator. | Triggers WISM transition to `READY_TO_WEAVE` or `GATE_FAILED`. |
+| `gate_report` | Three-Key Gate verification outcome. | Delivered to Lead Orchestrator. | Triggers WISM transition to `READY_TO_WEAVE` or `GATE_FAILED`. |
 
 ---
 

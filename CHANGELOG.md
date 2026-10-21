@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.24] - 2026-10-19
+### Added
+- **Task Roadmap CLI & Botanical Auto-Sowing (`src/rhizo.nim`, `tests/test_coordination_invariants.py`)**:
+  - Implemented `rhizo roadmap` and `rhizo task roadmap` subcommands supporting `--json`, `--markdown`, `--write`, and `--sync`.
+  - Added automated botanical seed sowing (`autoSowGardenTask`) into `.garden/seeds/<task_id>.toml` on `rhizo task create`.
+  - Added automated harvest reconciliation (`autoHarvestGardenTask`) marking seeds `status = "WOVEN"` upon `rhizo task complete` and triggering roadmap sync.
+  - Added `test_36_task_roadmap_and_garden_autosow` to test suite.
+- **Redis Persistence Advisory Check (`src/rhizo.nim`, `src/config.nim`)**:
+  - Added startup persistence advisory check for Lead Orchestrator sessions to verify Redis AOF/RDB configuration.
+  - Added `rhizo config redis-persistence` CLI tool with `--status`, `--enable`, and `--disable-warning` flags, and `check_persistence` config setting.
+- **Operator-Named Worker Delegation Mandate (`AGENTS.md`, `src/guide.nim`, `skills/rhizo/SKILL.md`)**:
+  - Codified mandatory direct routing to operator-named workers over Rhizo, prohibiting single-project roster gating or fallback to subagents.
+- **Anti-Defeat-Device & Autonomous Intensive Audit Mandates (`AGENTS.md`, `src/guide.nim`, `skills/rhizo/SKILL.md`)**:
+  - Added the Anti-Defeat-Device & Anti-Theatrical Interceptor Mandate to Section 11 of the Rhizo Guide: strictly prohibits prompt keyword interceptors and theatrical mock questionnaires in production code.
+  - Codified the Autonomous Intensive Audit Mandate: intensive Five-Pillar adversarial audits are Standard Operating Procedure (SOP), pre-authorized, and autonomous across the Triad without requiring operator confirmation.
+
+### Fixed
+- **Active Listener Liveness & Query Resolution (`scripts/directory.lua`, `src/rhizo.nim`)**:
+  - Enhanced `scripts/directory.lua` to support exact agent codename queries (`rhizo who <agent>`).
+  - Active listeners (`has_listener == 1`) are now unconditionally reported as `alive = 1` (`status: "ACTIVE"`).
+  - Enhanced `doListen` to refresh `last_seen` timestamp in `agent:<name>` on initial arming and every chunk timeout renewal, eliminating false-stale timeouts.
+  - Added `test_35_who_query_and_active_listener_liveness` to test suite.
 
 ### Added
 - **Codex-Native Wakeup Protocol (`RHIZO_WAKE`)**:

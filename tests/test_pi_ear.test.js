@@ -118,13 +118,21 @@ describe("Pi Coding Agent Extension (pi-ear.ts)", () => {
     expect(resolveMessageUrgency('raw string')).toBe("soon")
   })
 
-  it("deliverPiPrompt invokes sendMessage, sendPrompt, or session.prompt", async () => {
+  it("deliverPiPrompt invokes sendUserMessage, sendMessage, sendPrompt, or session.prompt", async () => {
+    let sentUserMessage = null
+    const clientUser = {
+      sendUserMessage: async (msg) => { sentUserMessage = msg }
+    }
+    await deliverPiPrompt(clientUser, "Hello from sendUserMessage", [])
+    expect(sentUserMessage).toBe("Hello from sendUserMessage")
+
     let sentMessage = null
     const clientA = {
       sendMessage: async (msg) => { sentMessage = msg }
     }
     await deliverPiPrompt(clientA, "Hello from Rhizo", [])
-    expect(sentMessage).toBe("Hello from Rhizo")
+    const textA = typeof sentMessage === "string" ? sentMessage : sentMessage?.content
+    expect(textA).toBe("Hello from Rhizo")
 
     let sentPrompt = null
     const clientB = {
@@ -190,12 +198,13 @@ describe("Pi Coding Agent Extension (pi-ear.ts)", () => {
     ]
 
     await deliverPiPrompt(mockPi, "Execute work", testReminders)
-    expect(delivered).toContain("[ACTIVE ADVISORY - PRIORITY: CRITICAL (rem-101)]:")
-    expect(delivered).toContain("Zero green mirage: live verification required")
-    expect(delivered).toContain("[ACTIVE ADVISORY - PRIORITY: HIGH (rem-102)]:")
-    expect(delivered).toContain("Audit integer underflow")
-    expect(delivered).not.toContain("rem-103")
-    expect(delivered).toContain("Execute work")
+    const textDelivered = typeof delivered === "string" ? delivered : delivered?.content
+    expect(textDelivered).toContain("[ACTIVE ADVISORY - PRIORITY: CRITICAL (rem-101)]:")
+    expect(textDelivered).toContain("Zero green mirage: live verification required")
+    expect(textDelivered).toContain("[ACTIVE ADVISORY - PRIORITY: HIGH (rem-102)]:")
+    expect(textDelivered).toContain("Audit integer underflow")
+    expect(textDelivered).not.toContain("rem-103")
+    expect(textDelivered).toContain("Execute work")
   })
 
   it("manages active tasks and keeps lease alive with throttling in Pi ear", async () => {
@@ -255,4 +264,52 @@ describe("Pi Coding Agent Extension (pi-ear.ts)", () => {
 
     pubsub.kill()
   })
+
+  it("injects agent identity into system prompt via before_agent_start", async () => {
+    const handlers = {}
+    const mockPi = {
+      on: (evt, fn) => { handlers[evt] = fn },
+      session: { id: "ses_identity", title: "My Agent" }
+    }
+
+    const ext = PiExtension(mockPi)
+    expect(typeof handlers["before_agent_start"]).toBe("function")
+
+    process.env.RHIZO_AGENT_NAME = "pi-identity-test"
+    const res = await handlers["before_agent_start"]({ systemPrompt: "Base prompt." })
+    expect(res).toBeDefined()
+    expect(res.systemPrompt).toContain("[Rhizo Multi-Agent Coordination]: Your unique agent codename is @pi-identity-test.")
+    expect(res.systemPrompt).toContain("Base prompt.")
+
+    if (ext && typeof ext.cleanup === "function") ext.cleanup()
+  })
+
+  it("rhizo tool defensively handles array subcommands, null arguments, whoami, and listen", async () => {
+    let rhizoToolDef = null
+    const mockPi = {
+      registerTool: (def) => { rhizoToolDef = def },
+      on: () => {},
+    }
+
+    const ext = PiExtension(mockPi)
+    expect(rhizoToolDef).toBeDefined()
+
+    process.env.RHIZO_AGENT_NAME = "pi-defense-test"
+
+    // 1. whoami / name subcommand
+    const whoRes = await rhizoToolDef.execute("call_1", { subcommand: "whoami" })
+    expect(whoRes.content[0].text).toContain("Your Rhizo agent codename is @pi-defense-test")
+
+    // 2. listen subcommand returns advisory that background ear is already active
+    const listenRes = await rhizoToolDef.execute("call_2", { subcommand: ["listen"] })
+    expect(listenRes.content[0].text).toContain("Background listener is already active")
+
+    // 3. null params default to status
+    const nullRes = await rhizoToolDef.execute("call_3", null)
+    expect(nullRes).toBeDefined()
+    expect(Array.isArray(nullRes.content)).toBe(true)
+
+    if (ext && typeof ext.cleanup === "function") ext.cleanup()
+  })
 })
+

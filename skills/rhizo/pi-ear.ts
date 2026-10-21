@@ -253,7 +253,17 @@ export function resolveMessageUrgency(text: string): "immediate" | "soon" {
   return "soon"
 }
 
-export async function deliverPiPrompt(pi: any, text: string, reminders?: Reminder[]): Promise<void> {
+export let lastExtensionCtx: any = null
+
+export function setLastExtensionContext(ctx: any): void {
+  lastExtensionCtx = ctx
+}
+
+export function getLastExtensionContext(): any {
+  return lastExtensionCtx
+}
+
+export async function deliverPiPrompt(pi: any, text: string, reminders?: Reminder[], ctx?: any): Promise<void> {
   let promptText = text
   const activeReminders = reminders !== undefined ? reminders : queryActiveReminders()
   const advisory = formatAdvisoryBlock(activeReminders)
@@ -261,9 +271,49 @@ export async function deliverPiPrompt(pi: any, text: string, reminders?: Reminde
     promptText = advisory + promptText
   }
 
+  const effectiveCtx = ctx || lastExtensionCtx
+
+  // 1. Primary path: pi.sendUserMessage (standard Pi API for user-injected turns)
+  if (typeof pi?.sendUserMessage === "function") {
+    try {
+      if (effectiveCtx && typeof effectiveCtx.isIdle === "function" && !effectiveCtx.isIdle()) {
+        await pi.sendUserMessage(promptText, { deliverAs: "steer" })
+      } else {
+        await pi.sendUserMessage(promptText)
+      }
+      return
+    } catch {
+      try {
+        await pi.sendUserMessage(promptText, { deliverAs: "steer" })
+        return
+      } catch (err: any) {
+        console.error(`[rhizo-pi-ear] sendUserMessage failed: ${err?.message}`)
+      }
+    }
+  }
+
+  // 2. Secondary path: pi.sendMessage with triggerTurn
   if (typeof pi?.sendMessage === "function") {
-    await pi.sendMessage(promptText)
-  } else if (typeof pi?.sendPrompt === "function") {
+    try {
+      await pi.sendMessage(
+        {
+          customType: "rhizo-ear",
+          content: promptText,
+          display: true,
+        },
+        {
+          triggerTurn: true,
+          deliverAs: "steer",
+        }
+      )
+      return
+    } catch (err: any) {
+      console.error(`[rhizo-pi-ear] sendMessage failed: ${err?.message}`)
+    }
+  }
+
+  // 3. Fallbacks for alternative/custom runners
+  if (typeof pi?.sendPrompt === "function") {
     await pi.sendPrompt(promptText)
   } else if (typeof pi?.session?.promptAsync === "function") {
     await pi.session.promptAsync({ body: { parts: [{ type: "text", text: promptText }] } })
@@ -275,13 +325,21 @@ export async function deliverPiPrompt(pi: any, text: string, reminders?: Reminde
   }
 }
 
-export async function interruptPiIfBusy(pi: any): Promise<void> {
+export async function interruptPiIfBusy(pi: any, ctx?: any): Promise<void> {
   if (process.env.RHIZO_INTERRUPT === "0") return
+  const effectiveCtx = ctx || lastExtensionCtx
   try {
+    if (typeof effectiveCtx?.abort === "function") {
+      effectiveCtx.abort()
+      return
+    }
     if (typeof pi?.abort === "function") {
       await pi.abort()
-    } else if (typeof pi?.session?.abort === "function") {
+      return
+    }
+    if (typeof pi?.session?.abort === "function") {
       await pi.session.abort()
+      return
     }
   } catch (err: any) {
     console.error(`[rhizo-pi-ear] could not abort Pi session: ${err?.message}`)
@@ -304,6 +362,7 @@ export function startPubSubPreemption(pi: any, agentName: string, cwd: string = 
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
       })
+      if (typeof child.unref === "function") child.unref()
       procs.push(child)
 
       let stdoutData = ""
@@ -373,28 +432,73 @@ export function RhizoPiExtension(pi: any) {
       properties: {
         subcommand: {
           type: "string",
-          description: "Subcommand to execute (open, send, reply, broadcast, request, claim, ack, status, who)",
+          description: "Subcommand to execute (status, who, whoami, send, reply, claim, ack, open)",
         },
         args: {
           type: "array",
           items: { type: "string" },
-          description: "Arguments to pass to rhizo CLI",
+          description: "Optional arguments to pass to the rhizo CLI subcommand",
         },
       },
       required: ["subcommand"],
     }
-    const toolExec = async ({ subcommand, args = [] }: { subcommand: string; args?: string[] }) => {
+    const toolExec = async (toolCallId: string, params: any, signal?: any, onUpdate?: any, ctx?: any) => {
+      let subcommand = "status"
+      let args: string[] = []
+
+      if (params) {
+        if (typeof params.subcommand === "string") {
+          subcommand = params.subcommand.trim()
+        } else if (Array.isArray(params.subcommand) && params.subcommand.length > 0) {
+          subcommand = String(params.subcommand[0]).trim()
+          if (params.subcommand.length > 1) {
+            args.push(...params.subcommand.slice(1).map(String))
+          }
+        }
+        if (Array.isArray(params.args)) {
+          args.push(...params.args.map(String))
+        } else if (typeof params.args === "string") {
+          args.push(params.args.trim())
+        }
+      }
+
+      const agentName = process.env.RHIZO_AGENT_NAME || "unknown"
+
+      if (subcommand === "whoami" || subcommand === "name") {
+        return {
+          content: [{ type: "text", text: `Your Rhizo agent codename is @${agentName}` }],
+          details: { exitCode: 0, stdout: `@${agentName}`, stderr: "" },
+        }
+      }
+
+      if (subcommand === "listen") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `[rhizo-pi-ear]: Background listener is already active and streaming incoming messages for @${agentName}. You do not need to invoke 'listen' manually; incoming tasks and directives are automatically delivered into your session context.`,
+            },
+          ],
+          details: { exitCode: 0, stdout: "", stderr: "" },
+        }
+      }
+
       const fullArgs = [subcommand, ...args]
-      const res = spawnSync(rhizoBin, fullArgs, { encoding: "utf8" })
+      const res = spawnSync(rhizoBin, fullArgs, { encoding: "utf8", timeout: 30000 })
+      const text = [res.stdout, res.stderr].filter(Boolean).join("\n") || "(no output)"
       return {
-        stdout: res.stdout,
-        stderr: res.stderr,
-        exitCode: res.status,
+        content: [{ type: "text", text }],
+        details: {
+          exitCode: res.status ?? (res.error ? 1 : 0),
+          stdout: res.stdout,
+          stderr: res.stderr || (res.error ? String(res.error) : ""),
+        },
       }
     }
 
     pi.registerTool({
       name: "rhizo",
+      label: "Rhizo",
       description: "Inter-agent communication bus, distributed locks, queues, and task dispatch over Redis.",
       parameters: toolParams,
       execute: toolExec,
@@ -402,9 +506,10 @@ export function RhizoPiExtension(pi: any) {
   }
 
   // 2. Lifecycle hooks
-  const onSessionStart = async (sessionInfo?: any) => {
-    const sessionId = sessionInfo?.id || sessionInfo?.sessionId || "default"
-    const title = sessionInfo?.title || ""
+  const onSessionStart = async (eventOrSession?: any, ctx?: any) => {
+    if (ctx) setLastExtensionContext(ctx)
+    const sessionId = ctx?.sessionManager?.getSessionId?.() || eventOrSession?.sessionId || eventOrSession?.id || pi?.session?.id || "default"
+    const title = ctx?.sessionManager?.getSessionName?.() || pi?.getSessionName?.() || eventOrSession?.title || ""
     const agentName = resolveSessionAgent(sessionId, title)
 
     // Set process environment for child tools
@@ -436,11 +541,13 @@ export function RhizoPiExtension(pi: any) {
     }
 
     if (typeof pi?.on === "function") {
-      const toolHandler = (d?: any) => {
+      const toolHandler = (d?: any, toolCtx?: any) => {
+        if (toolCtx) setLastExtensionContext(toolCtx)
         const name = d?.name || d?.tool || "tool"
         handleKeepAlive(`tool:${name}`)
       }
-      const fileHandler = (d?: any) => {
+      const fileHandler = (d?: any, fileCtx?: any) => {
+        if (fileCtx) setLastExtensionContext(fileCtx)
         const p = d?.path || d?.file || "file"
         handleKeepAlive(`file:${p}`)
       }
@@ -459,9 +566,10 @@ export function RhizoPiExtension(pi: any) {
     const startListener = async () => {
       while (running) {
         try {
-          const child = spawn(rhizoBin, ["listen", agentName, "0"], {
+          const child = spawn(rhizoBin, ["listen", agentName, "--continuous", "--quiet"], {
             stdio: ["ignore", "pipe", "pipe"],
           })
+          if (typeof child.unref === "function") child.unref()
           activeProc = child
 
           let stdoutData = ""
@@ -524,23 +632,55 @@ export function RhizoPiExtension(pi: any) {
     startListener().catch(() => {})
   }
 
+  const cleanupSession = () => {
+    running = false
+    if (activeProc) {
+      try { activeProc.kill() } catch {}
+      activeProc = null
+    }
+    if (pubsubHandle) {
+      try { pubsubHandle.kill() } catch {}
+      pubsubHandle = null
+    }
+    const sid = process.env.RHIZO_SESSION_ID
+    if (sid) {
+      removeLocalSessionMapping(sid)
+    }
+  }
+
   if (typeof pi?.on === "function") {
     pi.on("session_start", onSessionStart)
     pi.on("session.start", onSessionStart)
-    pi.on("session_end", () => {
-      running = false
-      if (activeProc) {
-        try { activeProc.kill() } catch {}
+    pi.on("before_agent_start", async (event: any, ctx: any) => {
+      if (ctx) setLastExtensionContext(ctx)
+      let agentName = process.env.RHIZO_AGENT_NAME
+      if (!agentName || agentName === "unknown") {
+        const sessionId = ctx?.sessionManager?.getSessionId?.() || ctx?.sessionId || pi?.session?.id || "default"
+        const title = ctx?.sessionManager?.getSessionName?.() || pi?.getSessionName?.() || ""
+        agentName = resolveSessionAgent(sessionId, title)
+        process.env.RHIZO_AGENT_NAME = agentName
+        process.env.RHIZO_SESSION_ID = `pi:${sessionId}`
       }
-      if (pubsubHandle) {
-        try { pubsubHandle.kill() } catch {}
-        pubsubHandle = null
-      }
-      const sid = process.env.RHIZO_SESSION_ID
-      if (sid) {
-        removeLocalSessionMapping(sid)
+      const reminders = queryActiveReminders(rhizoBin)
+      const advisory = formatAdvisoryBlock(reminders)
+      const identityBlock = `\n\n[Rhizo Multi-Agent Coordination]: Your unique agent codename is @${agentName}. You are connected to the Rhizo coordination bus over Redis. When peers address tasks, questions, or directives to @${agentName}, that is you. When asked for your Rhizo name or identity, state that you are @${agentName}. To send tasks or reply, use the 'rhizo' tool or CLI ('rhizo send <recipient> --subject <subj> --body <body>', 'rhizo reply --to <sender> --subject <subj> --body <body>').`
+      return {
+        systemPrompt: (event?.systemPrompt || "") + identityBlock + (advisory ? "\n\n" + advisory : ""),
       }
     })
+    const updateCtx = (_event: any, ctx: any) => {
+      if (ctx) setLastExtensionContext(ctx)
+    }
+    pi.on("turn_start", updateCtx)
+    pi.on("turn_end", updateCtx)
+    pi.on("agent_start", updateCtx)
+    pi.on("agent_end", updateCtx)
+    pi.on("session_shutdown", cleanupSession)
+    pi.on("session_end", cleanupSession)
+  }
+
+  if (typeof process?.on === "function") {
+    process.on("exit", cleanupSession)
   }
 
   // Initial trigger if session already active

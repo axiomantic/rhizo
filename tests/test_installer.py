@@ -337,6 +337,7 @@ class TestInstallerAndUninstaller(unittest.TestCase):
         desc = frontmatter["description"]
         self.assertIsInstance(desc, str)
         self.assertGreater(len(desc), 50)
+        self.assertLessEqual(len(desc), 1024, f"Skill description exceeds Agent Skills spec limit of 1024 characters ({len(desc)})")
         for keyword in ["Redis", "locking", "queue", "coordination"]:
             self.assertIn(keyword.lower(), desc.lower(), f"Description missing critical capability keyword: {keyword}")
 

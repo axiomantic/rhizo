@@ -87,6 +87,7 @@ type
     allProjects*: bool
     globalLock*: bool
     crossProject*: string
+    checkPersistence*: bool
 
 proc sourceLabel*(s: SettingSource): string =
   case s
@@ -384,6 +385,10 @@ proc applyDict(
         cfg.listenTimeout = n
         cfg.provenance["listen_timeout"] = ProvenanceEntry(key: "listen_timeout", value: $n, source: source, detail: detail)
       except ValueError: discard
+    of "check_persistence", "rhizo_check_persistence":
+      let b = v.toLowerAscii in ["1", "true", "yes", "on"]
+      cfg.checkPersistence = b
+      cfg.provenance["check_persistence"] = ProvenanceEntry(key: "check_persistence", value: $b, source: source, detail: detail)
     else:
       discard
 
@@ -409,6 +414,9 @@ proc loadConfigFile(
     # Apply [project] section if present
     if toml.hasKey("project"):
       applyDict(cfg, toml["project"], source, path & " [project]")
+    # Apply [redis] section if present
+    if toml.hasKey("redis"):
+      applyDict(cfg, toml["redis"], source, path & " [redis]")
     # Apply requested profile if specified
     if targetProfile.len > 0:
       let profKey1 = "profiles." & targetProfile.toLowerAscii
@@ -518,6 +526,7 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
     heartbeatTtl: 150,
     messageTtl: 604800,
     listenTimeout: 0,
+    checkPersistence: true,
     profile: "default",
     provenance: initTable[string, ProvenanceEntry]()
   )
@@ -533,6 +542,7 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
   result.provenance["heartbeat_ttl"] = ProvenanceEntry(key: "heartbeat_ttl", value: $result.heartbeatTtl, source: srcDefault, detail: "150s default")
   result.provenance["message_ttl"] = ProvenanceEntry(key: "message_ttl", value: $result.messageTtl, source: srcDefault, detail: "7 days default")
   result.provenance["listen_timeout"] = ProvenanceEntry(key: "listen_timeout", value: $result.listenTimeout, source: srcDefault, detail: "0s (infinite blocking default)")
+  result.provenance["check_persistence"] = ProvenanceEntry(key: "check_persistence", value: "true", source: srcDefault, detail: "orchestrator advisory check enabled by default")
 
   # Resolve profile selector
   var targetProfile = cli.profile
@@ -618,6 +628,12 @@ proc resolveFullConfig*(cli: CliOverrides = CliOverrides()): RhizoConfig =
     let b = envCluster in ["1", "true", "TRUE", "yes"]
     result.cluster = b
     result.provenance["cluster"] = ProvenanceEntry(key: "cluster", value: $b, source: srcEnv, detail: "RHIZO_CLUSTER=" & envCluster)
+
+  let envCheckPersist = getEnv("RHIZO_CHECK_PERSISTENCE")
+  if envCheckPersist.len > 0:
+    let b = envCheckPersist.toLowerAscii in ["1", "true", "TRUE", "yes"]
+    result.checkPersistence = b
+    result.provenance["check_persistence"] = ProvenanceEntry(key: "check_persistence", value: $b, source: srcEnv, detail: "RHIZO_CHECK_PERSISTENCE=" & envCheckPersist)
 
   # Step 7: Explicit CLI Arguments
   if cli.redisUrl.len > 0:
@@ -731,7 +747,7 @@ proc formatConfigTable*(cfg: RhizoConfig): string =
   
   let orderedKeys = [
     "redis_url", "prefix", "project", "agent_name", "secret", "secret_file",
-    "encrypt", "cluster", "heartbeat_ttl", "message_ttl", "listen_timeout"
+    "encrypt", "cluster", "heartbeat_ttl", "message_ttl", "listen_timeout", "check_persistence"
   ]
   for k in orderedKeys:
     if cfg.provenance.hasKey(k):

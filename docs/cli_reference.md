@@ -89,7 +89,7 @@ rhizo send --to worker-alpha --from orchestrator --type task \
 Sends a response message to a target agent.
 ```bash
 rhizo reply --to orchestrator --from worker-alpha \
-  --subject "Task Complete: Two-Key Gate Passed" \
+  --subject "Task Complete: Three-Key Gate Passed" \
   --body "All 25 tests passing in isolated strand." \
   --skip-gate --idle
 ```

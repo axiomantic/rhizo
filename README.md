@@ -69,13 +69,13 @@ Rhizo is completely standalone and can be used on its own for any inter-process 
 
 However, Rhizo is designed from the ground up to pair seamlessly with **Vine** and **Garden**:
 - **Rhizo** (Transport & Concurrency): Inter-agent messaging bus, monotonic fencing locks, and task queues over Redis.
-- [**Vine**](https://github.com/axiomantic/vine) (Workspaces & Verification): Zero-cost Rift copy-on-write strands, polyglot build-cache normalization, and the Two-Key integration gate (`git merge-tree` mechanical + compiler/test suite semantic checks).
+- [**Vine**](https://github.com/axiomantic/vine) (Workspaces & Verification): Zero-cost Rift copy-on-write strands, polyglot build-cache normalization, and the Three-Key integration gate (mechanical merge-tree, compiler/test suite semantic checks, and independent adversarial audit).
 - [**Garden**](https://github.com/axiomantic/garden) (Swarm Methodology & High-Level Wrapper): Conversational project intake interview, prompt-bootstrapped worker fleets (10-backtick cards), 3-stage empirical dialectical pump (research, architecture, audit), and master ceremonial implementation planning.
 
 #### Complete Workflow
 1. **Claim Task**: `rhizo claim queue:myproj:tasks --lease 1800` (yields monotonic `fencing_token`).
 2. **Spin Zero-Cost Strand**: `vine new <task_id>` (sub-second Rift CoW workspace).
-3. **Verify Two-Key Gate**: `vine gate --json` (Key 1 in-memory conflict check + Key 2 live compiler/test suite).
+3. **Verify Three-Key Gate**: `vine gate --json` && `vine submit` (Key 1 in-memory conflict check + Key 2 live compiler/test suite + Key 3 adversarial audit ratification via `vine audit approve`).
 4. **Weave & Acknowledge**: `vine weave && rhizo ack queue:myproj:tasks <task_id>`.
 
 ---
@@ -656,7 +656,7 @@ npx skills remove rhizo -g
 | `rhizo claim <queue> [timeout_sec]` | Non-destructively leases task from queue with DLQ escalation (default: 0 / infinite wait). | `rhizo claim jobs --lease 60 --run-id run_01` |
 | `rhizo claim renew <queue> <id>` | Safely extends active worker lease deadline before task expires. | `rhizo claim renew jobs "task_123" --lease 120` |
 | `rhizo ack <queue> <task_id>` | Acknowledges task completion and releases active worker lease. | `rhizo ack jobs "task_123"` |
-| `rhizo task <cmd> [args...]` | Unified Work Item State Machine (WISM) lifecycle (`create`, `list`, `get`, `claim`, `progress`, `yield`, `complete`) with Two-Key Gate verification. | `rhizo task create task-01 --subject "Feature"` |
+| `rhizo task <cmd> [args...]` | Unified Work Item State Machine (WISM) lifecycle (`create`, `list`, `get`, `claim`, `progress`, `yield`, `complete`) with Three-Key Gate verification. | `rhizo task create task-01 --subject "Feature"` |
 | `rhizo hook install [--flags]` | Automated one-line configuration installer for coding harness hooks & plugins (`--opencode`, `--pi`, `--claude`, `--codex`). | `rhizo hook install --opencode --local` |
 | `rhizo probe <agent>` | Health probe assessing heartbeat TTL, listener PID, socket responsiveness, and unread backlog. | `rhizo probe worker-1` |
 | `rhizo alias <set\|remove\|list>` | Manages agent alias mappings in Redis. | `rhizo alias set coder-lead worker-1` |
@@ -894,22 +894,23 @@ For OpenCode and Pi Coding Agent, Rhizo's in-process extensions operate as conti
 
 ---
 
-### Two-Key Gate Command Interlock
+### Three-Key Gate Command Interlock
 
-Rhizo integrates directly with Vine's **Two-Key Integration Gate** to prevent broken or unverified code from being reported as completed:
+Rhizo integrates directly with Vine's **Three-Key Integration Gate** to prevent broken or unverified code from being reported as completed:
 
 ```bash
-# Completes task and verifies Two-Key Gate if inside a Vine strand
+# Completes task and verifies Three-Key Gate if inside a Vine strand
 rhizo task complete <task_id>
 
-# Or reply with completion and verify Two-Key Gate
+# Or reply with completion and verify Three-Key Gate
 rhizo reply --to <orchestrator> --subject "Task Done" --body "..." --reply-to "<id>"
 ```
 
-- **Automatic Pre-Flight Verification**: When `rhizo task complete` or `rhizo reply` is called from within an active Vine strand (or when `.vine.json` is present), Rhizo automatically invokes `vine gate`.
-- **Enforces Key 1 & Key 2**:
+- **Automatic Pre-Flight Verification**: When `rhizo task complete` or `rhizo reply` is called from within an active Vine strand (or when `.vine.json` is present), Rhizo automatically invokes `vine gate` (and verifies Key 3 independent adversarial audit ratification).
+- **Enforces Key 1, Key 2 & Key 3**:
   - **Key 1 (Mechanical)**: In-memory conflict check (`git merge-tree --write-tree`).
-  - **Key 2 (Semantic)**: Live compiler and test suite run inside the strand.
+  - **Key 2 (Semantic)**: Live compiler, test suite, and changelog verification inside the strand (`vine gate`).
+  - **Key 3 (Adversarial Audit)**: Independent adversarial audit ratification (`vine audit approve --auditor <name>`).
 - **Zero Green Mirage**: If `vine gate` fails or reports conflicts, the command exits non-zero and refuses to mark the task `COMPLETED` or deliver the reply, protecting trunk branches from regression.
 
 ---
