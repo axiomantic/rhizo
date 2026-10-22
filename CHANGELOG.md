@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Compile-Time Changelog Table & Protocol Upgrade Notifications (`src/changelog_data.nim`, `src/upgrade_notify.nim`, `src/rhizo.nim`, `tests/test_changelog_diff.nim`, `tests/test_coordination_invariants.py`)**:
+  - Implemented zero-I/O compile-time changelog parsing via `staticRead("../CHANGELOG.md")` into a typed `EmbeddedChangelog` table.
+  - Implemented `getChangelogDiff(fromVer, toVer: string): string` range slicer supporting 1-version increments, multi-version jumps, and latest release highlights.
+  - Implemented dynamic skill discovery (`getDiscoveredSkills`) enumerating `skills/` at build and run time, partitioning into core tool and subsidiary skills for smart reload guidance.
+  - Implemented session-specific Redis upgrade tracking via `agent:<name> -> last_version_notified:rhizo` and `last_version_notified_at:rhizo`.
+  - Implemented Dual-Delivery Architecture: Proactive Push via `notifyClusterOfUpgrade` enqueuing signed `system:upgrade` directives to active worker inboxes and waking listeners; and Reactive Pull fallback emitting structured `<!-- RHIZO_PROTOCOL_UPGRADE_RIDER -->` on interactive CLI turns.
+  - Enforced strict machine command exemptions: `--version`, `--help`, `--json`, `ping`, and completion commands never advance watermarks or emit riders.
+  - Added hermetic unit tests in `tests/test_changelog_diff.nim` and comprehensive integration test `test_38_session_protocol_upgrade_notification` in `tests/test_coordination_invariants.py`.
+
 ## [0.2.25] - 2026-10-22
 
 ### Added

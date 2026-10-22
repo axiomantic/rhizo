@@ -8,7 +8,7 @@ import std/[
 ]
 when defined(posix):
   import posix
-import config, redis, guide, routing, lexicon, update, std/[net, asyncdispatch, httpclient]
+import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_notify, std/[net, asyncdispatch, httpclient]
 
 proc isPidAlive*(pid: int): bool =
   if pid <= 0: return false
@@ -1807,6 +1807,14 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 
   discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
   try:
+    let curVerNotified = client.hGet(cfg.prefix & "agent:" & name, "last_version_notified:rhizo")
+    if curVerNotified == redisNil or curVerNotified.len == 0:
+      discard client.hSet(cfg.prefix & "agent:" & name, "last_version_notified:rhizo", RhizoVersion)
+      let nowIso = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+      discard client.hSet(cfg.prefix & "agent:" & name, "last_version_notified_at:rhizo", nowIso)
+  except CatchableError:
+    discard
+  try:
     discard client.del(@[cfg.prefix & "held_name:" & name])
   except CatchableError:
     discard
@@ -2355,6 +2363,20 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
     quit(1)
   registerCleanup(cfg.redisUrl, listenerKey)
 
+  # Record current session watermark for this listener
+  try:
+    discard client.hSet(cfg.prefix & "agent:" & name, "last_version_notified:rhizo", RhizoVersion)
+    let nowIso = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    discard client.hSet(cfg.prefix & "agent:" & name, "last_version_notified_at:rhizo", nowIso)
+  except CatchableError:
+    discard
+
+  # Check cluster-wide upgrade notification state for other active agents
+  try:
+    discard notifyClusterOfUpgrade(cfg, RhizoVersion, excludeAgent = name)
+  except CatchableError:
+    discard
+
   let effectiveTimeout = if isForever: 0 elif timeoutSec > 0: timeoutSec else: cfg.listenTimeout
   let startTime = getTime().toUnix()
   var remaining = effectiveTimeout
@@ -2462,7 +2484,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           continue
       # Swarm Roster Guard: reject alien/unauthorized messages at the listener level
       let useRosterGuard = rosterGuard or (getEnv("RHIZO_ROSTER_GUARD", "0") in ["1", "true", "yes"])
-      if useRosterGuard and fromAgent.len > 0:
+      if useRosterGuard and fromAgent.len > 0 and fromAgent != "system:upgrade" and not fromAgent.startsWith("system:"):
         var allowed = true
         if findExe("garden").len > 0:
           let (rgOut, rgCode) = execCmdEx("garden roster-guard " & quoteShell(fromAgent) & " --json")
@@ -2566,10 +2588,13 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
             exactCmd.add(" " & a)
 
         let isReassign = (rawMsgType == "reassign" or subject.toUpperAscii() == "SWARM_REASSIGN")
+        let isUpgrade = (fromAgent == "system:upgrade" or subject.startsWith("PROTOCOL_UPGRADE"))
         stderr.writeLine("")
         stderr.writeLine("================================================================================")
         if isReassign:
           stderr.writeLine("🔄 [RHIZO SWARM REASSIGNMENT DIRECTIVE DELIVERED] 🔄")
+        elif isUpgrade:
+          stderr.writeLine("⚡ [RHIZO PROTOCOL UPGRADE DIRECTIVE DELIVERED] ⚡")
         else:
           stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
         stderr.writeLine("[RHIZO LIFECYCLE NOTICE]")
@@ -2585,6 +2610,12 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("3. Announce readiness to orchestrator:")
           stderr.writeLine("   rhizo send --to @" & fromAgent & " --subject \"WORKER_READY\" --body \"Worker @" & name & " reassigned and ready.\"")
           stderr.writeLine("4. Re-arm listener for sprint tasks: " & exactCmd)
+        elif isUpgrade:
+          stderr.writeLine("PROTOCOL UPGRADE RESYNCHRONIZATION WORKFLOW:")
+          stderr.writeLine("1. Re-read updated core skill (mandatory): file://~/.gemini/config/skills/rhizo/SKILL.md")
+          stderr.writeLine("2. If your session has loaded subsidiary skills, re-read them via view_file; otherwise leave lazy-loaded.")
+          stderr.writeLine("3. Inspect new CLI flags: rhizo --help")
+          stderr.writeLine("4. Re-arm listener: " & exactCmd)
         else:
           stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
           stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
@@ -5832,6 +5863,23 @@ proc main() =
     return
 
   let subcmd = args[0].toLowerAscii
+
+  # Protocol Upgrade Notifications (Proactive Push & Interactive Pull Fallback)
+  if not isMachineOutputContext(rawArgs):
+    let caller = if subcmd in ["claim", "send", "reply", "inbox", "work", "task", "status", "open"]:
+                   getActiveAgentName(cfg, fallbackDefault = false)
+                 else: ""
+    if caller.len > 0:
+      try:
+        discard checkAndEmitPullUpgradeRider(cfg, caller, RhizoVersion, rawArgs)
+      except CatchableError:
+        discard
+
+    # Proactive push to other active agents in the cluster
+    try:
+      discard notifyClusterOfUpgrade(cfg, RhizoVersion, excludeAgent = caller)
+    except CatchableError:
+      discard
   case subcmd
   of "update":
     quit(doUpdateCommand(args[1..^1], RhizoVersion, "rhizo"))

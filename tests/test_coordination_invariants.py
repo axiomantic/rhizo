@@ -2206,6 +2206,119 @@ class TestCoordinationInvariants(unittest.TestCase):
         finally:
             self.run_cmd(["close", worker])
 
+    # -------------------------------------------------------------------------
+    # Problem 38: Session-Specific Protocol Upgrade Notification & Compile-Time Diff
+    # -------------------------------------------------------------------------
+    def test_38_session_protocol_upgrade_notification(self):
+        """Verify session-specific protocol upgrade notifications across Proactive Push,
+        Reactive Pull fallback, compile-time changelog diff range slicing, and machine command exclusions.
+        """
+        w1 = f"worker-upg-1-{int(time.time() * 1000)}"
+        w2 = f"worker-upg-2-{int(time.time() * 1000)}"
+        self.run_cmd(["open", w1, "worker"])
+        self.run_cmd(["open", w2, "worker"])
+
+        try:
+            # 1. Negative control: machine commands must NEVER advance last_version_notified
+            # Reset watermarks and flush any pre-existing messages
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HDEL", f"{TEST_PREFIX}agent:{w1}", "last_version_notified:rhizo", "last_version_notified_at:rhizo"], check=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HDEL", f"{TEST_PREFIX}agent:{w2}", "last_version_notified:rhizo", "last_version_notified_at:rhizo"], check=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}inbox:{w1}", f"{TEST_PREFIX}inbox:{w2}"], check=True)
+
+            res_ver = self.run_cmd(["--version"])
+            self.assertEqual(res_ver.returncode, 0)
+            res_help = self.run_cmd(["--help"])
+            self.assertEqual(res_help.returncode, 0)
+            res_ping = self.run_cmd(["ping"])
+            self.assertEqual(res_ping.returncode, 0)
+            res_who_json = self.run_cmd(["who", "--json"])
+            self.assertEqual(res_who_json.returncode, 0)
+
+            # Verify neither worker has last_version_notified set
+            v1_check = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w1}", "last_version_notified:rhizo"], capture_output=True, text=True)
+            self.assertEqual(v1_check.stdout.strip(), "", "Machine commands (--version, --help, ping, --json) must not advance last_version_notified")
+
+            # 2. Proactive Push: Trigger cluster notification scan
+            # Running a non-machine command (e.g. who without --json) scans active agents and pushes directives
+            res_who = self.run_cmd(["who"])
+            self.assertEqual(res_who.returncode, 0)
+
+            # Both w1 and w2 should have their watermark updated in Redis to current version
+            v1_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w1}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
+            v2_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w2}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(v1_notified, "0.2.25")
+            self.assertEqual(v2_notified, "0.2.25")
+
+            # Verify inbox message payload for w1
+            res_drain_1 = self.run_cmd(["drain", "1", w1, "--json"])
+            self.assertEqual(res_drain_1.returncode, 0)
+            msg1 = json.loads(res_drain_1.stdout.strip())
+            self.assertEqual(msg1["from"], "system:upgrade")
+            self.assertEqual(msg1["type"], "directive")
+            self.assertIn("PROTOCOL_UPGRADE", msg1["subject"])
+            self.assertIn("0.2.25", msg1["subject"])
+            self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", msg1["body"])
+            self.assertIn("Mandatory Actions", msg1["body"])
+            self.assertIn("file://~/.gemini/config/skills/rhizo/SKILL.md", msg1["body"])
+
+            # 3. Multi-Session Verification: Already notified sessions do NOT get re-notified
+            # Running who again shouldn't push new directives to w1 or w2
+            res_who2 = self.run_cmd(["who"])
+            self.assertEqual(res_who2.returncode, 0)
+            res_drain_empty = self.run_cmd(["drain", "1", w1, "--json"])
+            self.assertEqual(res_drain_empty.returncode, 0)
+            self.assertEqual(res_drain_empty.stdout.strip(), "")
+
+            # 4. Multi-Version Jump Changelog Diff:
+            # Set w1's watermark back to 0.2.22 and remove messages
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}agent:{w1}", "last_version_notified:rhizo", "0.2.22"], check=True)
+            res_who3 = self.run_cmd(["who"])
+            self.assertEqual(res_who3.returncode, 0)
+
+            res_drain_jump = self.run_cmd(["drain", "1", w1, "--json"])
+            self.assertEqual(res_drain_jump.returncode, 0)
+            msg_jump = json.loads(res_drain_jump.stdout.strip())
+            self.assertIn("0.2.22 -> 0.2.25", msg_jump["subject"])
+            # Cumulative diff must include 0.2.25, 0.2.24, and 0.2.23
+            self.assertIn("0.2.25", msg_jump["body"])
+            self.assertIn("0.2.24", msg_jump["body"])
+            self.assertIn("0.2.23", msg_jump["body"])
+
+            # 5. Reactive Pull Fallback: Interactive command outputs rider to stderr
+            w3 = f"worker-upg-pull-{int(time.time() * 1000)}"
+            self.run_cmd(["open", w3, "worker"])
+            # Manually set w3's watermark to 0.2.24 and flush its inbox
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", f"{TEST_PREFIX}agent:{w3}", "last_version_notified:rhizo", "0.2.24"], check=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}inbox:{w3}"], check=True)
+
+            # w3 sends an interactive message
+            res_send = self.run_cmd(
+                ["send", "--to", w1, "--subject", "Hello", "--body", "Testing pull rider"],
+                env_overrides={"RHIZO_AGENT_NAME": w3}
+            )
+            self.assertEqual(res_send.returncode, 0)
+            self.assertIn("<!-- RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send.stderr)
+            self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", res_send.stderr)
+            self.assertIn("<!-- END_RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send.stderr)
+
+            # Watermark in Redis must now be updated to 0.2.25
+            v3_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w3}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(v3_notified, "0.2.25")
+
+            # Second interactive command must NOT emit rider again
+            res_send_again = self.run_cmd(
+                ["send", "--to", w1, "--subject", "Hello again", "--body", "Testing no duplicate rider"],
+                env_overrides={"RHIZO_AGENT_NAME": w3}
+            )
+            self.assertEqual(res_send_again.returncode, 0)
+            self.assertNotIn("<!-- RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send_again.stderr)
+
+            self.run_cmd(["close", w3])
+
+        finally:
+            self.run_cmd(["close", w1])
+            self.run_cmd(["close", w2])
+
 
 if __name__ == "__main__":
     unittest.main()
