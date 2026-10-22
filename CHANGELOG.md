@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.25] - 2026-10-22
+
 ### Added
 - **Swarm Reassignment & Repurposing Directives (`src/rhizo.nim`, `tests/test_coordination_invariants.py`)**:
   - Implemented `rhizo reassign <worker> --project <project> --role <role> [--tags <tags>] [--queue <queue>] [--json]` (aliased as `rhizo repurpose`) for dynamically redirecting active cluster workers to new projects and roles.
@@ -33,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Active listeners (`has_listener == 1`) are now unconditionally reported as `alive = 1` (`status: "ACTIVE"`).
   - Enhanced `doListen` to refresh `last_seen` timestamp in `agent:<name>` on initial arming and every chunk timeout renewal, eliminating false-stale timeouts.
   - Added `test_35_who_query_and_active_listener_liveness` to test suite.
+
+## [0.2.24] - 2026-10-19
 
 ### Added
 - **Codex-Native Wakeup Protocol (`RHIZO_WAKE`)**:
