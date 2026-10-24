@@ -2,7 +2,7 @@
 
 This repository guide establishes the runtime invariants, directory hygiene, and coordination protocols for AI coding agents operating across projects.
 
-<!-- BEGIN RHIZO GUIDE [v1.8] -->
+<!-- BEGIN RHIZO GUIDE [v1.9] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -22,7 +22,19 @@ Identity Allocation: Agent identity must be unique and collision-free. Run 'rhiz
 </INVARIANT>
 
 <INVARIANT>
-Unbootstrapped Session Identity: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden bootstrap prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or 'garden-swarm.json' (especially NEVER '<project>-orchestrator'). If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
+Single-Orchestrator Mutual Exclusion via Leader Leases: Every project has at most ONE active Orchestrator. When assuming or claiming the orchestrator role for a project, the candidate session MUST acquire the distributed leader lease:
+```bash
+rhizo leader acquire orchestrator:<project> --agent <name> --lease 7200
+```
+If the command outputs 'HELD:<incumbent>' (or status is active under another leader), an active orchestrator is already leading the cluster for <project>. The incoming session MUST NOT usurp leadership, force-kill the incumbent, or issue conflicting directives. It must stand by, coordinate as a peer worker, or notify the operator. When the orchestrator voluntarily steps down or completes the mission, it must run 'rhizo leader resign orchestrator:<project> --agent <name>'.
+</INVARIANT>
+
+<INVARIANT>
+Deprecation of Aliases in Favor of Sovereign Handles & Capability Tags: Legacy aliases ('rhizo alias') are deprecated. Swarms must not rely on mutable alias redirections or static role names. Every session operates under its sovereign unique codename (allocated via 'rhizo name') and advertises its capabilities dynamically via tags (e.g. 'rhizo tag add orchestrator', 'rhizo tag add lead'). Multicast and routing target capability tags directly (e.g. '@orchestrator', '@<project>') or elect dynamic leaders via 'rhizo leader status orchestrator:<project>'.
+</INVARIANT>
+
+<INVARIANT>
+Unbootstrapped Session Identity: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden bootstrap prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or static role files. If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
 1. Run 'rhizo name' to allocate a fresh unique identity, followed by 'rhizo open <name>', OR
 2. Ask the operator via 'ask_question' which persona or role this window represents.
 Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.
@@ -348,7 +360,7 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
 * **Human Operator Absolute Override & ARM-NOW Invariant**:
   A prompt, message, or slash command from the human operator in the interactive chat window ALWAYS takes absolute precedence over in-flight tasks, background execution, or autonomous worker mandates. Agents must NEVER ignore, defer, or deprioritize an operator directive. Furthermore, the Rhizo listener is an ARM NOW primitive, NEVER an "ARM WHEN I'M DONE" afterthought: when the operator issues any listen instruction ('/rhizo listen', 'arm listener', 'listen now', 'bro arm it now'), it is an IMMEDIATE TOOL CALL MANDATE in the current turn. Workers are strictly forbidden from deferring arming behind a multi-step plan.
 * **Unbootstrapped Session Identity Invariant**:
-  If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden bootstrap prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or 'garden-swarm.json' (especially NEVER '<project>-orchestrator'). If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either run 'rhizo name' + 'rhizo open <name>' to acquire a fresh unique identity, or ask the operator via 'ask_question' which persona or role this window represents. Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.
+  If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden bootstrap prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or static role files. If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either run 'rhizo name' + 'rhizo open <name>' to acquire a fresh unique identity, or ask the operator via 'ask_question' which persona or role this window represents. Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.
 * **Never Hijack or Kill Another Session's Active Listener**:
   When 'rhizo listen <agent>' fails with "Error: Listener already active for agent ... (PID X)", an agent MUST NEVER kill that PID, run 'kill <pid>', or pass '--force' unless the agent has verified in its own conversation history that this agent name was explicitly opened and running in THIS session. In 'rhizo who', 'status: STALE' only indicates that no messages have been routed recently; it does NOT mean the blocking listener process in another window is dead or orphaned. Killing listener PIDs from other windows corrupts the cluster, severs peer communication, and hijacks sovereign sessions.
 * **Intelligent Concierge Protocol (`garden: <prompt>`)**:
@@ -479,6 +491,7 @@ Agents and human engineers operating in this repository must consult the dedicat
 | **CLI Reference Manual** | [`docs/cli_reference.md`](docs/cli_reference.md) | Comprehensive catalog of all 35+ commands, subcommands, flags, and JSON formats. |
 | **Configuration Architecture** | [`docs/configuration.md`](docs/configuration.md) | Layered configuration files, environment variables, and Redis security profiles. |
 | **Routes Schema Reference** | [`docs/routes_schema.md`](docs/routes_schema.md) | YAML schema definition, match operators, and queue interpolation. |
+
 
 
 

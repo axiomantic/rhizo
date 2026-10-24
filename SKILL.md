@@ -96,7 +96,7 @@ Identity Allocation: Agent identity must be unique and collision-free across pro
 </INVARIANT>
 
 <INVARIANT>
-Unbootstrapped Session Identity Invariant: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or 'garden-swarm.json' (especially NEVER '<project>-orchestrator'). If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
+Unbootstrapped Session Identity Invariant: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or static role files. If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
 1. Run 'rhizo name' to allocate a fresh unique identity, followed by 'rhizo open <name>', OR
 2. Ask the operator via 'ask_question' which persona or role this window represents.
 Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.

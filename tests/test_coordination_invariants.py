@@ -1688,7 +1688,7 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.skipTest("garden executable not installed or not in PATH")
         swarm_cfg = {
             "project": "coord_test",
-            "orchestrator": {"name": "coord_test-orchestrator", "agent": "coord_test-orchestrator"},
+            "orchestrator": {"name": "coord_test-lead", "agent": "coord_test-lead"},
             "workers": [{"name": "worker-guard-auth", "role": "implementer"}]
         }
         with open(os.path.join(self.test_home, "garden-swarm.json"), "w") as f:
@@ -1696,7 +1696,7 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         worker = "worker-guard-auth"
         alien = "alien-infiltrator"
-        orch = "coord_test-orchestrator"
+        orch = "coord_test-lead"
 
         self.run_cmd(["open", worker, "worker"])
         self.run_cmd(["open", alien, "alien"])

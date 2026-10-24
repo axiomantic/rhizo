@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Single-Orchestrator Leader Lease Guide Invariant & Alias Deprecation (`src/guide.nim`, `src/rhizo.nim`, `tests/test_guide.py`, `AGENTS.md`)**:
+  - Bumped Rhizo Guide to `v1.9` in `src/guide.nim` with the `Single-Orchestrator Mutual Exclusion via Leader Leases` invariant, requiring orchestrators to acquire `orchestrator:<project>` with 7200s lease and forbidding leadership usurpation if held.
+  - Added `Deprecation of Aliases in Favor of Sovereign Handles & Capability Tags` invariant, deprecating `rhizo alias` in favor of unique codenames and capability tags.
+  - Purged references to `garden-swarm.json` and `<project>-orchestrator` across `src/guide.nim`, `src/rhizo.nim`, `AGENTS.md`, and instruction rules.
+  - Marked `rhizo alias` as deprecated in CLI help text and subcommand execution warning.
+  - Updated `tests/test_guide.py` with affirmative and negative assertions for `v1.9` invariants.
 - **Compile-Time Changelog Table & Protocol Upgrade Notifications (`src/changelog_data.nim`, `src/upgrade_notify.nim`, `src/rhizo.nim`, `tests/test_changelog_diff.nim`, `tests/test_coordination_invariants.py`)**:
   - Implemented zero-I/O compile-time changelog parsing via `staticRead("../CHANGELOG.md")` into a typed `EmbeddedChangelog` table.
   - Implemented `getChangelogDiff(fromVer, toVer: string): string` range slicer supporting 1-version increments, multi-version jumps, and latest release highlights.

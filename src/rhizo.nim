@@ -5850,6 +5850,7 @@ proc main() =
     echo "  rhizo guide <install|uninstall|check> [path]"
     echo "  rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local]"
     echo "  rhizo session <set|get|resolve|remove|list> [args...]"
+    echo "  rhizo alias <set|get|list|del> [args...] (DEPRECATED: use capability tags)"
     echo ""
     echo "Global Options:"
     echo "  --version, -v         Print version and exit"
@@ -6161,7 +6162,7 @@ proc main() =
     var name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
     if name.len == 0:
       stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name ('rhizo listen <name>'), or export RHIZO_AGENT_NAME=<name>.")
-      stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <name>'. Do NOT guess an existing identity from 'rhizo who' or 'garden-swarm.json'.")
+      stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <name>'. Do NOT guess an existing identity from 'rhizo who' or static role files.")
       quit(1)
     else:
       name = ensureProjectScopedName(cfg, name)
@@ -8839,8 +8840,9 @@ proc main() =
         quit(resExitCode)
 
   of "alias":
+    stderr.writeLine("WARNING: 'rhizo alias' is deprecated in favor of sovereign unique handles and capability tags (@orchestrator).")
     if args.len < 2:
-      stderr.writeLine("Usage: rhizo alias <set|get|list|del> [args...]")
+      stderr.writeLine("Usage: rhizo alias <set|get|list|del> [args...] (DEPRECATED)")
       quit(1)
     let action = args[1].toLowerAscii
     case action

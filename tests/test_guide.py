@@ -24,9 +24,13 @@ def test_guide_install_new_file():
         assert target.exists()
 
         content = target.read_text()
-        assert "<!-- BEGIN RHIZO GUIDE [v1.8] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v1.9] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
         assert "Rhizo Multi-Agent Coordination Guide" in content
+        assert "Single-Orchestrator Mutual Exclusion via Leader Leases" in content
+        assert "Deprecation of Aliases in Favor of Sovereign Handles & Capability Tags" in content
+        assert "garden-swarm.json" not in content
+        assert "<project>-orchestrator" not in content
 
 def test_guide_install_preserves_custom_content():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -40,7 +44,7 @@ def test_guide_install_preserves_custom_content():
 
         content = target.read_text()
         assert custom_header.strip() in content
-        assert "<!-- BEGIN RHIZO GUIDE [v1.8] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v1.9] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
 
 def test_guide_install_updates_in_place():
@@ -63,7 +67,7 @@ def test_guide_install_updates_in_place():
         assert "Keep this text intact!" in content
         assert "Keep this footer intact too!" in content
         assert "Old outdated guide body" not in content
-        assert "<!-- BEGIN RHIZO GUIDE [v1.8] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v1.9] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
 
 def test_guide_uninstall_cleans_block():
@@ -131,3 +135,12 @@ def test_guide_check_status():
         code, out, err = run_rhizo("guide", "check", str(target))
         assert code == 0
         assert "[INSTALLED]" in out
+
+if __name__ == "__main__":
+    test_guide_install_new_file()
+    test_guide_install_preserves_custom_content()
+    test_guide_install_updates_in_place()
+    test_guide_uninstall_cleans_block()
+    test_guide_unbalanced_marker_fails_safe()
+    test_guide_check_status()
+    print("All test_guide.py assertions passed successfully.")
