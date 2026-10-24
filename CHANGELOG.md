@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Autonomous Dispatch Fast-Path & Interactive Intake Discipline (`src/guide.nim`, `AGENTS.md`, `SKILL.md`, `tests/test_guide.py`)**:
+  - Updated Section 8 'Orchestrator Non-Implementation & Intake Gate' in Rhizo Guide `v1.9` across `src/guide.nim`, `AGENTS.md`, `SKILL.md`, and compiled instruction rules.
+  - Added Pre-Authorized Directives & Active Fleet Fast-Path: When the operator instructs 'work on this with your workers', 'delegate this', or when active cluster workers exist in `rhizo who --all`, orchestrators must not stop to ask routing questions, but immediately break down work, provision strands, and dispatch over Rhizo (`rhizo send`) or enqueue to work queues.
+  - Mandated `ask_question` Tool Discipline: If operator routing input is genuinely required (true cold start with 0 workers), orchestrators must invoke the interactive `ask_question` tool and are strictly prohibited from dumping numbered multiple-choice text lists into raw chat.
+  - Added Fleet-First Mandate: When online workers exist, never output copy-paste prompt cards to the human operator; dispatch or repurpose existing workers over Rhizo.
+  - Added unit test coverage in `tests/test_guide.py` (`test_guide_section_8_autonomous_dispatch_discipline`).
 - **Single-Orchestrator Leader Lease Guide Invariant & Alias Deprecation (`src/guide.nim`, `src/rhizo.nim`, `tests/test_guide.py`, `AGENTS.md`)**:
   - Bumped Rhizo Guide to `v1.9` in `src/guide.nim` with the `Single-Orchestrator Mutual Exclusion via Leader Leases` invariant, requiring orchestrators to acquire `orchestrator:<project>` with 7200s lease and forbidding leadership usurpation if held.
   - Added `Deprecation of Aliases in Favor of Sovereign Handles & Capability Tags` invariant, deprecating `rhizo alias` in favor of unique codenames and capability tags.

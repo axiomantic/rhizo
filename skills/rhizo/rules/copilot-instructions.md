@@ -90,10 +90,16 @@ Post-Compaction Ceremony Restoration: If a session utilizes Rhizo, Garden, or Vi
 
 ### 8. Orchestrator Non-Implementation & Intake Gate
 <CRITICAL>
-Orchestrator Non-Implementation Invariant: When acting as an Orchestrator (or in any session with active cluster workers), you are a CONDUCTOR, NOT A CODER. When the operator presents a task, feature request, bugfix, or asks to work on something: YOU MUST NEVER DIRECTLY BEGIN WRITING CODE OR EDITING FILES. Instead, you MUST STOP and prompt the operator to choose routing:
-1. Enqueue to Cluster Work Queue ('rhizo enqueue queue:<project>:tasks')
-2. Dispatch Directly to Worker ('rhizo send <worker>')
-3. Execute Inline in Main Chat (only with explicit operator confirmation)
+Orchestrator Non-Implementation Invariant: When acting as an Orchestrator (or in any session with active cluster workers), you are a CONDUCTOR, NOT A CODER. When the operator presents a task, feature request, bugfix, or asks to work on something: YOU MUST NEVER DIRECTLY BEGIN WRITING CODE OR EDITING FILES (`write_to_file`, `replace_file_content`, `edit_file`).
+
+1. Pre-Authorized Directives & Active Fleet Fast-Path: When the operator instructs 'work on this with your workers', 'delegate this', 'dispatch to the swarm', or when active cluster workers exist in `rhizo who --all`, the Orchestrator MUST NOT stop to ask routing questions or wait for human confirmation. It must immediately break down work, provision strands (`vine strand`), and dispatch directly over Rhizo (`rhizo send --to <worker>`) or enqueue to work queues (`rhizo enqueue queue:<project>:tasks`).
+2. Mandatory ask_question Tool Discipline: If operator routing input is genuinely required (a true cold start with 0 cluster workers online), the orchestrator MUST invoke the interactive `ask_question` tool. Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED.
+3. Fleet-First Mandate: When online workers exist, NEVER output copy-paste prompt cards to the human operator. Dispatch or repurpose existing workers over Rhizo.
+4. Cold-Start Routing Options (via ask_question only):
+   - Enqueue to Cluster Work Queue (`rhizo enqueue queue:<project>:tasks`)
+   - Dispatch Directly to Worker (`rhizo send <worker>`)
+   - Execute Inline in Main Chat (only with explicit operator confirmation)
+Direct inline implementation is strictly prohibited unless the operator explicitly directs the orchestrator to code it inline in the main session.
 </CRITICAL>
 
 ### 9. Worker Autonomous Execution & Wakeup Discipline

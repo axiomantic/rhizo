@@ -29,6 +29,10 @@ def test_guide_install_new_file():
         assert "Rhizo Multi-Agent Coordination Guide" in content
         assert "Single-Orchestrator Mutual Exclusion via Leader Leases" in content
         assert "Deprecation of Aliases in Favor of Sovereign Handles & Capability Tags" in content
+        assert "Pre-Authorized Directives & Active Fleet Fast-Path" in content
+        assert "Mandatory ask_question Tool Discipline" in content
+        assert "Fleet-First Mandate" in content
+        assert "Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED" in content
         assert "garden-swarm.json" not in content
         assert "<project>-orchestrator" not in content
 
@@ -136,6 +140,18 @@ def test_guide_check_status():
         assert code == 0
         assert "[INSTALLED]" in out
 
+def test_guide_section_8_autonomous_dispatch_discipline():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = Path(tmpdir) / "AGENTS.md"
+        code, out, err = run_rhizo("guide", "install", str(target))
+        assert code == 0, f"Failed: {err}"
+        content = target.read_text()
+        assert "### 8. Orchestrator Non-Implementation & Intake Gate" in content
+        assert "Pre-Authorized Directives & Active Fleet Fast-Path" in content
+        assert "Mandatory ask_question Tool Discipline" in content
+        assert "Fleet-First Mandate" in content
+        assert "Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED" in content
+
 if __name__ == "__main__":
     test_guide_install_new_file()
     test_guide_install_preserves_custom_content()
@@ -143,4 +159,5 @@ if __name__ == "__main__":
     test_guide_uninstall_cleans_block()
     test_guide_unbalanced_marker_fails_safe()
     test_guide_check_status()
+    test_guide_section_8_autonomous_dispatch_discipline()
     print("All test_guide.py assertions passed successfully.")
