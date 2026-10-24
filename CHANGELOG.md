@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.26] - 2026-10-24
+
 ### Added
 - **Autonomous Dispatch Fast-Path & Interactive Intake Discipline (`src/guide.nim`, `AGENTS.md`, `SKILL.md`, `tests/test_guide.py`)**:
   - Updated Section 8 'Orchestrator Non-Implementation & Intake Gate' in Rhizo Guide `v1.9` across `src/guide.nim`, `AGENTS.md`, `SKILL.md`, and compiled instruction rules.

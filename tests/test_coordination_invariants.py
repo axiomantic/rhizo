@@ -2246,8 +2246,8 @@ class TestCoordinationInvariants(unittest.TestCase):
             # Both w1 and w2 should have their watermark updated in Redis to current version
             v1_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w1}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
             v2_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w2}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
-            self.assertEqual(v1_notified, "0.2.25")
-            self.assertEqual(v2_notified, "0.2.25")
+            self.assertEqual(v1_notified, "0.2.26")
+            self.assertEqual(v2_notified, "0.2.26")
 
             # Verify inbox message payload for w1
             res_drain_1 = self.run_cmd(["drain", "1", w1, "--json"])
@@ -2256,7 +2256,7 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertEqual(msg1["from"], "system:upgrade")
             self.assertEqual(msg1["type"], "directive")
             self.assertIn("PROTOCOL_UPGRADE", msg1["subject"])
-            self.assertIn("0.2.25", msg1["subject"])
+            self.assertIn("0.2.26", msg1["subject"])
             self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", msg1["body"])
             self.assertIn("Mandatory Actions", msg1["body"])
             self.assertIn("file://~/.gemini/config/skills/rhizo/SKILL.md", msg1["body"])
@@ -2278,8 +2278,9 @@ class TestCoordinationInvariants(unittest.TestCase):
             res_drain_jump = self.run_cmd(["drain", "1", w1, "--json"])
             self.assertEqual(res_drain_jump.returncode, 0)
             msg_jump = json.loads(res_drain_jump.stdout.strip())
-            self.assertIn("0.2.22 -> 0.2.25", msg_jump["subject"])
-            # Cumulative diff must include 0.2.25, 0.2.24, and 0.2.23
+            self.assertIn("0.2.22 -> 0.2.26", msg_jump["subject"])
+            # Cumulative diff must include 0.2.26, 0.2.25, 0.2.24, and 0.2.23
+            self.assertIn("0.2.26", msg_jump["body"])
             self.assertIn("0.2.25", msg_jump["body"])
             self.assertIn("0.2.24", msg_jump["body"])
             self.assertIn("0.2.23", msg_jump["body"])
@@ -2301,9 +2302,9 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", res_send.stderr)
             self.assertIn("<!-- END_RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send.stderr)
 
-            # Watermark in Redis must now be updated to 0.2.25
+            # Watermark in Redis must now be updated to 0.2.26
             v3_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w3}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
-            self.assertEqual(v3_notified, "0.2.25")
+            self.assertEqual(v3_notified, "0.2.26")
 
             # Second interactive command must NOT emit rider again
             res_send_again = self.run_cmd(
