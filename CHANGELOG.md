@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Project-Scoped `@orchestrator` & `@lead` Resolution (`src/rhizo.nim`, `tests/test_tenancy_orchestrator_and_session_pubkey.py`)**:
+  - Dynamically resolves `@orchestrator` and `@lead` message targets to the active leader of the sender's own project by inspecting sender project metadata and querying the distributed leader lease `orchestrator:<project>`.
+  - Prevents cross-project message leakage by enforcing strict project tenancy boundaries on leader resolution; falls back to global cluster leader query only if sender project is completely unspecified.
+- **Session Pubkey Heartbeat Binding & Warning Mitigation (`src/rhizo.nim`, `src/session_crypto.nim`, `tests/test_crypto_primitives.nim`, `tests/test_tenancy_orchestrator_and_session_pubkey.py`)**:
+  - Added `getSessionPubkeyFromPrivKey` to derive Ed25519 public keys directly from existing session private keys.
+  - Implemented `bindAgentSessionPubkey`: atomically binds session public key into Redis hash `rhizo:agent:<name>` field `session_pubkey` and key `rhizo:agent:<name>:session_pubkey` with heartbeat expiry TTL on `rhizo open`, `rhizo heartbeat`, and `rhizo listen`.
+  - Added top-level `rhizo heartbeat [name]` command to refresh heartbeat TTL and keep session public key binding active.
+  - Added `resolveSenderSessionPubkey` across message receivers (`doListen`, `doDrain`, `doStream`): performs direct Redis fallback lookup for sender's public key if omitted from message envelope, verifying Ed25519 session signatures cleanly without false security warnings.
 - **Message vs. Task Type Decoupling & Listener Banner Bifurcation (`src/rhizo.nim`, `scripts/multicast.lua`, `tests/test_messaging_and_json_purge.py`)**:
   - Decoupled conversational messaging from work item execution: `rhizo send` now defaults to `msgType = "message"` rather than `"task"`, preventing conversational inquiries from spawning unwanted WISM tasks and 900s leases.
   - Added explicit `--task` flag and `--type task` support to designate task directives.

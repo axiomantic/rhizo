@@ -28,6 +28,12 @@ suite "Session Crypto Unit Tests":
     let (otherPub, otherPriv) = generateSessionKeypair()
     check not verifyPayload(otherPub, payload, sigHex)
 
+  test "Derive public key from private key":
+    let (pubHex, privHex) = generateSessionKeypair()
+    let derivedPub = getSessionPubkeyFromPrivKey(privHex)
+    check derivedPub == pubHex
+    check derivedPub.len == 64
+
   test "Save and load session private key":
     let agent = "test-agent-crypto"
     let (pubHex, privHex) = generateSessionKeypair()

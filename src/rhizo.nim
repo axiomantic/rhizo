@@ -1271,6 +1271,160 @@ proc detectHarness*(cfg: RhizoConfig): string =
 
   return "unknown"
 
+proc bindAgentSessionPubkey*(cfg: RhizoConfig, agentName: string, client: Redis, ttlSec: int = 150, forceRotate: bool = false): string =
+  let norm = sanitizeIdentifier(agentName)
+  if norm.len == 0: return ""
+  if not isCryptoAvailable(): return ""
+
+  var pubHex = ""
+  if not forceRotate:
+    let existingPriv = loadSessionPrivKey(norm)
+    if existingPriv.len == 64:
+      pubHex = getSessionPubkeyFromPrivKey(existingPriv)
+
+  if pubHex.len != 64:
+    try:
+      let kp = generateSessionKeypair()
+      saveSessionPrivKey(norm, kp.privHex)
+      pubHex = kp.pubHex
+    except CatchableError as e:
+      stderr.writeLine("[WARNING] Failed to generate session keypair for @" & norm & ": " & e.msg)
+      return ""
+
+  if pubHex.len == 64:
+    try:
+      discard client.hSet(cfg.prefix & "agent:" & norm, "session_pubkey", pubHex)
+      discard client.setEx(cfg.prefix & "agent:" & norm & ":session_pubkey", ttlSec, pubHex)
+      discard client.hSet(cfg.prefix & "agent:" & norm, "session_pubkey_updated", $getTime().toUnix())
+    except CatchableError as e:
+      stderr.writeLine("[WARNING] Failed to bind session pubkey to Redis: " & e.msg)
+
+  return pubHex
+
+proc resolveSenderSessionPubkey*(cfg: RhizoConfig, client: Redis, fromAgent: string, cachedPubkey: string = ""): string =
+  if cachedPubkey.len == 64:
+    return cachedPubkey
+  let normFrom = sanitizeIdentifier(fromAgent)
+  if normFrom.len == 0: return ""
+  try:
+    let rPubHash = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
+    if rPubHash != redisNil and rPubHash.len == 64:
+      return rPubHash
+    let rPubKey = client.get(cfg.prefix & "agent:" & normFrom & ":session_pubkey")
+    if rPubKey != redisNil and rPubKey.len == 64:
+      return rPubKey
+  except CatchableError:
+    discard
+  return ""
+
+proc resolveProjectLeader*(cfg: RhizoConfig, targetRole: string, fromAgent: string): string =
+  ## Resolves @orchestrator or @lead to the active leader of the sender's project.
+  ## If held, routes directly to the active project lead of the sender's project.
+  ## Falls back to global cluster query only if sender's project is unspecified.
+  var client: Redis
+  try:
+    client = connectRedis(cfg.redisUrl)
+  except CatchableError:
+    return ""
+  defer: (try: client.close() except CatchableError: discard)
+
+  let normFrom = sanitizeIdentifier(fromAgent)
+  let normRole = sanitizeIdentifier(targetRole).toLowerAscii # "orchestrator" or "lead"
+
+  # 1. Determine sender's project from agent metadata or local config
+  var senderProj = ""
+  if cfg.project.len > 0 and cfg.project != "default":
+    senderProj = cfg.project.strip().toLowerAscii
+  elif normFrom.len > 0:
+    try:
+      let p = client.hGet(cfg.prefix & "agent:" & normFrom, "project")
+      if p != redisNil and p.len > 0 and p.toLowerAscii != "default":
+        senderProj = p.strip().toLowerAscii
+    except CatchableError:
+      discard
+
+  if senderProj.len == 0:
+    let envP = getEnv("RHIZO_PROJECT", "").strip().toLowerAscii
+    if envP.len > 0 and envP != "default":
+      senderProj = envP
+
+  proc queryLeaderLease(roleKey: string): string =
+    try:
+      let statusRes = runLuaScript(cfg.redisUrl, leaderLua, leaderSha, [cfg.prefix, "status", roleKey])
+      if not statusRes.startsWith("ERR:"):
+        let pj = parseJson(statusRes)
+        if pj.getOrDefault("status").getStr("") == "active":
+          let leader = pj.getOrDefault("leader").getStr("").toLowerAscii
+          if leader.len > 0:
+            return leader
+    except CatchableError:
+      discard
+    return ""
+
+  # 2. If sender's project is specified, resolve strictly within sender's project!
+  if senderProj.len > 0:
+    var l = queryLeaderLease("orchestrator:" & senderProj)
+    if l.len > 0: return l
+
+    if normRole == "lead":
+      l = queryLeaderLease("lead:" & senderProj)
+      if l.len > 0: return l
+
+    # Fallback within same project: find active agent with orchestrator or lead tag
+    try:
+      let agents = client.sMembers(cfg.prefix & "active_agents")
+      for a in agents:
+        let aClean = a.toLowerAscii
+        let aProj = client.hGet(cfg.prefix & "agent:" & aClean, "project")
+        if aProj != redisNil and aProj.toLowerAscii == senderProj:
+          let tagsStr = client.hGet(cfg.prefix & "agent:" & aClean, "tags")
+          if tagsStr != redisNil and ("orchestrator" in tagsStr.toLowerAscii or "lead" in tagsStr.toLowerAscii):
+            return aClean
+    except CatchableError:
+      discard
+
+    # DO NOT fall back to global cluster query when project is specified (prevents cross-project leakage)
+    return ""
+
+  # 3. Only fall back to global cluster query if project is unspecified
+  var globalLeader = queryLeaderLease("orchestrator")
+  if globalLeader.len > 0: return globalLeader
+  if normRole == "lead":
+    globalLeader = queryLeaderLease("lead")
+    if globalLeader.len > 0: return globalLeader
+
+  try:
+    let agents = client.sMembers(cfg.prefix & "active_agents")
+    for a in agents:
+      let aClean = a.toLowerAscii
+      let tagsStr = client.hGet(cfg.prefix & "agent:" & aClean, "tags")
+      if tagsStr != redisNil and ("orchestrator" in tagsStr.toLowerAscii or "lead" in tagsStr.toLowerAscii):
+        return aClean
+  except CatchableError:
+    discard
+
+  return ""
+
+proc doHeartbeat*(cfg: RhizoConfig, agentName: string): string =
+  let name = getActiveAgentName(cfg, agentName, fallbackDefault = false)
+  if name.len == 0:
+    stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name, or export RHIZO_AGENT_NAME=<name>.")
+    quit(1)
+  let hbTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
+  let nowSec = getTime().toUnix()
+  discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
+  let pubHex = bindAgentSessionPubkey(cfg, name, client, hbTtl)
+  var resObj = newJObject()
+  resObj["status"] = %"OK"
+  resObj["agent"] = %name
+  resObj["heartbeat_ttl"] = %hbTtl
+  if pubHex.len > 0:
+    resObj["session_pubkey"] = %pubHex
+  return $resObj
+
 proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false, peek: bool = false): string =
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -1351,13 +1505,7 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
     # Verify Ed25519 Session Signature if present
     let sessionSig = parsed.getOrDefault("session_sig").getStr("")
     if sessionSig.len > 0 and isCryptoAvailable():
-      var senderPubHex = parsed.getOrDefault("session_pubkey").getStr("")
-      try:
-        let rPub = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
-        if rPub != redisNil and rPub.len == 64:
-          senderPubHex = rPub
-      except CatchableError:
-        discard
+      let senderPubHex = resolveSenderSessionPubkey(cfg, client, fromAgent, parsed.getOrDefault("session_pubkey").getStr(""))
 
       if senderPubHex.len == 64:
         if not verifyPayload(senderPubHex, canonical, sessionSig):
@@ -1844,13 +1992,9 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     discard
   var sessionPubHex = ""
   try:
-    if isCryptoAvailable():
-      let (pubHex, privHex) = generateSessionKeypair()
-      saveSessionPrivKey(name, privHex)
-      sessionPubHex = pubHex
-      discard client.hSet(cfg.prefix & "agent:" & name, "session_pubkey", pubHex)
+    sessionPubHex = bindAgentSessionPubkey(cfg, name, client, cfg.heartbeatTtl, forceRotate = true)
   except CatchableError as e:
-    stderr.writeLine("[WARNING] Failed to generate session keypair: " & e.msg)
+    stderr.writeLine("[WARNING] Failed to bind session keypair: " & e.msg)
   try:
     let curVerNotified = client.hGet(cfg.prefix & "agent:" & name, "last_version_notified:rhizo")
     if curVerNotified == redisNil or curVerNotified.len == 0:
@@ -2092,13 +2236,34 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
       let act = if body.len > 0 and body.len < 100: body elif subject.len > 0: subject else: "In progress"
       discard doStatus(cfg, normFrom, "busy", act)
 
-  # Dynamic alias resolution (GVR-012)
+  # Project-scoped @orchestrator & @lead resolution
   var resolvedTo = normTo
+  let isExplicitRoleTarget = toAgent.strip().toLowerAscii in ["@orchestrator", "@lead"]
+  let targetClean = rawCleanTo.toLowerAscii
+  if isExplicitRoleTarget or targetClean in ["orchestrator", "lead"]:
+    let leader = resolveProjectLeader(cfg, targetClean, normFrom)
+    if leader.len > 0:
+      resolvedTo = leader
+    elif isExplicitRoleTarget and not isBroadcast and normTo != "*":
+      let senderProj = if cfg.project.len > 0 and cfg.project != "default": cfg.project
+                       else:
+                         var p = ""
+                         try:
+                           var c = connectRedis(cfg.redisUrl)
+                           defer: (try: c.close() except CatchableError: discard)
+                           let rP = c.hGet(cfg.prefix & "agent:" & normFrom, "project")
+                           if rP != redisNil: p = rP
+                         except CatchableError: discard
+                         if p.len == 0: getEnv("RHIZO_PROJECT", "") else: p
+      stderr.writeLine("Error: No active leader found for role @" & targetClean & (if senderProj.len > 0: " in project '" & senderProj & "'" else: "") & ".")
+      quit(1)
+
+  # Dynamic alias resolution (GVR-012)
   if not (isBroadcast or normTo == "*"):
     try:
       var client = connectRedis(cfg.redisUrl)
       defer: (try: client.close() except CatchableError: discard)
-      let aliasVal = client.hGet(cfg.prefix & "aliases", normTo)
+      let aliasVal = client.hGet(cfg.prefix & "aliases", resolvedTo)
       if aliasVal != redisNil and aliasVal.len > 0:
         resolvedTo = sanitizeIdentifier(aliasVal)
     except CatchableError:
@@ -2139,8 +2304,11 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
         let rPub = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
         if rPub != redisNil and rPub.len == 64:
           sessionPubHex = rPub
+        else:
+          sessionPubHex = getSessionPubkeyFromPrivKey(privKey)
       except CatchableError:
-        discard
+        if sessionPubHex.len == 0:
+          sessionPubHex = getSessionPubkeyFromPrivKey(privKey)
 
   var node = newJObject()
   node["id"] = %id
@@ -2411,6 +2579,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
     discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
     let nowSec = getTime().toUnix()
     discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
+    discard bindAgentSessionPubkey(cfg, name, client, hbTtl)
   except CatchableError as e:
     stderr.writeLine("Redis error: " & e.msg)
     quit(1)
@@ -2481,6 +2650,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
           let nowSec = getTime().toUnix()
           discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
+          discard bindAgentSessionPubkey(cfg, name, client, hbTtl)
           discard client.sadd(cfg.prefix & "active_agents", name)
           discard client.setEx(listenerKey, hbTtl, listenerJson)
         except CatchableError:
@@ -2499,6 +2669,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           discard client.setEx(cfg.prefix & "heartbeat:" & name, hbTtl, "1")
           let nowSec = getTime().toUnix()
           discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", $nowSec)
+          discard bindAgentSessionPubkey(cfg, name, client, hbTtl)
           discard client.sadd(cfg.prefix & "active_agents", name)
           let currentVal = client.get(cfg.prefix & "listener:" & name)
           var isMyLock = false
@@ -2559,13 +2730,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       # Verify Ed25519 Session Signature if present
       let sessionSig = parsed.getOrDefault("session_sig").getStr("")
       if sessionSig.len > 0 and isCryptoAvailable():
-        var senderPubHex = parsed.getOrDefault("session_pubkey").getStr("")
-        try:
-          let rPub = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
-          if rPub != redisNil and rPub.len == 64:
-            senderPubHex = rPub
-        except CatchableError:
-          discard
+        let senderPubHex = resolveSenderSessionPubkey(cfg, client, fromAgent, parsed.getOrDefault("session_pubkey").getStr(""))
 
         if senderPubHex.len == 64:
           if not verifyPayload(senderPubHex, canonical, sessionSig):
@@ -3276,13 +3441,7 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
 
       let sessionSig = parsed.getOrDefault("session_sig").getStr("")
       if sessionSig.len > 0 and isCryptoAvailable():
-        var senderPubHex = parsed.getOrDefault("session_pubkey").getStr("")
-        try:
-          let rPub = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
-          if rPub != redisNil and rPub.len == 64:
-            senderPubHex = rPub
-        except CatchableError:
-          discard
+        let senderPubHex = resolveSenderSessionPubkey(cfg, client, fromAgent, parsed.getOrDefault("session_pubkey").getStr(""))
 
         if senderPubHex.len == 64:
           if not verifyPayload(senderPubHex, canonical, sessionSig):
@@ -6009,6 +6168,14 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
   let subAction = getFirstSubAction(args)
 
   case lowCmd
+  of "heartbeat":
+    echo "Usage: rhizo heartbeat [name] [--json]"
+    echo ""
+    echo "Options:"
+    echo "  [name]                Agent name to heartbeat (defaults to active session)"
+    echo "  --json, -j            Output heartbeat status as JSON"
+    return true
+
   of "listen":
     echo "Usage: rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--roster-guard/-R]"
     echo ""
@@ -6926,6 +7093,26 @@ proc main() =
       inc i
     doOpen(cfg, name, tags, rearmListen, listenTimeout, forceSteal)
 
+  of "heartbeat":
+    var explicitName = ""
+    var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
+    for idx, a in rawArgs:
+      if a == "--format" and idx + 1 < rawArgs.len and rawArgs[idx+1].toLowerAscii == "json":
+        isJson = true
+      elif a.toLowerAscii.startsWith("--format=json"):
+        isJson = true
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if not a.startsWith("-") and explicitName.len == 0:
+        explicitName = a
+      inc i
+    let res = doHeartbeat(cfg, explicitName)
+    if isJson:
+      echo res
+    else:
+      echo "Heartbeat renewed: " & res
+
   of "listen":
     var explicitName = ""
     var timeout = cfg.listenTimeout
@@ -7125,7 +7312,7 @@ proc main() =
           stderr.writeLine("Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body> [--immediate|--soon]")
       quit(1)
 
-    if not isBroadcast and toAgent.len > 0 and not toAgent.startsWith("@") and toAgent != "*":
+    if not isBroadcast and toAgent.len > 0 and not toAgent.startsWith("@") and toAgent != "*" and toAgent.toLowerAscii notin ["orchestrator", "lead"]:
       toAgent = ensureProjectScopedName(cfg, toAgent)
     if listenAgent.len > 0:
       listenAgent = ensureProjectScopedName(cfg, listenAgent)

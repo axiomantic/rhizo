@@ -127,6 +127,25 @@ proc generateSessionKeypair*(): tuple[pubHex, privHex: string] =
 
   return (bytesToHex(pubBytes), bytesToHex(seed))
 
+proc getSessionPubkeyFromPrivKey*(privHex: string): string =
+  if not initSessionCrypto():
+    return ""
+  let privBytes = hexToBytes(privHex)
+  if privBytes.len != 32:
+    return ""
+
+  let pkey = fn_EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nil, privBytes[0].unsafeAddr, 32)
+  if pkey == nil:
+    return ""
+  defer: fn_EVP_PKEY_free(pkey)
+
+  var pubBytes: array[32, uint8]
+  var pubLen: csize_t = 32
+  if fn_EVP_PKEY_get_raw_public_key(pkey, pubBytes[0].addr, pubLen.addr) != 1:
+    return ""
+
+  return bytesToHex(pubBytes)
+
 proc signPayload*(privHex: string, payload: string): string =
   if not initSessionCrypto():
     return ""
