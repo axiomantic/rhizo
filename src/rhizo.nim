@@ -8,7 +8,7 @@ import std/[
 ]
 when defined(posix):
   import posix
-import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_notify, std/[net, asyncdispatch, httpclient]
+import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_notify, session_crypto, std/[net, asyncdispatch, httpclient]
 
 proc isPidAlive*(pid: int): bool =
   if pid <= 0: return false
@@ -1339,6 +1339,26 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered message (ID: " & id & ")")
       continue
 
+    # Verify Ed25519 Session Signature if present
+    let sessionSig = parsed.getOrDefault("session_sig").getStr("")
+    if sessionSig.len > 0 and isCryptoAvailable():
+      var senderPubHex = parsed.getOrDefault("session_pubkey").getStr("")
+      try:
+        let rPub = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
+        if rPub != redisNil and rPub.len == 64:
+          senderPubHex = rPub
+      except CatchableError:
+        discard
+
+      if senderPubHex.len == 64:
+        if not verifyPayload(senderPubHex, canonical, sessionSig):
+          stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping message with INVALID Ed25519 session signature (ID: " & id & ", sender: @" & fromAgent & ")")
+          continue
+        else:
+          parsed["session_verified"] = %true
+      else:
+        stderr.writeLine("[RHIZO SECURITY] WARNING: Message has session_sig but no authoritative public key found for @" & fromAgent)
+
     # Authenticated! Decrypt if required
     if isEncrypted:
       try:
@@ -1808,6 +1828,15 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     setRedisSessionMapping(cfg, sid, name, cfg.project, getCurrentDir())
 
   discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
+  var sessionPubHex = ""
+  try:
+    if isCryptoAvailable():
+      let (pubHex, privHex) = generateSessionKeypair()
+      saveSessionPrivKey(name, privHex)
+      sessionPubHex = pubHex
+      discard client.hSet(cfg.prefix & "agent:" & name, "session_pubkey", pubHex)
+  except CatchableError as e:
+    stderr.writeLine("[WARNING] Failed to generate session keypair: " & e.msg)
   try:
     let curVerNotified = client.hGet(cfg.prefix & "agent:" & name, "last_version_notified:rhizo")
     if curVerNotified == redisNil or curVerNotified.len == 0:
@@ -1829,8 +1858,12 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     echo "- Session ID : ", sid
   echo "- Project    : ", cfg.project
   echo "- Tags       : ", tags
+  if sessionPubHex.len > 0:
+    echo "- Session Key: ", sessionPubHex
   echo "- Redis URL  : ", cfg.redisUrl, " (prefix: ", cfg.prefix, ")"
   echo "- Security   : HMAC-SHA256 authenticated (Air-Gap Prompt Firewall)"
+  if sessionPubHex.len > 0:
+    echo "- Attestation: Ed25519 Session Keypair Active"
   echo "- Engine     : Nim Native (EVALSHA cached)"
   echo "- Status     : Active & Listening on inbox"
   echo "===================================================="
@@ -2088,6 +2121,21 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   let canonical = id & "|" & normFrom & "|" & resolvedTo & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
 
+  var sessionSig = ""
+  var sessionPubHex = ""
+  if normFrom.len > 0 and isCryptoAvailable():
+    let privKey = loadSessionPrivKey(normFrom)
+    if privKey.len == 64:
+      sessionSig = signPayload(privKey, canonical)
+      try:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let rPub = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
+        if rPub != redisNil and rPub.len == 64:
+          sessionPubHex = rPub
+      except CatchableError:
+        discard
+
   var node = newJObject()
   node["id"] = %id
   node["from"] = %normFrom
@@ -2125,6 +2173,10 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   node["body"] = %finalBody
   node["timestamp"] = %ts
   node["sig"] = %sig
+  if sessionSig.len > 0:
+    node["session_sig"] = %sessionSig
+  if sessionPubHex.len > 0:
+    node["session_pubkey"] = %sessionPubHex
   node["encrypted"] = %cfg.encrypt
 
   let msgJson = $node
@@ -2472,6 +2524,29 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           remaining = max(0, effectiveTimeout - elapsed)
         continue
 
+      # Verify Ed25519 Session Signature if present
+      let sessionSig = parsed.getOrDefault("session_sig").getStr("")
+      if sessionSig.len > 0 and isCryptoAvailable():
+        var senderPubHex = parsed.getOrDefault("session_pubkey").getStr("")
+        try:
+          let rPub = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
+          if rPub != redisNil and rPub.len == 64:
+            senderPubHex = rPub
+        except CatchableError:
+          discard
+
+        if senderPubHex.len == 64:
+          if not verifyPayload(senderPubHex, canonical, sessionSig):
+            stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping message with INVALID Ed25519 session signature (ID: " & id & ", sender: @" & fromAgent & ")")
+            if not isForever:
+              let elapsed = int(getTime().toUnix() - startTime)
+              remaining = max(0, effectiveTimeout - elapsed)
+            continue
+          else:
+            parsed["session_verified"] = %true
+        else:
+          stderr.writeLine("[RHIZO SECURITY] WARNING: Message has session_sig but no authoritative public key found for @" & fromAgent)
+
       # Authenticated! Decrypt if required
       if isEncrypted:
         try:
@@ -2688,6 +2763,18 @@ proc doLock*(cfg: RhizoConfig, lockName: string, ttlSec: int = 30, withFencing: 
   let fencingArg = if withFencing: "1" else: "0"
   let res = runLuaScript(cfg.redisUrl, lockLua, lockSha, [cfg.prefix, effectiveLock, owner, $ttlSec, fencingArg])
   if res != "0" and not res.startsWith("ERR:"):
+    if owner.len > 0 and isCryptoAvailable():
+      let privKey = loadSessionPrivKey(owner)
+      if privKey.len == 64:
+        let lockPayload = "lock:" & effectiveLock & "|" & owner
+        let lockSig = signPayload(privKey, lockPayload)
+        if lockSig.len > 0:
+          try:
+            var c = connectRedis(cfg.redisUrl)
+            defer: (try: c.close() except CatchableError: discard)
+            discard c.setEx(cfg.prefix & "lock:sig:{" & effectiveLock & "}", ttlSec, lockSig)
+          except CatchableError:
+            discard
     if withFencing:
       let token = res
       if rawOutput:
@@ -2709,6 +2796,12 @@ proc doUnlock*(cfg: RhizoConfig, lockName: string, ownerAgent: string = "", glob
   let owner = if ownerAgent.len > 0: sanitizeIdentifier(ownerAgent) else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let res = runLuaScript(cfg.redisUrl, unlockLua, unlockSha, [cfg.prefix, effectiveLock, owner])
   if res == "1":
+    try:
+      var c = connectRedis(cfg.redisUrl)
+      defer: (try: c.close() except CatchableError: discard)
+      discard c.del(@[cfg.prefix & "lock:sig:{" & effectiveLock & "}"])
+    except CatchableError:
+      discard
     return ("UNLOCKED " & effectiveLock, 0)
   else:
     return ("Error: Cannot unlock '" & effectiveLock & "': not owner or lock not found.", 1)
@@ -2725,6 +2818,21 @@ proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: 
 
   let canonical = id & "|" & normFrom & "|queue:" & normQueue & "|" & msgType & "|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
+
+  var sessionSig = ""
+  var sessionPubHex = ""
+  if normFrom.len > 0 and isCryptoAvailable():
+    let privKey = loadSessionPrivKey(normFrom)
+    if privKey.len == 64:
+      sessionSig = signPayload(privKey, canonical)
+      try:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let rPub = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
+        if rPub != redisNil and rPub.len == 64:
+          sessionPubHex = rPub
+      except CatchableError:
+        discard
 
   var node = newJObject()
   node["id"] = %id
@@ -2750,6 +2858,10 @@ proc doEnqueue*(cfg: RhizoConfig, queueName, msgType, fromAgent, subject, body: 
   node["body"] = %finalBody
   node["timestamp"] = %ts
   node["sig"] = %sig
+  if sessionSig.len > 0:
+    node["session_sig"] = %sessionSig
+  if sessionPubHex.len > 0:
+    node["session_pubkey"] = %sessionPubHex
   node["encrypted"] = %cfg.encrypt
 
   let msgJson = $node
@@ -3117,6 +3229,23 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
         stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unauthenticated/tampered task (ID: " & id & ")")
         quit(1)
 
+      let sessionSig = parsed.getOrDefault("session_sig").getStr("")
+      if sessionSig.len > 0 and isCryptoAvailable():
+        var senderPubHex = parsed.getOrDefault("session_pubkey").getStr("")
+        try:
+          let rPub = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
+          if rPub != redisNil and rPub.len == 64:
+            senderPubHex = rPub
+        except CatchableError:
+          discard
+
+        if senderPubHex.len == 64:
+          if not verifyPayload(senderPubHex, canonical, sessionSig):
+            stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping task with INVALID Ed25519 session signature (ID: " & id & ", sender: @" & fromAgent & ")")
+            quit(1)
+          else:
+            parsed["session_verified"] = %true
+
       if isEncrypted:
         try:
           let decryptedBody = decryptAes(body, secret, cfg)
@@ -3125,6 +3254,18 @@ proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSe
         except ValueError as e:
           stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping corrupted task: " & e.msg)
           quit(1)
+
+      if workerName.len > 0 and isCryptoAvailable():
+        let privKey = loadSessionPrivKey(workerName)
+        if privKey.len == 64:
+          let claimPayload = "claim:" & normQueue & "|" & id & "|" & workerName
+          let claimSig = signPayload(privKey, claimPayload)
+          if claimSig.len > 0:
+            try:
+              discard client.setEx(cfg.prefix & "claim:sig:{" & normQueue & "}:" & id, max(leaseSec * 4, 300), claimSig)
+              parsed["claim_sig"] = %claimSig
+            except CatchableError:
+              discard
 
       if rawOutput:
         echo parsed.getOrDefault("body").getStr("")
@@ -4002,6 +4143,21 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
   let canonical = scatterId & "|" & normFrom & "|" & normTargets & "|task|" & subject & "|" & finalBody & "|" & ts
   let sig = computeHmacSha256(secret, canonical)
 
+  var sessionSig = ""
+  var sessionPubHex = ""
+  if normFrom.len > 0 and isCryptoAvailable():
+    let privKey = loadSessionPrivKey(normFrom)
+    if privKey.len == 64:
+      sessionSig = signPayload(privKey, canonical)
+      try:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let rPub = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
+        if rPub != redisNil and rPub.len == 64:
+          sessionPubHex = rPub
+      except CatchableError:
+        discard
+
   var node = newJObject()
   node["id"] = %scatterId
   node["from"] = %normFrom
@@ -4017,6 +4173,10 @@ proc doScatter*(cfg: RhizoConfig, targets, fromAgent, subject, body: string,
   node["body"] = %finalBody
   node["timestamp"] = %ts
   node["sig"] = %sig
+  if sessionSig.len > 0:
+    node["session_sig"] = %sessionSig
+  if sessionPubHex.len > 0:
+    node["session_pubkey"] = %sessionPubHex
   node["encrypted"] = %cfg.encrypt
 
   let msgJson = $node
@@ -4347,6 +4507,87 @@ proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken
   autoHarvestGardenTask(taskId, strandPath)
   return res
 
+proc doTaskVerify*(cfg: RhizoConfig, taskId: string): (bool, string) =
+  let tId = taskId.toLowerAscii().strip()
+  if tId.len == 0:
+    return (false, "Error: Missing task ID")
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  let tKey = cfg.prefix & "task:" & tId
+  if not client.exists(tKey):
+    return (false, "Error: Task '" & tId & "' does not exist.")
+  let owner = client.hGet(tKey, "owner")
+  let state = client.hGet(tKey, "state")
+  let claimSig = client.hGet(tKey, "claim_sig")
+  if owner == redisNil or owner.len == 0:
+    return (false, "Task '" & tId & "' has no owner.")
+  if claimSig == redisNil or claimSig.len == 0:
+    return (false, "Task '" & tId & "' has no session claim signature.")
+  let pubKey = client.hGet(cfg.prefix & "agent:" & owner, "session_pubkey")
+  if pubKey == redisNil or pubKey.len != 64:
+    return (false, "Worker @" & owner & " has no active session public key registered in Redis.")
+  let expectedPayload = "task_claim:" & tId & "|" & owner.toLowerAscii()
+  if not verifyPayload(pubKey, expectedPayload, claimSig):
+    return (false, "FORGERY: Claim signature on task '" & tId & "' is INVALID for worker @" & owner & ".")
+  return (true, "VERIFIED: Task '" & tId & "' claim signature is valid for worker @" & owner & " (state: " & state & ").")
+
+proc doLockVerify*(cfg: RhizoConfig, lockName: string, globalLock: bool = false): (bool, string) =
+  let normLock = sanitizeIdentifier(lockName)
+  let isGlobal = globalLock or cfg.globalLock
+  let effectiveLock = if not isGlobal and cfg.project.len > 0 and not normLock.startsWith(cfg.project.toLowerAscii & ":"):
+                        cfg.project.toLowerAscii & ":" & normLock
+                      else:
+                        normLock
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  let lockKey = cfg.prefix & "lock:{" & effectiveLock & "}"
+  let owner = client.get(lockKey)
+  if owner == redisNil or owner.len == 0:
+    return (false, "Error: Lock '" & effectiveLock & "' is not currently held.")
+  let sigKey = cfg.prefix & "lock:sig:{" & effectiveLock & "}"
+  let lockSig = client.get(sigKey)
+  if lockSig == redisNil or lockSig.len == 0:
+    return (false, "Lock '" & effectiveLock & "' has no session signature.")
+  let pubKey = client.hGet(cfg.prefix & "agent:" & owner, "session_pubkey")
+  if pubKey == redisNil or pubKey.len != 64:
+    return (false, "Lock owner @" & owner & " has no active session public key registered in Redis.")
+  let expectedPayload = "lock:" & effectiveLock & "|" & owner
+  if not verifyPayload(pubKey, expectedPayload, lockSig):
+    return (false, "FORGERY: Signature on lock '" & effectiveLock & "' is INVALID for owner @" & owner & ".")
+  return (true, "VERIFIED: Lock '" & effectiveLock & "' is validly held and signed by @" & owner & ".")
+
+proc doVerifyMessage*(cfg: RhizoConfig, msgInput: string): (bool, string) =
+  var rawJson = msgInput.strip()
+  if fileExists(msgInput):
+    try: rawJson = readFile(msgInput).strip() except CatchableError as e: return (false, "Failed to read file: " & e.msg)
+  var parsed: JsonNode
+  try:
+    parsed = parseJson(rawJson)
+  except JsonParsingError as e:
+    return (false, "Invalid JSON: " & e.msg)
+  let id = parsed.getOrDefault("id").getStr("")
+  let fromAgent = parsed.getOrDefault("from").getStr("")
+  let toAgent = parsed.getOrDefault("to").getStr("")
+  let msgType = parsed.getOrDefault("type").getStr("")
+  let subject = parsed.getOrDefault("subject").getStr("")
+  let body = parsed.getOrDefault("body").getStr("")
+  let ts = parsed.getOrDefault("timestamp").getStr("")
+  let sessionSig = parsed.getOrDefault("session_sig").getStr("")
+  if sessionSig.len == 0:
+    return (false, "Message '" & id & "' does not contain a session signature ('session_sig').")
+  var client = connectRedis(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+  var pubKey = client.hGet(cfg.prefix & "agent:" & fromAgent, "session_pubkey")
+  if pubKey == redisNil or pubKey.len != 64:
+    pubKey = parsed.getOrDefault("session_pubkey").getStr("")
+  if pubKey.len != 64:
+    return (false, "No valid public key found for sender @" & fromAgent & ".")
+  let originalTo = parsed.getOrDefault("original_recipient").getStr(parsed.getOrDefault("rerouted_from").getStr(toAgent))
+  let canonical = id & "|" & fromAgent & "|" & originalTo & "|" & msgType & "|" & subject & "|" & body & "|" & ts
+  if not verifyPayload(pubKey, canonical, sessionSig):
+    return (false, "FORGERY: Session signature verification failed for message '" & id & "' from @" & fromAgent & ".")
+  return (true, "VERIFIED: Message '" & id & "' from @" & fromAgent & " has a valid Ed25519 session signature.")
+
 proc doDecision*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
   var evalArgs: seq[string] = @[cfg.prefix, action]
   for a in args: evalArgs.add(a)
@@ -4503,6 +4744,7 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
   let isAlive = client.exists(cfg.prefix & "heartbeat:" & probeTarget)
   let hbTtl = if isAlive: client.ttl(cfg.prefix & "heartbeat:" & probeTarget) else: -1
   let lastSeen = client.hGet(cfg.prefix & "agent:" & probeTarget, "last_seen")
+  let sessionPubkey = try: client.hGet(cfg.prefix & "agent:" & probeTarget, "session_pubkey") except CatchableError: redisNil
   let listenerVal = client.get(cfg.prefix & "listener:" & probeTarget)
   let inboxDepth = try: client.lLen(cfg.prefix & "inbox:" & probeTarget) except CatchableError: 0
 
@@ -4595,6 +4837,8 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
     j["listener_host"] = %listenerHost
     j["listener_pid_alive"] = %pidAlive
     j["inbox_depth"] = %inboxDepth
+    if sessionPubkey != redisNil and sessionPubkey.len > 0:
+      j["session_pubkey"] = %sessionPubkey
     j["current_task"] = %curTask
     j["task_state"] = %taskState
     j["task_progress"] = %taskProgress
@@ -4615,6 +4859,8 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
   outStr.add("Heartbeat Active   : " & (if isAlive: "YES (TTL: " & $hbTtl & "s)" elif inFlightActive: "YES (In-Flight Lease: " & $taskLeaseRemaining & "s)" else: "NO (OFFLINE)") & "\n")
   if lastSeen != redisNil and lastSeen.len > 0:
     outStr.add("Last Seen          : " & lastSeen & "\n")
+  if sessionPubkey != redisNil and sessionPubkey.len > 0:
+    outStr.add("Session Pubkey     : " & sessionPubkey & "\n")
   if curTask.len > 0:
     outStr.add("Active Task        : " & curTask & " [" & (if taskState.len > 0: taskState else: "UNKNOWN") & "]" & (if taskLeaseRemaining > 0: " (lease: " & $taskLeaseRemaining & "s)" else: "") & "\n")
     if taskProgress.len > 0:
@@ -8385,7 +8631,24 @@ proc main() =
     if args.len < 2:
       stderr.writeLine("Error: Missing lock name.")
       stderr.writeLine("Usage: rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw] [--global-lock]")
+      stderr.writeLine("       rhizo lock verify <lock_name> [--global-lock]")
       quit(1)
+    if args[1] == "verify":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing lock name to verify.")
+        stderr.writeLine("Usage: rhizo lock verify <lock_name> [--global-lock]")
+        quit(1)
+      let lockName = args[2]
+      var globalLock = false
+      var i = 3
+      while i < args.len:
+        let a = args[i]
+        if a in ["--global-lock", "--global"]: globalLock = true
+        inc i
+      let (ok, msg) = doLockVerify(cfg, lockName, globalLock)
+      echo msg
+      if not ok: quit(1)
+      quit(0)
     let lockName = args[1]
     var ttl = 30
     var withFencing = false
@@ -8588,6 +8851,20 @@ proc main() =
         stderr.writeLine(res)
         quit(1)
 
+      if worker.len > 0 and isCryptoAvailable():
+        let privKey = loadSessionPrivKey(worker)
+        if privKey.len == 64:
+          let taskClaimPayload = "task_claim:" & taskId.toLowerAscii() & "|" & worker.toLowerAscii()
+          let taskClaimSig = signPayload(privKey, taskClaimPayload)
+          if taskClaimSig.len > 0:
+            try:
+              var client = connectRedis(cfg.redisUrl)
+              defer: (try: client.close() except CatchableError: discard)
+              discard client.hSet(cfg.prefix & "task:" & taskId.toLowerAscii(), "claim_sig", taskClaimSig)
+              discard client.hSet(cfg.prefix & "task:" & taskId.toLowerAscii(), "claim_worker", worker)
+            except CatchableError:
+              discard
+
       # Mirror claimed task locally
       try:
         createDir(getHomeDir() / ".config" / "rhizo")
@@ -8605,6 +8882,17 @@ proc main() =
         echo "CLAIMED task '" & taskId & "' for worker '" & worker & "' (lease: " & $leaseSec & "s, strand: " & strandPath & ")"
       else:
         echo "CLAIMED task '" & taskId & "' for worker '" & worker & "' (lease: " & $leaseSec & "s)"
+
+    of "verify":
+      if args.len < 3:
+        stderr.writeLine("Error: Missing task id.")
+        stderr.writeLine("Usage: rhizo task verify <id>")
+        quit(1)
+      let taskId = args[2]
+      let (ok, msg) = doTaskVerify(cfg, taskId)
+      echo msg
+      if not ok: quit(1)
+      quit(0)
 
     of "progress":
       var taskId = ""
@@ -9575,6 +9863,15 @@ proc main() =
       stderr.writeLine("Usage: rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json] [-- <command...>]")
       quit(1)
     echo doPoke(cfg, targetAgent, optCmd, force, dryRun, jsonOut)
+
+  of "verify":
+    if args.len < 2:
+      stderr.writeLine("Usage: rhizo verify <message_json_or_file>")
+      quit(1)
+    let (ok, msg) = doVerifyMessage(cfg, args[1])
+    echo msg
+    if not ok: quit(1)
+    quit(0)
 
   else:
     var suggestion = ""
