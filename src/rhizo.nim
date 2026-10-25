@@ -5705,6 +5705,509 @@ proc doRouteSetup*(daemonMode: bool, customServiceUrl: string = "", timeoutSec: 
     stderr.writeLine("Check daemon output or launch 'local-systemone' in foreground to debug.")
     return 1
 
+# CLI Subcommand Help Handling
+proc hasHelpFlag*(args: seq[string]): bool =
+  for a in args:
+    if a == "--":
+      return false
+    if a in ["--help", "-h"]:
+      return true
+  return false
+
+proc getFirstSubAction*(args: seq[string]): string =
+  for a in args:
+    if not a.startsWith("-"):
+      return a.toLowerAscii
+  return ""
+
+proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
+  let lowCmd = subcmd.toLowerAscii
+  let subAction = getFirstSubAction(args)
+
+  case lowCmd
+  of "listen":
+    echo "Usage: rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--roster-guard/-R]"
+    echo ""
+    echo "Options:"
+    echo "  --timeout <sec>       Seconds to wait before exiting (default: 0 / infinite)"
+    echo "  --force, -f           Force acquire listener even if existing PID recorded"
+    echo "  --notify, -n          Emit desktop notification on message receipt"
+    echo "  --quiet, -q           Silence lifecycle postamble and diagnostic banners"
+    echo "  --continuous, -c      Run continuously as daemon instead of single-shot"
+    echo "  --roster-guard, -R    Reject unbootstrapped/alien agent messages"
+    return true
+
+  of "send":
+    echo "Usage: rhizo send --to <agent> [--type task|query|reply|status] --subject <subj> --body <body> [--listen/-l] [--idle/-d] [--complete/-c] [--immediate|--soon]"
+    echo ""
+    echo "Options:"
+    echo "  --to <agent>          Target agent codename or multicast tag (@tag)"
+    echo "  --type <type>         Message type: task, query, reply, status (default: task)"
+    echo "  --subject <subj>      Message subject line"
+    echo "  --body <body>         Message body payload"
+    echo "  --listen, -l          Atomically arm listener after enqueueing"
+    echo "  --idle, -d            Mark sender state IDLE after send"
+    echo "  --complete, -c        Mark current in-flight task complete"
+    echo "  --immediate           Deliver with high urgency"
+    echo "  --soon                Deliver with normal urgency (default)"
+    return true
+
+  of "reply":
+    echo "Usage: rhizo reply --to <agent> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--idle/-d] [--complete/-c]"
+    echo ""
+    echo "Options:"
+    echo "  --to <agent>          Recipient agent codename"
+    echo "  --subject <subj>      Reply subject line"
+    echo "  --body <body>         Reply body payload"
+    echo "  --reply-to <id>       ID of message being replied to"
+    echo "  --listen, -l          Atomically arm listener after replying"
+    echo "  --idle, -d            Mark sender state IDLE after reply"
+    echo "  --complete, -c        Mark current in-flight task complete"
+    return true
+
+  of "broadcast":
+    echo "Usage: rhizo broadcast [--tags <tags>] --subject <subj> --body <body>"
+    echo ""
+    echo "Options:"
+    echo "  --tags <tags>         Comma-separated multicast tags (e.g. @tag1,tag2)"
+    echo "  --subject <subj>      Broadcast subject line"
+    echo "  --body <body>         Broadcast body payload"
+    return true
+
+  of "open", "register":
+    echo "Usage: rhizo open [name] [tags] [--listen/-l] [--force-steal]"
+    echo ""
+    echo "Options:"
+    echo "  --listen, -l          Atomically arm listener after registration"
+    echo "  --force-steal         Force steal agent name lease from stale registration"
+    return true
+
+  of "name", "assign-name", "reserve-name":
+    echo "Usage: rhizo name [prefix] [--ttl <sec>] [--json]"
+    echo ""
+    echo "Options:"
+    echo "  prefix                Optional name prefix (e.g. rhizo-worker)"
+    echo "  --ttl <sec>           Reservation lease in seconds (default: 600)"
+    echo "  --json, -j            Output reserved name as JSON"
+    return true
+
+  of "work":
+    echo "Usage: rhizo work <queue_name> [--timeout <sec>] [--run-id <id>]"
+    echo ""
+    echo "Options:"
+    echo "  --timeout <sec>       Seconds to wait for a task (default: 0 / infinite)"
+    echo "  --run-id <id>         Run identifier for execution tracing"
+    return true
+
+  of "claim":
+    if subAction == "renew":
+      echo "Usage: rhizo claim renew <queue_name> <task_id> [--lease 120]"
+      echo ""
+      echo "Options:"
+      echo "  --lease <sec>         Task claim lease duration in seconds (default: 120)"
+    else:
+      echo "Usage:"
+      echo "  rhizo claim <queue_name> [--timeout <sec>] [--lease 120] [--run-id <id>] [--raw]"
+      echo "  rhizo claim renew <queue_name> <task_id> [--lease 120]"
+      echo ""
+      echo "Options:"
+      echo "  --timeout <sec>       Seconds to wait for task claim (default: 0 / infinite)"
+      echo "  --lease <sec>         Task claim lease duration in seconds (default: 120)"
+      echo "  --run-id <id>         Run identifier for execution tracing"
+      echo "  --raw                 Print bare task ID without formatting"
+    return true
+
+  of "ack":
+    echo "Usage: rhizo ack <queue_name> <task_id>"
+    return true
+
+  of "lock":
+    echo "Usage: rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw] [--global-lock]"
+    echo ""
+    echo "Options:"
+    echo "  [ttl_sec]             Lock lease TTL in seconds (default: 30)"
+    echo "  --fencing, -f         Return monotonic fencing token with lock"
+    echo "  --raw                 Print bare token integer without formatting"
+    echo "  --global-lock         Acquire lock globally across all projects"
+    return true
+
+  of "unlock":
+    echo "Usage: rhizo unlock <lock_name> [--global-lock]"
+    echo ""
+    echo "Options:"
+    echo "  --global-lock         Release lock globally across all projects"
+    return true
+
+  of "who":
+    echo "Usage: rhizo who [-a|--all] [--json] [filter_tag]"
+    echo ""
+    echo "Options:"
+    echo "  -a, --all             Show agents across all projects"
+    echo "  --json, -j            Output directory as structured JSON"
+    echo "  filter_tag            Optional project or capability tag filter"
+    return true
+
+  of "probe":
+    echo "Usage: rhizo probe <agent> [--json]"
+    echo ""
+    echo "Options:"
+    echo "  --json, -j            Output agent status and health as JSON"
+    return true
+
+  of "watchdog":
+    if subAction == "reset":
+      echo "Usage: rhizo watchdog reset [agent] [--agent <name>] [--json]"
+      echo ""
+      echo "Options:"
+      echo "  --agent <name>        Agent to reset failure streak counter for"
+      echo "  --json, -j            Output results as JSON"
+    else:
+      echo "Usage: rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
+      echo ""
+      echo "Options:"
+      echo "  check                 Verify agent heartbeat and listener health (default)"
+      echo "  reset                 Reset failure streak counter for agent"
+      echo "  --expect-listening    Assert that target agent has an active listener"
+      echo "  --streak <N>          Failure streak threshold before firing alert"
+      echo "  --json, -j            Output health check results as JSON"
+    return true
+
+  of "leader":
+    if subAction in ["acquire", "elect"]:
+      echo "Usage: rhizo leader acquire <role> [--lease <sec>] [--agent <name>]"
+    elif subAction in ["renew", "heartbeat"]:
+      echo "Usage: rhizo leader renew <role> [--lease <sec>] [--agent <name>]"
+    elif subAction in ["resign", "release", "yield"]:
+      echo "Usage: rhizo leader resign <role> [--agent <name>]"
+    elif subAction in ["status", "show"]:
+      echo "Usage: rhizo leader status <role>"
+    else:
+      echo "Usage:"
+      echo "  rhizo leader acquire <role> [--lease <sec>] [--agent <name>]"
+      echo "  rhizo leader renew <role> [--lease <sec>] [--agent <name>]"
+      echo "  rhizo leader resign <role> [--agent <name>]"
+      echo "  rhizo leader status <role>"
+      echo ""
+      echo "Options:"
+      echo "  --lease <sec>         Leader lease duration in seconds (default: 7200)"
+      echo "  --agent <name>        Agent claiming leadership (defaults to active agent)"
+    return true
+
+  of "enqueue":
+    echo "Usage:"
+    echo "  rhizo enqueue <queue_name> --subject <subj> --body <body>"
+    echo "  rhizo enqueue --route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
+    echo ""
+    echo "Options:"
+    echo "  --subject <subj>      Task subject line"
+    echo "  --body <body>         Task payload body"
+    echo "  --route <task_text>   Zero-shot semantic route task via System 1"
+    return true
+
+  of "route":
+    if subAction in ["setup", "bootstrap"]:
+      echo "Usage: rhizo route setup [--daemon] [--service-url <url>] [--timeout <sec>]"
+      echo ""
+      echo "Options:"
+      echo "  --daemon, -d          Install and launch local-systemone background service"
+      echo "  --service-url <url>   Override health check URL (default: http://127.0.0.1:8100/health)"
+      echo "  --timeout <sec>       Seconds to wait for service readiness (default: 45)"
+    elif subAction in ["lint", "check"]:
+      echo "Usage: rhizo route <lint|check> [--routes-file <file>] [--check-service]"
+    elif subAction == "init":
+      echo "Usage: rhizo route init [--global] [--force]"
+    else:
+      echo "Usage:"
+      echo "  rhizo route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
+      echo "  rhizo route <lint|check> [--routes-file <file>] [--check-service]"
+      echo "  rhizo route init [--global] [--force]"
+      echo "  rhizo route setup [--daemon] [--service-url <url>] [--timeout <sec>]"
+    return true
+
+  of "request":
+    echo "Usage: rhizo request --to <agent> --subject <subj> --body <body> [--timeout 30] [--raw]"
+    return true
+
+  of "scatter":
+    echo "Usage: rhizo scatter --targets <@tag|agents|*> --subject <subj> --body <body> [--quorum N] [--timeout 30] [--raw]"
+    return true
+
+  of "blackboard":
+    case subAction
+    of "set": echo "Usage: rhizo blackboard set <room> <key> <json_value> [--ttl <sec>]"
+    of "get": echo "Usage: rhizo blackboard get <room> <key>"
+    of "rev": echo "Usage: rhizo blackboard rev <room> <key>"
+    of "append": echo "Usage: rhizo blackboard append <room> <list_key> <entry> [--ttl <sec>]"
+    of "load": echo "Usage: rhizo blackboard load <room> <file_or_json> [--ttl <sec>]"
+    of "delete", "del": echo "Usage: rhizo blackboard delete <room> <key>"
+    of "snapshot", "dump": echo "Usage: rhizo blackboard snapshot <room>"
+    of "clear": echo "Usage: rhizo blackboard clear <room>"
+    else:
+      echo "Usage: rhizo blackboard <set|get|rev|append|snapshot|load|delete|clear> <room> [key] [value]"
+    return true
+
+  of "floor":
+    case subAction
+    of "request": echo "Usage: rhizo floor request <room> [--ttl <sec>]"
+    of "yield": echo "Usage: rhizo floor yield <room>"
+    of "pass": echo "Usage: rhizo floor pass <room> <agent>"
+    of "status", "show": echo "Usage: rhizo floor status <room>"
+    else:
+      echo "Usage: rhizo floor <request|yield|pass|status> <room> [args...]"
+    return true
+
+  of "cancel":
+    if subAction in ["check", "clear"]:
+      echo "Usage: rhizo cancel " & subAction & " <run_id>"
+    else:
+      echo "Usage:"
+      echo "  rhizo cancel <run_id> [--reason <reason>]"
+      echo "  rhizo cancel check <run_id>"
+      echo "  rhizo cancel clear <run_id>"
+    return true
+
+  of "ballot":
+    case subAction
+    of "open": echo "Usage: rhizo ballot open <ballot_id> <title> <options_csv> [--ttl <sec>]"
+    of "cast", "vote": echo "Usage: rhizo ballot cast <ballot_id> <option>"
+    of "tally": echo "Usage: rhizo ballot tally <ballot_id>"
+    of "status", "show": echo "Usage: rhizo ballot status <ballot_id>"
+    else:
+      echo "Usage: rhizo ballot <open|cast|tally|status> <ballot_id> [args...]"
+    return true
+
+  of "workflow", "dag":
+    case subAction
+    of "define", "create": echo "Usage: rhizo workflow define <flow_id> <dag_json_or_file>"
+    of "next", "ready": echo "Usage: rhizo workflow next <flow_id>"
+    of "resolve", "complete": echo "Usage: rhizo workflow resolve <flow_id> <step> <output>"
+    of "fail": echo "Usage: rhizo workflow fail <flow_id> <step> <reason>"
+    of "status", "show": echo "Usage: rhizo workflow status <flow_id>"
+    of "export", "dump": echo "Usage: rhizo workflow export <flow_id>"
+    of "import", "load": echo "Usage: rhizo workflow import <flow_id> <file_or_json> [--ttl <sec>]"
+    else:
+      echo "Usage: rhizo workflow <define|next|resolve|fail|status|export|import> <flow_id> [args...]"
+    return true
+
+  of "pulse":
+    case subAction
+    of "add": echo "Usage: rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]"
+    of "list": echo "Usage: rhizo pulse list [--json]"
+    of "remove", "rm", "delete": echo "Usage: rhizo pulse remove <id>"
+    of "tick": echo "Usage: rhizo pulse tick"
+    else:
+      echo "Usage: rhizo pulse <add|list|remove|tick> [args...]"
+    return true
+
+  of "status":
+    echo "Usage: rhizo status <idle|busy|error> [activity_text] [name] [--listen/-l]"
+    return true
+
+  of "pub", "publish":
+    echo "Usage: rhizo pub <channel> <message>"
+    return true
+
+  of "sub", "subscribe":
+    echo "Usage: rhizo sub <channel> [timeout_sec]"
+    return true
+
+  of "poke", "nudge", "wake":
+    echo "Usage: rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json] [-- <command...>]"
+    return true
+
+  of "title":
+    echo "Usage: rhizo title [name]"
+    return true
+
+  of "sweep":
+    echo "Usage: rhizo sweep [--dry-run] [--raw]"
+    return true
+
+  of "tag":
+    echo "Usage: rhizo tag <add|remove|set> <tags> [name]"
+    return true
+
+  of "reassign", "repurpose":
+    echo "Usage: rhizo reassign <worker> --project <project> --role <role> [--tags <tags>] [--queue <queue>] [--json]"
+    return true
+
+  of "check-inbox":
+    echo "Usage: rhizo check-inbox [name]"
+    return true
+
+  of "inbox":
+    echo "Usage: rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain] [--json|--hook|--raw]"
+    return true
+
+  of "drain":
+    echo "Usage: rhizo drain [count] [name] [--limit N] [--format json|hook|raw] [--hook]"
+    return true
+
+  of "ping":
+    echo "Usage: rhizo ping [--json]"
+    return true
+
+  of "close", "unregister":
+    echo "Usage: rhizo close [name]"
+    return true
+
+  of "reset":
+    echo "Usage: rhizo reset [project] [--all/-a] [--json]"
+    return true
+
+  of "nuke":
+    echo "Usage: rhizo nuke [--json]"
+    return true
+
+  of "get-secret":
+    echo "Usage: rhizo get-secret"
+    return true
+
+  of "config":
+    if subAction in ["redis-persistence", "persistence"]:
+      echo "Usage: rhizo config redis-persistence [--status|--enable|--disable-warning]"
+      echo ""
+      echo "Options:"
+      echo "  --status, -s          Show current Redis AOF and snapshotting persistence status"
+      echo "  --enable, -e          Enable Redis AOF persistence and rewrite redis.conf"
+      echo "  --disable-warning, -d Disable Redis persistence warning in user config"
+    elif subAction == "get":
+      echo "Usage: rhizo config get <key>"
+    elif subAction == "init":
+      echo "Usage: rhizo config init [--user|--workspace] [--force]"
+    elif subAction == "show":
+      echo "Usage: rhizo config show [--json]"
+    elif subAction in ["path", "paths"]:
+      echo "Usage: rhizo config path"
+    else:
+      echo "Usage:"
+      echo "  rhizo config show [--json]"
+      echo "  rhizo config get <key>"
+      echo "  rhizo config path"
+      echo "  rhizo config init [--user|--workspace] [--force]"
+      echo "  rhizo config redis-persistence [--status|--enable|--disable-warning]"
+    return true
+
+  of "update":
+    echo "Usage: rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
+    return true
+
+  of "guide":
+    case subAction
+    of "install", "i", "add": echo "Usage: rhizo guide install [path]"
+    of "uninstall", "u", "remove", "rm": echo "Usage: rhizo guide uninstall [path]"
+    of "check", "status": echo "Usage: rhizo guide check [path]"
+    else:
+      echo "Usage: rhizo guide <install|uninstall|check> [path]"
+    return true
+
+  of "hook":
+    if subAction in ["codex-stop", "stop"]:
+      echo "Usage: rhizo hook codex-stop"
+    else:
+      echo "Usage:"
+      echo "  rhizo hook install [--claude|--opencode|--pi|--codex] [--global|--local]"
+      echo "  rhizo hook codex-stop"
+    return true
+
+  of "session":
+    case subAction
+    of "set": echo "Usage: rhizo session set <agent> [--thread-id <id>] [--harness <name>] [--model <model>] [--cwd <path>] [--strand <strand>] [--account <acc>]"
+    of "get", "resolve": echo "Usage: rhizo session get <agent> [--thread-id] [--harness] [--model] [--json]"
+    of "remove", "rm", "del", "clear": echo "Usage: rhizo session remove <agent>"
+    of "list", "ls": echo "Usage: rhizo session list [--json]"
+    else:
+      echo "Usage: rhizo session <set|get|resolve|remove|list> [args...]"
+    return true
+
+  of "alias":
+    case subAction
+    of "set": echo "Usage: rhizo alias set <alias> <canonical_name> (DEPRECATED: use capability tags)"
+    of "get": echo "Usage: rhizo alias get <alias> (DEPRECATED: use capability tags)"
+    of "del", "delete", "rm": echo "Usage: rhizo alias del <alias> (DEPRECATED: use capability tags)"
+    of "list", "ls": echo "Usage: rhizo alias list (DEPRECATED: use capability tags)"
+    else:
+      echo "Usage: rhizo alias <set|get|list|del> [args...] (DEPRECATED: use capability tags)"
+    return true
+
+  of "task":
+    case subAction
+    of "create": echo "Usage: rhizo task create <id> --title <title> [--deliverable <deliv>] [--spec <spec>] [--depends-on <ids>] [--target <worker|queue>]"
+    of "claim": echo "Usage: rhizo task claim <id> [--worker <worker>] [--lease <sec>] [--strand <path>] [--no-vine]"
+    of "progress": echo "Usage: rhizo task progress <id> --progress <text> [--renew <sec>]"
+    of "gate-report": echo "Usage: rhizo task gate-report <id> --token <token> [--strand <path>]"
+    of "complete": echo "Usage: rhizo task complete <id> [--weave] [--skip-gate]"
+    of "yield", "abandon": echo "Usage: rhizo task yield <id> [--reason <reason>]"
+    of "current": echo "Usage: rhizo task current [agent]"
+    of "sweep": echo "Usage: rhizo task sweep"
+    of "get": echo "Usage: rhizo task get <id> [--json]"
+    of "list": echo "Usage: rhizo task list [--status <status>] [--agent <name>]"
+    of "roadmap": echo "Usage: rhizo task roadmap"
+    else:
+      echo "Usage: rhizo task <create|claim|progress|gate-report|complete|yield|current|sweep|get|list|roadmap> [args...]"
+    return true
+
+  of "decision":
+    case subAction
+    of "propose": echo "Usage: rhizo decision propose <id> --title <title> [--summary <sum>]"
+    of "approve": echo "Usage: rhizo decision approve <id> [--note <note>]"
+    of "reject": echo "Usage: rhizo decision reject <id> [--reason <reason>]"
+    of "verify": echo "Usage: rhizo decision verify <id>"
+    of "get": echo "Usage: rhizo decision get <id> [--json]"
+    of "list": echo "Usage: rhizo decision list"
+    else:
+      echo "Usage: rhizo decision <propose|approve|reject|verify|get|list> [args...]"
+    return true
+
+  of "audit":
+    if subAction == "log":
+      echo "Usage: rhizo audit log --action <name> --details <details> [--actor <actor>]"
+    else:
+      echo "Usage: rhizo audit <log|list> [args...]"
+    return true
+
+  of "time":
+    if subAction == "advance":
+      echo "Usage: rhizo time advance <seconds>"
+    else:
+      echo "Usage: rhizo time <advance|reset|get> [seconds]"
+    return true
+
+  of "remind", "reminder":
+    case subAction
+    of "add": echo "Usage: rhizo remind add <text> [--priority <prio>] [--cadence <sec>] [--ttl <sec>]"
+    of "dismiss": echo "Usage: rhizo remind dismiss <id>"
+    of "ack": echo "Usage: rhizo remind ack <id> [--agent <name>]"
+    of "get": echo "Usage: rhizo remind get <id> [--json]"
+    of "list": echo "Usage: rhizo remind list"
+    of "tick": echo "Usage: rhizo remind tick"
+    else:
+      echo "Usage: rhizo remind <add|dismiss|ack|get|list|tick> [args...]"
+    return true
+
+  of "history", "log":
+    echo "Usage: rhizo history [agent] [limit] [--json]"
+    return true
+
+  of "roadmap":
+    echo "Usage: rhizo roadmap [--json]"
+    return true
+
+  of "migrate-keys":
+    echo "Usage: rhizo migrate-keys"
+    return true
+
+  of "reroute":
+    echo "Usage: rhizo reroute <from_agent> <to_agent> [--all|--unread] [--json]"
+    return true
+
+  of "version":
+    echo "Usage: rhizo version"
+    return true
+
+  else:
+    return false
+
 # Main Entrypoint / CLI Router
 proc main() =
   installSignalHandlers()
@@ -5796,7 +6299,7 @@ proc main() =
     echo "rhizo " & RhizoVersion
     return
 
-  if args.len == 0 or args[0] in ["-h", "--help", "help"]:
+  if args.len == 0 or (args.len == 1 and args[0] in ["-h", "--help", "help"]):
     echo "Rhizo " & RhizoVersion & " - High Performance Inter-Assistant Redis Bus (Nim Native)"
     echo "Usage:"
     echo "  rhizo version"
@@ -5863,7 +6366,17 @@ proc main() =
     echo "  --cluster             Enable Redis Cluster hash tag compatibility"
     return
 
+  if args[0] in ["-h", "--help", "help"] and args.len > 1:
+    let target = args[1].toLowerAscii
+    if printSubcommandHelp(target, args[2..^1]):
+      return
+
   let subcmd = args[0].toLowerAscii
+
+  # Early intercept for subcommand help flags (--help, -h)
+  if hasHelpFlag(args[1..^1]):
+    if printSubcommandHelp(subcmd, args[1..^1]):
+      return
 
   # Protocol Upgrade Notifications (Proactive Push & Interactive Pull Fallback)
   if not isMachineOutputContext(rawArgs):

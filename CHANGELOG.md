@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Dedicated CLI Subcommand Help Handling (`src/rhizo.nim`, `tests/test_cli_help.py`)**:
+  - Implemented early intercept for `--help` and `-h` across all subcommands (`listen`, `send`, `reply`, `broadcast`, `open`, `claim`, `work`, `lock`, `unlock`, `probe`, `who`, `watchdog`, `leader`, `route`, `config`, etc.).
+  - Fixed issue where `rhizo listen --help` and `rhizo listen <name> --help` would fail on missing agent name or start blocking/hanging indefinitely on Redis.
+  - Subcommand help now outputs detailed command-specific usage and options to stdout and exits with code 0 immediately without opening Redis connections or performing network I/O.
+  - Added support for `rhizo help <subcommand>` and `rhizo --help <subcommand>`.
+  - Added comprehensive automated test suite `tests/test_cli_help.py` asserting exit code 0, non-blocking execution, and proper isolation with unreachable Redis configurations.
+
 ## [0.2.26] - 2026-10-24
 
 ### Added
