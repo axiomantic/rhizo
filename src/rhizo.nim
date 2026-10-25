@@ -86,6 +86,7 @@ const
   rerouteLua*    = staticRead("../scripts/reroute.lua")
   watchdogInflightLua* = staticRead("../scripts/watchdog_inflight.lua")
   pulseLua*      = staticRead("../scripts/pulse.lua")
+  strandLua*     = staticRead("../scripts/strand.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
   RhizoVersion*  = "0.2.26"
@@ -127,6 +128,7 @@ let
   rerouteSha*    = computeSha1(rerouteLua)
   watchdogInflightSha* = computeSha1(watchdogInflightLua)
   pulseSha*      = computeSha1(pulseLua)
+  strandSha*     = computeSha1(strandLua)
 
 
 proc secureFilePermissions*(path: string) =
@@ -4275,6 +4277,11 @@ proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string 
   var evalArgs: seq[string] = @[cfg.prefix, action]
   for a in args: evalArgs.add(a)
   return runLuaScript(cfg.redisUrl, taskLua, taskSha, evalArgs)
+
+proc doStrand*(cfg: RhizoConfig, action: string, args: openArray[string]): string =
+  var evalArgs: seq[string] = @[cfg.prefix, action]
+  for a in args: evalArgs.add(a)
+  return runLuaScript(cfg.redisUrl, strandLua, strandSha, evalArgs)
 
 proc formatTasksTable*(jsonStr: string): string =
   try:

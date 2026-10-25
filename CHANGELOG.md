@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pure Redis Strand State Management & Three-Key Ratification Gate (`scripts/strand.lua`, `src/rhizo.nim`, `tests/test_strand_lua.py`)**:
+  - Implemented pure Redis strand state management in `scripts/strand.lua`, completely eliminating on-disk `.vine.json` dependency.
+  - Supported actions: `create`, `submit`, `ratify`, `reject`, `weave`, `get`, and `list` across lifecycle states (`PROVISIONED`, `SUBMITTED`, `RATIFIED`, `REJECTED`, `WOVEN`).
+  - Enforced atomic ratification invariants in Lua: verifies independent auditor (`auditor_pubkey != author_pubkey`), checks active auditor heartbeat lease, checks anti-blink temporal floor, and updates state and index sets atomically.
+  - Added comprehensive automated test suite `tests/test_strand_lua.py`.
 - **Dedicated CLI Subcommand Help Handling (`src/rhizo.nim`, `tests/test_cli_help.py`)**:
   - Implemented early intercept for `--help` and `-h` across all subcommands (`listen`, `send`, `reply`, `broadcast`, `open`, `claim`, `work`, `lock`, `unlock`, `probe`, `who`, `watchdog`, `leader`, `route`, `config`, etc.).
   - Fixed issue where `rhizo listen --help` and `rhizo listen <name> --help` would fail on missing agent name or start blocking/hanging indefinitely on Redis.
