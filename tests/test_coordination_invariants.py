@@ -1175,8 +1175,12 @@ class TestCoordinationInvariants(unittest.TestCase):
         )
         strand_data = json.loads(res_vine.stdout.strip())
         strand_dir = strand_data["strand_path"]
-        manifest_path = os.path.join(strand_dir, ".vine.json")
-        self.assertTrue(os.path.isfile(manifest_path), "Real .vine.json must be created by vine new")
+        # In zero-disk pure Redis architecture, verify strand was registered in Redis
+        res_status = subprocess.run(
+            ["vine", "status", "--dir", strand_dir],
+            capture_output=True, text=True, env=self.env
+        )
+        self.assertEqual(res_status.returncode, 0)
 
         # Claim task with real strand directory
         res_claim = self.run_cmd(["task", "claim", task_id, "--worker", worker, "--strand", strand_dir, "--lease", "120"])
@@ -1256,10 +1260,13 @@ class TestCoordinationInvariants(unittest.TestCase):
             capture_output=True, text=True, env=self.env
         )
         self.assertNotEqual(res_gate_fail.returncode, 0, "vine gate must fail when test command fails")
-        with open(manifest_path) as f:
-            failed_manifest = json.load(f)
+        res_gate_status = subprocess.run(
+            ["vine", "status", "--dir", strand_dir, "--json"],
+            capture_output=True, text=True, env=self.env
+        )
+        failed_manifest = json.loads(res_gate_status.stdout.strip())
         self.assertEqual(failed_manifest.get("status"), "GATE_FAILED")
-        self.assertIsNone(failed_manifest.get("gate_token"))
+        self.assertFalse(bool(failed_manifest.get("gate_token")))
 
         res_no_token_comp = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
         self.assertNotEqual(res_no_token_comp.returncode, 0)
@@ -1271,9 +1278,12 @@ class TestCoordinationInvariants(unittest.TestCase):
             capture_output=True, text=True, env=self.env
         )
         self.assertEqual(res_gate_pass.returncode, 0, "vine gate must pass when test command succeeds")
-        with open(manifest_path) as f:
-            passed_manifest = json.load(f)
-        self.assertIn(passed_manifest.get("status"), ["READY_TO_WEAVE", "READY_FOR_WEAVE"])
+        res_pass_status = subprocess.run(
+            ["vine", "status", "--dir", strand_dir, "--json"],
+            capture_output=True, text=True, env=self.env
+        )
+        passed_manifest = json.loads(res_pass_status.stdout.strip())
+        self.assertIn(passed_manifest.get("status"), ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE"])
         self.assertEqual(passed_manifest.get("lifecycle_state"), "GATE_PASSED")
         gate_token = passed_manifest.get("gate_token") or passed_manifest.get("merge_tree_sha")
         self.assertTrue(bool(gate_token), "vine gate must produce a valid gate token")
@@ -1284,19 +1294,21 @@ class TestCoordinationInvariants(unittest.TestCase):
         expected_sig = hashlib.sha256(f"{passed_manifest['merge_tree_sha']}:{passed_manifest['test_output_hash']}".encode()).hexdigest()
         self.assertEqual(passed_manifest["gate_token"], expected_sig)
 
-        # 6-tamper: Tampered gate token MUST be rejected by rhizo task complete
-        tampered_manifest = dict(passed_manifest)
-        tampered_manifest["gate_token"] = "forged-token-signature-invalid"
-        with open(manifest_path, "w") as f:
-            json.dump(tampered_manifest, f)
+        # 6-tamper: Tampered gate token in Redis MUST be rejected by rhizo task complete
+        import redis
+        r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        orig_gate_token = passed_manifest.get("gate_token", "")
+        strand_keys = [k for k in r.keys(f"*{task_id}*") if "strand" in k]
+        for sk in strand_keys:
+            r.hset(sk, "gate_token", "forged-token-signature-invalid")
 
         res_tamper = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
         self.assertNotEqual(res_tamper.returncode, 0)
         self.assertIn("Gate certificate verification failed", res_tamper.stderr)
 
-        # Restore authentic manifest
-        with open(manifest_path, "w") as f:
-            json.dump(passed_manifest, f)
+        # Restore authentic gate token in Redis
+        for sk in strand_keys:
+            r.hset(sk, "gate_token", orig_gate_token)
 
         # 6a: rhizo reply with explicit --complete now succeeds
         res_rep_ok = self.run_cmd(

@@ -2099,61 +2099,126 @@ proc extractTaskId*(subject: string, body: string = ""): string =
   return ""
 
 proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string] =
-  var manifestPath = ""
-  if strandPath.len > 0:
-    manifestPath = findVineManifestPath(strandPath)
+  var vj: JsonNode = nil
+  var resolvedTaskId = taskId
+  let targetPath = if strandPath.len > 0: strandPath elif startDir.len > 0: startDir else: getCurrentDir()
 
-  if manifestPath.len == 0:
-    let localManifest = findVineManifestPath(startDir)
-    if localManifest.len > 0 and fileExists(localManifest):
-      var vjLocal: JsonNode = nil
-      try: vjLocal = parseFile(localManifest) except CatchableError: discard
-      if vjLocal != nil:
-        let mTaskId = vjLocal.getOrDefault("task_id").getStr("")
-        var isRelevant = false
-        if taskId.len > 0:
-          isRelevant = (mTaskId.len == 0 or mTaskId == taskId)
-        elif mTaskId.len == 0:
-          isRelevant = true
-        else:
-          # taskId was not passed explicitly (e.g. in reply or send)
-          # Check whether this agent/context is associated with mTaskId
-          if subject.len > 0 and mTaskId.toLowerAscii() in subject.toLowerAscii():
+  # 1. Pure Redis strand resolution (zero-disk architecture)
+  var client: Redis = nil
+  try:
+    if cfg.redisUrl.len > 0:
+      client = connectRedis(cfg.redisUrl)
+  except CatchableError:
+    discard
+
+  defer:
+    if client != nil:
+      try: client.close() except CatchableError: discard
+
+  if client != nil:
+    if resolvedTaskId.len == 0 and targetPath.len > 0:
+      var pathCandidates: seq[string] = @[targetPath, targetPath.normalizedPath]
+      try: pathCandidates.add(expandFilename(targetPath)) except CatchableError: discard
+      var extraPaths: seq[string] = @[]
+      for p in pathCandidates:
+        if p.startsWith("/private/"):
+          extraPaths.add(p[8..^1])
+        elif p.startsWith("/tmp/") or p.startsWith("/var/"):
+          extraPaths.add("/private" & p)
+      pathCandidates.add(extraPaths)
+
+      let machineId = getMachineId()
+      let hostName = getHostNameStr()
+      var tid = redisNil
+      for pfx in [cfg.prefix, ""]:
+        for byPathKey in [pfx & "vine:strands:by_path", pfx & "strands:by_path", "vine:strands:by_path", "strands:by_path"]:
+          for p in pathCandidates:
+            for m in [machineId & ":" & p, hostName & ":" & p, p]:
+              tid = try: client.hGet(byPathKey, m) except CatchableError: redisNil
+              if tid != redisNil and tid.len > 0:
+                break
+            if tid != redisNil and tid.len > 0:
+              break
+          if tid != redisNil and tid.len > 0:
+            break
+        if tid != redisNil and tid.len > 0:
+          break
+      if tid != redisNil and tid.len > 0:
+        resolvedTaskId = tid
+
+    if resolvedTaskId.len == 0 and worker.len > 0:
+      let wClean = sanitizeIdentifier(worker)
+      for pfx in [cfg.prefix, ""]:
+        let rCur = try: client.get(pfx & "current_task:" & wClean) except CatchableError: redisNil
+        if rCur != redisNil and rCur.len > 0:
+          resolvedTaskId = rCur
+          break
+
+    if resolvedTaskId.len == 0 and subject.len > 0:
+      let tid = extractTaskId(subject)
+      if tid.len > 0:
+        resolvedTaskId = tid
+
+    if resolvedTaskId.len == 0 and targetPath.len > 0:
+      let (bOut, bCode) = execCmdEx("git -C " & quoteShell(targetPath) & " rev-parse --abbrev-ref HEAD")
+      if bCode == 0 and bOut.strip().startsWith("strand/"):
+        resolvedTaskId = bOut.strip()[7..^1]
+
+    if resolvedTaskId.len > 0:
+      var sHash: seq[string] = @[]
+      for pfx in [cfg.prefix, ""]:
+        for sKey in [pfx & "vine:strand:" & resolvedTaskId, pfx & "strand:" & resolvedTaskId, "vine:strand:" & resolvedTaskId, "strand:" & resolvedTaskId]:
+          sHash = try: client.hGetAll(sKey) except CatchableError: @[]
+          if sHash.len > 0: break
+        if sHash.len > 0: break
+      if sHash.len > 0:
+        vj = newJObject()
+        var i = 0
+        while i < sHash.len - 1:
+          vj[sHash[i]] = %sHash[i+1]
+          inc i, 2
+
+  # 2. Backwards compatibility: fallback to on-disk .vine.json
+  if vj == nil:
+    var manifestPath = ""
+    if strandPath.len > 0:
+      manifestPath = findVineManifestPath(strandPath)
+
+    if manifestPath.len == 0:
+      let localManifest = findVineManifestPath(startDir)
+      if localManifest.len > 0 and fileExists(localManifest):
+        var vjLocal: JsonNode = nil
+        try: vjLocal = parseFile(localManifest) except CatchableError: discard
+        if vjLocal != nil:
+          let mTaskId = vjLocal.getOrDefault("task_id").getStr("")
+          var isRelevant = false
+          if taskId.len > 0:
+            isRelevant = (mTaskId.len == 0 or mTaskId == taskId)
+          elif mTaskId.len == 0:
             isRelevant = true
-          elif worker.len > 0:
-            let wClean = sanitizeIdentifier(worker)
-            let vjOwner = vjLocal.getOrDefault("owner").getStr(vjLocal.getOrDefault("assignee").getStr(vjLocal.getOrDefault("worker").getStr("")))
-            if vjOwner.len > 0 and sanitizeIdentifier(vjOwner) == wClean:
-              isRelevant = true
-            else:
-              # Check Redis for worker's current task or task owner
-              if cfg.redisUrl.len > 0:
-                try:
-                  var client = connectRedis(cfg.redisUrl)
-                  defer: (try: client.close() except CatchableError: discard)
-                  let rCur = client.get(cfg.prefix & "current_task:" & wClean)
-                  if rCur != redisNil and rCur == mTaskId:
-                    isRelevant = true
-                  if not isRelevant:
-                    let rOwner = client.hGet(cfg.prefix & "task:" & mTaskId, "owner")
-                    if rOwner != redisNil and sanitizeIdentifier(rOwner) == wClean:
-                      isRelevant = true
-                except CatchableError: discard
           else:
-            isRelevant = true
+            if subject.len > 0 and mTaskId.toLowerAscii() in subject.toLowerAscii():
+              isRelevant = true
+            elif worker.len > 0:
+              let wClean = sanitizeIdentifier(worker)
+              let vjOwner = vjLocal.getOrDefault("owner").getStr(vjLocal.getOrDefault("assignee").getStr(vjLocal.getOrDefault("worker").getStr("")))
+              if vjOwner.len > 0 and sanitizeIdentifier(vjOwner) == wClean:
+                isRelevant = true
+            else:
+              isRelevant = true
 
-        if isRelevant:
-          manifestPath = localManifest
+          if isRelevant:
+            manifestPath = localManifest
+
+    if manifestPath.len > 0 and fileExists(manifestPath):
+      try:
+        vj = parseFile(manifestPath)
+      except CatchableError as e:
+        return (false, "", "[VINE GATE ERROR] Failed to parse Vine strand manifest at " & manifestPath & ": " & e.msg)
 
   # Not in a vine strand -> no gate check required
-  if manifestPath.len == 0 or not fileExists(manifestPath):
+  if vj == nil:
     return (true, explicitGateToken, "")
-
-  var vj: JsonNode = nil
-  try:
-    vj = parseFile(manifestPath)
-  except CatchableError as e:
-    return (false, "", "[VINE GATE ERROR] Failed to parse Vine strand manifest at " & manifestPath & ": " & e.msg)
 
   let status = vj.getOrDefault("status").getStr("").toUpperAscii()
   let lifecycle = vj.getOrDefault("lifecycle_state").getStr("").toUpperAscii()
@@ -2513,7 +2578,7 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
   if rearmListen and (sLower.contains("claim") or sLower.startsWith("ack") or sLower.contains("task claim")):
     stderr.writeLine("[RHIZO WARNING] You passed --listen on a CLAIM/ACK message. In async coding harnesses (Antigravity), arming a listener during an initial acknowledgment causes premature turn yields before implementation! Pass --listen ONLY on your final completion reply.")
   if (complete or idle) and not skipGate:
-    let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
+    let (passed, _, err) = checkVineGateInterlock(taskId = taskId, worker = fromAgent, cfg = cfg, subject = subject)
     if not passed:
       stderr.writeLine(err)
       quit(1)
@@ -7321,7 +7386,7 @@ proc main() =
       discard doReply(cfg, toAgent, fromAgent, subject, body, tags, replyTo, msgId, customTs, rearmListen, listenTimeout, urgency, format, listenAgent, skipGate, idle = setIdle, complete = isComplete, taskId = explicitTaskId)
     else:
       if subcmd == "send" and (isComplete or msgType == "complete") and not skipGate:
-        let (passed, _, err) = checkVineGateInterlock(worker = fromAgent, cfg = cfg, subject = subject)
+        let (passed, _, err) = checkVineGateInterlock(taskId = explicitTaskId, worker = fromAgent, cfg = cfg, subject = subject)
         if not passed:
           stderr.writeLine(err)
           quit(1)
