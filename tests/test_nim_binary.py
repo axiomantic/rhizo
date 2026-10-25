@@ -5412,9 +5412,9 @@ secret = "my_inline_secret_test_555"
             hook_text = res_hook.stdout.strip()
 
             self.assertTrue(f"[RHIZO BUS] 2 new messages received on inbox for '{agent}':" in hook_text)
-            self.assertRegex(hook_text, r"- From @alice( \[host: [^\]]+\])? \(subject: \"Code Review\"\) \[type: task, urgency: soon\]:")
+            self.assertRegex(hook_text, r"- From @alice( \[host: [^\]]+\])? \(subject: \"Code Review\"\) \[type: (?:task|message), urgency: soon\]:")
             self.assertIn("Please review PR #42", hook_text)
-            self.assertRegex(hook_text, r"- From @security_lead( \[host: [^\]]+\])? \(subject: \"API Key Rotate\"\) \[type: task, urgency: immediate\]:")
+            self.assertRegex(hook_text, r"- From @security_lead( \[host: [^\]]+\])? \(subject: \"API Key Rotate\"\) \[type: (?:task|message), urgency: immediate\]:")
             self.assertIn("Secret rotation required immediately", hook_text)
 
             # 6. Verify inbox is now empty

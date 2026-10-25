@@ -104,6 +104,9 @@ else
     local tag_keys = {}
     for tag in string.gmatch(target_tags_csv, "([^,]+)") do
         local trimmed = string.lower(string.match(tag, "^%s*(.-)%s*$"))
+        if string.sub(trimmed, 1, 1) == "@" then
+            trimmed = string.sub(trimmed, 2)
+        end
         if trimmed ~= "" then
             table.insert(tag_keys, prefix .. 'tag:' .. trimmed)
         end

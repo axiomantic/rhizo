@@ -10,8 +10,54 @@ when defined(posix):
   import posix
 import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_notify, session_crypto, std/[net, asyncdispatch, httpclient]
 
-proc isPidAlive*(pid: int): bool =
+proc sanitizeIdentifier*(raw: string): string
+
+when defined(macosx) or defined(macos) or defined(bsd):
+  proc sysctlbyname(name: cstring, oldp: pointer, oldlenp: ptr csize_t, newp: pointer, newlen: csize_t): cint {.importc: "sysctlbyname", header: "<sys/sysctl.h>".}
+
+proc getHostNameStr*(): string =
+  try:
+    let h = getHostName()
+    if h.len > 0: return h
+  except Exception:
+    discard
+  return getEnv("RHIZO_HOSTNAME", getEnv("HOSTNAME", getEnv("COMPUTERNAME", "localhost")))
+
+proc getMachineId*(): string =
+  let envMid = getEnv("RHIZO_MACHINE_ID", "").strip()
+  if envMid.len > 0: return envMid
+
+  # macOS / BSD kernel UUID via C sysctlbyname (zero-subprocess, FFI native)
+  when defined(macosx) or defined(macos) or defined(bsd):
+    var buf = newString(64)
+    var size: csize_t = 64
+    if sysctlbyname("kern.uuid", addr buf[0], addr size, nil, 0) == 0:
+      if size > 1:
+        let uid = buf[0 ..< int(size - 1)].strip()
+        if uid.len > 0: return uid
+
+  # Linux machine-id
+  for p in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
+    if fileExists(p):
+      try:
+        let id = readFile(p).strip()
+        if id.len > 0: return id
+      except CatchableError:
+        discard
+
+  return getHostNameStr()
+
+proc isPidAlive*(pid: int, remoteMachineId: string = "", remoteHost: string = ""): bool =
   if pid <= 0: return false
+  let myMid = getMachineId()
+  let myHost = getHostNameStr()
+  # Cross-Machine Safety: If agent machine_id or host differs from local,
+  # do NOT invoke POSIX kill(pid, 0). Rely exclusively on Redis heartbeat lease TTL.
+  if remoteMachineId.len > 0 and remoteMachineId != myMid:
+    return true
+  if remoteHost.len > 0 and remoteHost != myHost:
+    return true
+
   when defined(posix):
     if kill(Pid(pid), 0) == 0:
       return true
@@ -22,13 +68,23 @@ proc isPidAlive*(pid: int): bool =
   else:
     return true
 
-proc getHostNameStr*(): string =
-  try:
-    let h = getHostName()
-    if h.len > 0: return h
-  except Exception:
-    discard
-  return getEnv("RHIZO_HOSTNAME", getEnv("HOSTNAME", getEnv("COMPUTERNAME", "localhost")))
+proc isAgentProcessAlive*(cfg: RhizoConfig, agentName: string, pid: int, remoteMachineId: string = "", remoteHost: string = ""): bool =
+  if pid <= 0: return false
+  var mid = remoteMachineId
+  var host = remoteHost
+  if (mid.len == 0 or host.len == 0) and cfg.redisUrl.len > 0:
+    try:
+      var client = openRedisClient(cfg.redisUrl)
+      defer: (try: client.close() except CatchableError: discard)
+      let norm = sanitizeIdentifier(agentName)
+      if mid.len == 0:
+        let rMid = client.hGet(cfg.prefix & "agent:" & norm, "machine_id")
+        if rMid != redisNil and rMid.len > 0: mid = rMid
+      if host.len == 0:
+        let rHost = client.hGet(cfg.prefix & "agent:" & norm, "host")
+        if rHost != redisNil and rHost.len > 0: host = rHost
+    except CatchableError: discard
+  return isPidAlive(pid, mid, host)
 
 # OpenSSL C-bindings for native cryptographic operations
 type
@@ -653,96 +709,36 @@ proc runLuaScript*(redisUrl, scriptText, scriptSha: string, evalArgs: openArray[
       stderr.writeLine("Redis error: " & e.msg)
     quit(1)
 
-# Global Session-to-Agent Mapping
+# Global Session-to-Agent Mapping (Redis-Native, Zero-Disk Coordination)
 proc sessionsFilePath*(): string =
-  let rhizoDir = getHomeDir() / ".config" / "rhizo"
-  let rhizoFile = rhizoDir / "sessions.json"
-  if fileExists(rhizoFile) or dirExists(rhizoDir):
-    return rhizoFile
-  let locFile = getHomeDir() / ".config" / "rhizo" / "sessions.json"
-  if fileExists(locFile):
-    return locFile
-  return rhizoFile
+  return getHomeDir() / ".config" / "rhizo" / "sessions.json"
 
 proc loadLocalSessionMap*(): JsonNode =
-  let p = sessionsFilePath()
-  if fileExists(p):
-    try:
-      let content = readFile(p)
-      let parsed = parseJson(content)
-      if parsed.kind == JObject:
-        return parsed
-    except CatchableError:
-      discard
+  # Deprecated & Purged: sessions.json reads eliminated in favor of Redis hash rhizo:sessions.
   return newJObject()
 
 proc saveLocalSessionMapping*(sessionKey, agentName: string, project: string = "", cwd: string = "") =
-  let p = sessionsFilePath()
-  try:
-    createDir(p.splitPath.head)
-    var m = loadLocalSessionMap()
-    var entry = newJObject()
-    entry["agent"] = %agentName.toLowerAscii
-    if project.len > 0: entry["project"] = %project
-    if cwd.len > 0: entry["cwd"] = %cwd
-    entry["updated_at"] = %now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
-    m[sessionKey] = entry
-    writeFile(p, pretty(m) & "\n")
-    secureFilePermissions(p)
-  except OSError:
-    discard
+  # Deprecated & Purged: sessions.json writes eliminated for Zero-Disk coordination invariant.
+  # State is persisted authoritatively in Redis via setRedisSessionMapping.
+  discard
 
 proc saveRepoLocalSessionMapping*(agentName, project: string, sessionId: string = "") =
-  # Deprecated and intentionally disabled. File-persisted identity in repo roots (.rhizo/session.json)
-  # is strictly prohibited to maintain zero-dirty-commits and multi-agent workspace hygiene.
-  try:
-    let wsDir = findWorkspaceDir(getCurrentDir())
-    let baseDir = if wsDir.len > 0: wsDir else: getCurrentDir()
-    let p = baseDir / ".rhizo" / "session.json"
-    if fileExists(p):
-      removeFile(p)
-  except OSError:
-    discard
+  # Deprecated & Permanently Purged: .rhizo/session.json in repo roots strictly prohibited.
+  discard
 
 proc removeLocalSessionMapping*(sessionKey: string) =
+  # Clean up legacy sessions.json file if present on disk
   let p = sessionsFilePath()
   if fileExists(p):
-    try:
-      var m = loadLocalSessionMap()
-      if m.hasKey(sessionKey):
-        m.delete(sessionKey)
-        writeFile(p, pretty(m) & "\n")
-        secureFilePermissions(p)
-    except OSError:
-      discard
+    try: removeFile(p) except OSError: discard
 
 proc getLocalSessionAgent*(sessionKey: string): string =
-  let m = loadLocalSessionMap()
-  if m.hasKey(sessionKey):
-    let node = m[sessionKey]
-    if node.kind == JObject and node.hasKey("agent"):
-      return node["agent"].getStr().toLowerAscii
-    elif node.kind == JString:
-      return node.getStr().toLowerAscii
   return ""
 
 proc getLocalSessionKeyForAgent*(agentName: string): string =
-  let normAgent = agentName.toLowerAscii
-  let m = loadLocalSessionMap()
-  for key, val in m.pairs:
-    if val.kind == JObject and val.hasKey("agent"):
-      if val["agent"].getStr().toLowerAscii == normAgent:
-        return key
-    elif val.kind == JString and val.getStr().toLowerAscii == normAgent:
-      return key
   return ""
 
 proc getLocalSessionProject*(sessionKey: string): string =
-  let m = loadLocalSessionMap()
-  if m.hasKey(sessionKey):
-    let node = m[sessionKey]
-    if node.kind == JObject and node.hasKey("project"):
-      return node["project"].getStr().toLowerAscii
   return ""
 
 # Redis Session Mapping
@@ -765,6 +761,27 @@ proc getRedisSessionMapping*(cfg: RhizoConfig, sessionKey: string): string =
           return parsed.getStr().toLowerAscii
       except CatchableError:
         return val.toLowerAscii
+  except CatchableError:
+    discard
+  return ""
+
+proc getRedisSessionProject*(cfg: RhizoConfig, sessionKey: string): string =
+  var client: Redis
+  try:
+    client = openRedisClient(cfg.redisUrl)
+  except CatchableError:
+    return ""
+  defer:
+    try: client.close() except CatchableError: discard
+  try:
+    let val = client.hGet(cfg.prefix & "sessions", sessionKey)
+    if val != redisNil and val.len > 0:
+      try:
+        let parsed = parseJson(val)
+        if parsed.kind == JObject and parsed.hasKey("project"):
+          return parsed["project"].getStr().toLowerAscii
+      except CatchableError:
+        discard
   except CatchableError:
     discard
   return ""
@@ -802,9 +819,7 @@ proc getRedisSessionKeyForAgent*(cfg: RhizoConfig, agentName: string): string =
   return ""
 
 proc getAgentSessionKey*(cfg: RhizoConfig, agentName: string): string =
-  let redisKey = getRedisSessionKeyForAgent(cfg, agentName)
-  if redisKey.len > 0: return redisKey
-  return getLocalSessionKeyForAgent(agentName)
+  return getRedisSessionKeyForAgent(cfg, agentName)
 
 type
   ResolvedSession* = object
@@ -823,15 +838,13 @@ proc resolveAgentSession*(cfg: RhizoConfig, identifier: string): ResolvedSession
 
   if raw.contains(":"):
     key = raw
-    agent = getLocalSessionAgent(key)
-    if agent.len == 0:
-      agent = getRedisSessionMapping(cfg, key)
-    project = getLocalSessionProject(key)
+    agent = getRedisSessionMapping(cfg, key)
+    project = getRedisSessionProject(cfg, key)
   else:
     agent = raw.toLowerAscii
     key = getAgentSessionKey(cfg, agent)
     if key.len > 0:
-      project = getLocalSessionProject(key)
+      project = getRedisSessionProject(cfg, key)
 
   if key.len > 0 and (project.len == 0 or agent.len == 0):
     try:
@@ -988,9 +1001,6 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
                elif cfg.provenance.hasKey("session_id") and cfg.provenance["session_id"].source == srcCli: cfg.sessionId
                else: ""
   if cliSid.len > 0:
-    let localAgent = getLocalSessionAgent(cliSid)
-    if localAgent.len > 0:
-      return ensureProjectScopedName(cfg, localAgent)
     try:
       let redisAgent = getRedisSessionMapping(cfg, cliSid)
       if redisAgent.len > 0:
@@ -1008,9 +1018,6 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
   # 4. Ambient Session ID resolution (RHIZO_SESSION_ID or config session_id)
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
-    let localAgent = getLocalSessionAgent(sid)
-    if localAgent.len > 0:
-      return ensureProjectScopedName(cfg, localAgent)
     try:
       let redisAgent = getRedisSessionMapping(cfg, sid)
       if redisAgent.len > 0:
@@ -1043,9 +1050,11 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
     let node = parseJson(val)
     let pid = node.getOrDefault("pid").getInt(0)
     let host = node.getOrDefault("host").getStr("")
+    let mid = node.getOrDefault("machine_id").getStr("")
     let currentHost = getHostNameStr()
-    if host == currentHost and pid > 0:
-      if not isPidAlive(pid):
+    let currentMid = getMachineId()
+    if (mid == currentMid or (mid.len == 0 and host == currentHost)) and pid > 0:
+      if not isPidAlive(pid, mid, host):
         # Stale lock: process is no longer alive on this machine
         discard client.del(@[cfg.prefix & "listener:" & normName])
         return (false, 0, "")
@@ -1828,6 +1837,11 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     setRedisSessionMapping(cfg, sid, name, cfg.project, getCurrentDir())
 
   discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
+  try:
+    discard client.hSet(cfg.prefix & "agent:" & name, "machine_id", getMachineId())
+    discard client.hSet(cfg.prefix & "agent:" & name, "host", getHostNameStr())
+  except CatchableError:
+    discard
   var sessionPubHex = ""
   try:
     if isCryptoAvailable():
@@ -1968,16 +1982,8 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
             if vjOwner.len > 0 and sanitizeIdentifier(vjOwner) == wClean:
               isRelevant = true
             else:
-              # Check local current_task file
-              let curTaskFile = currentTaskFilePath(wClean)
-              if fileExists(curTaskFile):
-                try:
-                  let curJson = parseFile(curTaskFile)
-                  if curJson.getOrDefault("id").getStr("") == mTaskId:
-                    isRelevant = true
-                except CatchableError: discard
               # Check Redis for worker's current task or task owner
-              if not isRelevant and cfg.redisUrl.len > 0:
+              if cfg.redisUrl.len > 0:
                 try:
                   var client = connectRedis(cfg.redisUrl)
                   defer: (try: client.close() except CatchableError: discard)
@@ -2146,7 +2152,31 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
   node["urgency"] = %normUrgency
   if complete or msgType == "complete":
     node["complete"] = %true
-  var effectiveTaskId = if taskId.len > 0: sanitizeIdentifier(taskId) else: extractTaskId(subject, body)
+
+  # Cross-Project Tenancy Gate: For direct inbox task directives (msgType in ["task", "work"]),
+  # reject assignments where target.project != sender.project unless explicitly targeting cross-project queues or passing --cross-project
+  if msgType in ["task", "work"] and not isBroadcast and resolvedTo.len > 0 and resolvedTo != "*" and not resolvedTo.startsWith("queue:"):
+    if cfg.crossProject.len == 0 and cfg.redisUrl.len > 0:
+      try:
+        var client = connectRedis(cfg.redisUrl)
+        defer: (try: client.close() except CatchableError: discard)
+        let targetProj = client.hGet(cfg.prefix & "agent:" & resolvedTo, "project")
+        let senderProj = if cfg.project.len > 0: cfg.project.strip().toLowerAscii
+                         else:
+                           let p = client.hGet(cfg.prefix & "agent:" & normFrom, "project")
+                           if p != redisNil: p.toLowerAscii else: ""
+        if targetProj != redisNil and targetProj.len > 0 and senderProj.len > 0:
+          if targetProj.toLowerAscii != senderProj:
+            stderr.writeLine("Error: Cross-project task assignment denied: target agent '" & resolvedTo & "' belongs to project '" & targetProj & "', but sender belongs to '" & senderProj & "'. Use cross-project queues or --cross-project to route.")
+            quit(1)
+      except CatchableError as e:
+        if "Cross-project" in e.msg:
+          stderr.writeLine(e.msg)
+          quit(1)
+
+  var effectiveTaskId = if taskId.len > 0: sanitizeIdentifier(taskId)
+                        elif msgType in ["task", "work"]: extractTaskId(subject, body)
+                        else: ""
   if effectiveTaskId.len > 0:
     node["task_id"] = %effectiveTaskId
     if msgType in ["task", "work"] and not isBroadcast and resolvedTo.len > 0 and resolvedTo != "*":
@@ -2404,9 +2434,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   # Register listener ownership in Redis
   let myPid = getCurrentProcessId()
   let myHost = getHostNameStr()
+  let myMid = getMachineId()
   var listenerNode = newJObject()
   listenerNode["pid"] = %myPid
   listenerNode["host"] = %myHost
+  listenerNode["machine_id"] = %myMid
   listenerNode["started"] = %(getTime().toUnix())
   let listenerJson = $listenerNode
   let listenerKey = cfg.prefix & "listener:" & name
@@ -2620,7 +2652,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         sendDesktopNotification(parsed)
 
       # Record in Unified Work Item State Machine as DELIVERED if message is an actionable task
-      let rawMsgType = parsed.getOrDefault("type").getStr("task").toLowerAscii()
+      let rawMsgType = parsed.getOrDefault("type").getStr("message").toLowerAscii()
       let toField = parsed.getOrDefault("to").getStr("").strip().toLowerAscii()
       let isBroadcastMsg = (toField == "*" or toField == "all" or toField == "" or toField.startsWith("@"))
       let isCompleteFlag = parsed.getOrDefault("complete").getBool(false) or (rawMsgType == "complete")
@@ -2635,15 +2667,6 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
         try:
           discard doTask(cfg, "deliver", [effectiveTaskId, name, "900", subject, body])
-        except CatchableError:
-          discard
-
-        # Mirror active delivery to local disk stamp for sub-millisecond hook inspection
-        try:
-          createDir(getHomeDir() / ".config" / "rhizo")
-          var taskStamp = parsed
-          taskStamp["id"] = %effectiveTaskId
-          writeFile(currentTaskFilePath(name), $taskStamp)
         except CatchableError:
           discard
 
@@ -2666,14 +2689,21 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
         let isReassign = (rawMsgType == "reassign" or subject.toUpperAscii() == "SWARM_REASSIGN")
         let isUpgrade = (fromAgent == "system:upgrade" or subject.startsWith("PROTOCOL_UPGRADE"))
+        let isTaskType = isTask
+        let isBroadcastType = isBroadcastMsg or (rawMsgType == "broadcast")
+
         stderr.writeLine("")
         stderr.writeLine("================================================================================")
         if isReassign:
           stderr.writeLine("🔄 [RHIZO SWARM REASSIGNMENT DIRECTIVE DELIVERED] 🔄")
         elif isUpgrade:
           stderr.writeLine("⚡ [RHIZO PROTOCOL UPGRADE DIRECTIVE DELIVERED] ⚡")
-        else:
+        elif isTaskType:
           stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
+        elif isBroadcastType:
+          stderr.writeLine("📢 [RHIZO BROADCAST RECEIVED: CLUSTER AWARENESS] 📢")
+        else:
+          stderr.writeLine("💬 [RHIZO MESSAGE RECEIVED: CONVERSATIONAL COORDINATION] 💬")
         stderr.writeLine("[RHIZO LIFECYCLE NOTICE]")
         stderr.writeLine("Listener Identity: @" & name & " (this is YOU)")
         stderr.writeLine("Delivered Message: '" & id & "' from @" & fromAgent)
@@ -2693,6 +2723,21 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("2. If your session has loaded subsidiary skills, re-read them via view_file; otherwise leave lazy-loaded.")
           stderr.writeLine("3. Inspect new CLI flags: rhizo --help")
           stderr.writeLine("4. Re-arm listener: " & exactCmd)
+        elif isBroadcastType:
+          stderr.writeLine("AWARENESS NOTICE:")
+          stderr.writeLine("This is a cluster broadcast for synchronization and shared awareness.")
+          stderr.writeLine("No autonomous task execution is mandated unless explicitly addressed to your role.")
+          stderr.writeLine("Re-arm your listener to continue waiting for directives:")
+          stderr.writeLine("Exact command: " & exactCmd)
+        elif not isTaskType:
+          stderr.writeLine("CONVERSATIONAL COORDINATION GUIDANCE:")
+          stderr.writeLine("1. Review the conversational query / message payload above.")
+          stderr.writeLine("2. Respond to @" & fromAgent & " as appropriate:")
+          stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\"")
+          stderr.writeLine("3. Re-arm your background listener before concluding turn:")
+          stderr.writeLine("   Exact command: " & exactCmd)
+          stderr.writeLine("NOTICE: This is an informational peer message, not an autonomous task assignment.")
+          stderr.writeLine("Do NOT run 'rhizo task claim'.")
         else:
           stderr.writeLine("AUTONOMOUS WORKER MANDATE (DO NOT REMAIN PASSIVE / DO NOT WAIT FOR OPERATOR):")
           stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
@@ -3948,9 +3993,11 @@ proc doSweep*(cfg: RhizoConfig, dryRun: bool = false, rawOutput: bool = false, t
           try:
             let lockData = parseJson(dataStr)
             let host = lockData.getOrDefault("host").getStr()
+            let mid = lockData.getOrDefault("machine_id").getStr()
             let pid = lockData.getOrDefault("pid").getInt()
-            if host == currentHost:
-              if pid > 0 and not isPidAlive(pid):
+            let currentMid = getMachineId()
+            if (mid == currentMid or (mid.len == 0 and host == currentHost)):
+              if pid > 0 and not isPidAlive(pid, mid, host):
                 prunedListeners.add(agent)
                 if not dryRun:
                   keysToDelete.add(lKey)
@@ -3958,6 +4005,7 @@ proc doSweep*(cfg: RhizoConfig, dryRun: bool = false, rawOutput: bool = false, t
               foreignListeners.add(%*{
                 "agent": agent,
                 "host": host,
+                "machine_id": mid,
                 "pid": pid,
                 "status": "foreign_active"
               })
@@ -4796,10 +4844,8 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
       hasListener = true
       listenerPid = lNode.getOrDefault("pid").getInt(0)
       listenerHost = lNode.getOrDefault("host").getStr("")
-      if listenerHost == getHostNameStr() and listenerPid > 0:
-        pidAlive = isPidAlive(listenerPid)
-      else:
-        pidAlive = true
+      let listenerMid = lNode.getOrDefault("machine_id").getStr("")
+      pidAlive = isAgentProcessAlive(cfg, probeTarget, listenerPid, listenerMid, listenerHost)
     except CatchableError:
       discard
 
@@ -5178,24 +5224,35 @@ end run
       return "⚠️ [POKE] Window not found for @" & scopedTarget & "\n" &
              "  Ensure worker's window or tab title contains the agent codename (e.g. via 'rhizo open " & scopedTarget & "')."
 
+proc resolveActiveAgentFromRedis*(cfg: RhizoConfig): string =
+  if cfg.redisUrl.len == 0: return ""
+  try:
+    var client = openRedisClient(cfg.redisUrl)
+    defer: (try: client.close() except CatchableError: discard)
+    let sess = client.hGetAll(cfg.prefix & "sessions")
+    var idx = 0
+    while idx < sess.len:
+      let val = if idx + 1 < sess.len: sess[idx+1] else: ""
+      if val.len > 0:
+        try:
+          let sNode = parseJson(val)
+          if sNode.kind == JObject and sNode.getOrDefault("status").getStr("") == "active":
+            let a = sanitizeIdentifier(sNode.getOrDefault("agent").getStr(""))
+            if a.len > 0: return a
+          elif sNode.kind == JString and sNode.getStr("").len > 0:
+            let a = sanitizeIdentifier(sNode.getStr(""))
+            if a.len > 0: return a
+        except CatchableError: discard
+      idx += 2
+  except CatchableError: discard
+  return ""
+
 proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput: bool = false, expectListening: bool = false, streakOverride: int = -1): tuple[output: string, exitCode: int] =
   var normName = sanitizeIdentifier(agentNameParam)
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
   if normName.len == 0:
-    let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
-    if fileExists(sessPath):
-      try:
-        let sNode = parseFile(sessPath)
-        if sNode.kind == JObject:
-          for k, v in sNode:
-            if v.kind == JObject and v.getOrDefault("status").getStr("") == "active":
-              normName = sanitizeIdentifier(v.getOrDefault("agent").getStr(""))
-              if normName.len > 0: break
-            elif v.kind == JString and v.getStr("").len > 0:
-              normName = sanitizeIdentifier(v.getStr(""))
-              break
-      except CatchableError: discard
+    normName = sanitizeIdentifier(resolveActiveAgentFromRedis(cfg))
 
   if normName.len == 0:
     let errStr = "Error: Missing required agent name for watchdog check. Usage: rhizo watchdog [check] [--agent <name>] [--json]"
@@ -5230,10 +5287,8 @@ proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
       hasListener = true
       listenerPid = lNode.getOrDefault("pid").getInt(0)
       listenerHost = lNode.getOrDefault("host").getStr("")
-      if listenerHost == getHostNameStr() and listenerPid > 0:
-        pidAlive = isPidAlive(listenerPid)
-      else:
-        pidAlive = true
+      let listenerMid = lNode.getOrDefault("machine_id").getStr("")
+      pidAlive = isAgentProcessAlive(cfg, probeTarget, listenerPid, listenerMid, listenerHost)
     except CatchableError:
       discard
 
@@ -5259,20 +5314,23 @@ proc doWatchdogCheck*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
     except CatchableError:
       discard
 
-  # 3. Check sessions.json for active tasks
-  let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
-  if fileExists(sessPath):
-    try:
-      let sNode = parseFile(sessPath)
-      if sNode.kind == JObject:
-        for k, v in sNode:
-          if v.kind == JObject:
-            let st = v.getOrDefault("status").getStr("")
-            let tid = v.getOrDefault("task_id").getStr("")
+  # 3. Check active sessions in Redis for active tasks (Zero-Disk)
+  try:
+    let sess = client.hGetAll(cfg.prefix & "sessions")
+    var idx = 0
+    while idx < sess.len:
+      let val = if idx + 1 < sess.len: sess[idx+1] else: ""
+      if val.len > 0:
+        try:
+          let sNode = parseJson(val)
+          if sNode.kind == JObject:
+            let st = sNode.getOrDefault("status").getStr("")
+            let tid = sNode.getOrDefault("task_id").getStr("")
             if st != "closed" and tid.len > 0:
               inc tasksInFlight
-    except CatchableError:
-      discard
+        except CatchableError: discard
+      idx += 2
+  except CatchableError: discard
 
   var status = "OK"
   var substatus = "LISTENING"
@@ -5419,19 +5477,7 @@ proc doWatchdogReset*(cfg: RhizoConfig, agentNameParam: string = "", jsonOutput:
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
   if normName.len == 0:
-    let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
-    if fileExists(sessPath):
-      try:
-        let sNode = parseFile(sessPath)
-        if sNode.kind == JObject:
-          for k, v in sNode:
-            if v.kind == JObject and v.getOrDefault("status").getStr("") == "active":
-              normName = sanitizeIdentifier(v.getOrDefault("agent").getStr(""))
-              if normName.len > 0: break
-            elif v.kind == JString and v.getStr("").len > 0:
-              normName = sanitizeIdentifier(v.getStr(""))
-              break
-      except CatchableError: discard
+    normName = sanitizeIdentifier(resolveActiveAgentFromRedis(cfg))
 
   if normName.len == 0:
     let errStr = "Error: Missing required agent name for watchdog reset. Usage: rhizo watchdog reset [--agent <name>] [--json]"
@@ -5478,19 +5524,7 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
   if normName.len == 0:
-    let sessPath = getHomeDir() / ".config" / "rhizo" / "sessions.json"
-    if fileExists(sessPath):
-      try:
-        let sNode = parseFile(sessPath)
-        if sNode.kind == JObject:
-          for k, v in sNode:
-            if v.kind == JObject and v.getOrDefault("status").getStr("") == "active":
-              normName = sanitizeIdentifier(v.getOrDefault("agent").getStr(""))
-              if normName.len > 0: break
-            elif v.kind == JString and v.getStr("").len > 0:
-              normName = sanitizeIdentifier(v.getStr(""))
-              break
-      except CatchableError: discard
+    normName = sanitizeIdentifier(resolveActiveAgentFromRedis(cfg))
 
   # Fail-open if no agent can be resolved
   if normName.len == 0:
@@ -5617,11 +5651,8 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
         let lNode = parseJson(listenerVal)
         let pid = lNode.getOrDefault("pid").getInt(0)
         let host = lNode.getOrDefault("host").getStr("")
-        let myHost = getHostName()
-        if host == myHost and pid > 0:
-          listenerActive = isPidAlive(pid)
-        else:
-          listenerActive = true
+        let mid = lNode.getOrDefault("machine_id").getStr("")
+        listenerActive = isAgentProcessAlive(cfg, probeTarget, pid, mid, host)
       except CatchableError:
         listenerActive = false
 
@@ -6946,7 +6977,7 @@ proc main() =
     let isBroadcast = (subcmd == "broadcast")
     let isReply = (subcmd == "reply")
     var toAgent = ""
-    var msgType = if isReply: "reply" elif isBroadcast: "broadcast" else: "task"
+    var msgType = if isReply: "reply" elif isBroadcast: "broadcast" else: "message"
     var fromAgent = ""
     var subject = ""
     var body = ""
@@ -6986,10 +7017,22 @@ proc main() =
         let stVal = args[i+1].toLowerAscii
         if stVal in ["complete", "completed", "done"]: isComplete = true
         inc i
-      elif a.startsWith("--task-id="): explicitTaskId = a[10..^1]
-      elif a == "--task-id" and i + 1 < args.len: explicitTaskId = args[i+1]; inc i
-      elif a.startsWith("--task="): explicitTaskId = a[7..^1]
-      elif a == "--task" and i + 1 < args.len: explicitTaskId = args[i+1]; inc i
+      elif a.startsWith("--task-id="):
+        explicitTaskId = a[10..^1]
+        msgType = "task"
+      elif a == "--task-id" and i + 1 < args.len:
+        explicitTaskId = args[i+1]
+        msgType = "task"
+        inc i
+      elif a.startsWith("--task="):
+        let val = a[7..^1]
+        if val in ["", "1", "true"]: msgType = "task"
+        else: explicitTaskId = val; msgType = "task"
+      elif a == "--task":
+        if i + 1 < args.len and not args[i+1].startsWith("-"):
+          explicitTaskId = args[i+1]
+          inc i
+        msgType = "task"
       elif a in ["--immediate", "-i"]: urgency = "immediate"
       elif a == "--soon": urgency = "soon"
       elif a == "--json": format = "json"
@@ -7289,6 +7332,8 @@ proc main() =
         if targetProject.len == 0:
           targetProject = a
       inc i
+    echo doReset(cfg, targetProject, forceAll, isJson)
+
   of "roadmap":
     var passArgs: seq[string] = @[]
     for a in rawArgs[1..^1]: passArgs.add(quoteShell(a))
@@ -7456,16 +7501,16 @@ proc main() =
         stderr.writeLine("Error: 'rhizo session remove' requires <session_key>")
         quit(1)
       let key = args[2]
-      let agent = getLocalSessionAgent(key)
+      let agent = getRedisSessionMapping(cfg, key)
       removeLocalSessionMapping(key)
       removeRedisSessionMapping(cfg, key, agent)
       echo "OK [session] removed " & key
 
     of "list", "ls":
       let asJson = ("--json" in args) or ("-j" in args)
-      var sessions = loadLocalSessionMap()
+      var sessions = newJObject()
 
-      # Merge with Redis sessions if Redis is reachable
+      # Load sessions directly from Redis
       try:
         var client = openRedisClient(cfg.redisUrl)
         defer: (try: client.close() except CatchableError: discard)
@@ -7474,7 +7519,7 @@ proc main() =
         while idx < redisSessions.len:
           let k = redisSessions[idx]
           let v = if idx + 1 < redisSessions.len: redisSessions[idx+1] else: ""
-          if not sessions.hasKey(k) and v.len > 0:
+          if v.len > 0:
             try:
               sessions[k] = parseJson(v)
             except CatchableError:
@@ -8864,18 +8909,6 @@ proc main() =
               discard client.hSet(cfg.prefix & "task:" & taskId.toLowerAscii(), "claim_worker", worker)
             except CatchableError:
               discard
-
-      # Mirror claimed task locally
-      try:
-        createDir(getHomeDir() / ".config" / "rhizo")
-        var tObj = newJObject()
-        tObj["id"] = %taskId
-        tObj["owner"] = %worker
-        tObj["state"] = %"IN_PROGRESS"
-        tObj["lease_sec"] = %leaseSec
-        tObj["strand_path"] = %strandPath
-        writeFile(currentTaskFilePath(worker), $tObj)
-      except CatchableError: discard
 
       doAuditLog(cfg, worker, "task.claim", taskId & " (lease " & $leaseSec & "s)")
       if strandPath.len > 0:

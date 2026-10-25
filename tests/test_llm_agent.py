@@ -110,7 +110,7 @@ class TestRhizoLLMAgent(unittest.TestCase):
             ),
             (
                 {"role": "assistant", "content": ""},
-                [{"id": "call_2", "function": {"name": "execute_bash", "arguments": {"command": "rhizo send --to bob --subject \"Math Task\" --body \"Please compute 25 * 4\""}}}]
+                [{"id": "call_2", "function": {"name": "execute_bash", "arguments": {"command": "rhizo send --to bob --task --subject \"Math Task\" --body \"Please compute 25 * 4\""}}}]
             ),
             (
                 {"role": "assistant", "content": "I have registered alice and sent the math task to bob."},

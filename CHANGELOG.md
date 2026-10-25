@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Message vs. Task Type Decoupling & Listener Banner Bifurcation (`src/rhizo.nim`, `scripts/multicast.lua`, `tests/test_messaging_and_json_purge.py`)**:
+  - Decoupled conversational messaging from work item execution: `rhizo send` now defaults to `msgType = "message"` rather than `"task"`, preventing conversational inquiries from spawning unwanted WISM tasks and 900s leases.
+  - Added explicit `--task` flag and `--type task` support to designate task directives.
+  - Bifurcated reception banners in `doListen`: actionable task directives emit the operational `🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨` alert, broadcasts emit `📢 [RHIZO BROADCAST RECEIVED: CLUSTER AWARENESS] 📢`, and conversational peer queries emit `💬 [RHIZO MESSAGE RECEIVED: CONVERSATIONAL COORDINATION] 💬` without autonomous coding imperatives.
+  - Fixed multicast broadcast fanout in `scripts/multicast.lua` and `src/rhizo.nim` when targeting `@<project>` or tag intersections.
+- **Cross-Machine PID Safety & Machine Identity (`src/rhizo.nim`, `tests/test_messaging_and_json_purge.py`)**:
+  - Implemented `getMachineId*(): string` supporting Linux `/etc/machine-id`, macOS `IOPlatformUUID`, and environment overrides (`RHIZO_MACHINE_ID`).
+  - Added cross-machine awareness to `isPidAlive` and `isAgentProcessAlive`: if an agent's `machine_id` or host differs from the local machine, POSIX `kill(pid, 0)` is bypassed, relying strictly on Redis heartbeat lease TTLs.
+  - Recorded `machine_id` and `host` on agent registration (`agent:<name>`) and active listener leases (`listener:<name>`).
+- **Cross-Project Tenancy Gate for Direct Task Directives (`src/rhizo.nim`, `tests/test_messaging_and_json_purge.py`)**:
+  - Enforced cross-project tenancy boundaries in `doSend`: direct task directives (`msgType in ["task", "work"]`) across differing project namespaces are rejected unless explicitly allowed via `--cross-project` or targeted at cross-project queues.
+- **Zero-Disk Coordination JSON Purge (`src/rhizo.nim`, `tests/test_messaging_and_json_purge.py`)**:
+  - Purged all on-disk coordination JSON reads and writes: eliminated writing `current_task_<agent>.json` on task delivery and claim.
+  - Migrated session tracking (`sessions.json`) completely to Redis hashes (`rhizo:sessions` and `rhizo:agent_sessions`), eliminating cross-window file lock contention and disk corruption.
+  - Permanently purged obsolete `.rhizo/session.json` and directory-scoped session fallbacks.
+  - Replaced watchdog and stop hook disk checks with direct Redis session queries (`resolveActiveAgentFromRedis`).
 - **Pure Redis Strand State Management & Three-Key Ratification Gate (`scripts/strand.lua`, `src/rhizo.nim`, `tests/test_strand_lua.py`)**:
   - Implemented pure Redis strand state management in `scripts/strand.lua`, completely eliminating on-disk `.vine.json` dependency.
   - Supported actions: `create`, `submit`, `ratify`, `reject`, `weave`, `get`, and `list` across lifecycle states (`PROVISIONED`, `SUBMITTED`, `RATIFIED`, `REJECTED`, `WOVEN`).
