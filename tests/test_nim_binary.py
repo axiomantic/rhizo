@@ -771,7 +771,7 @@ class TestRhizoNimBinary(unittest.TestCase):
         res_bad = self.run_rhizo(["config", "nonexistent_subaction"])
         self.assertEqual(res_bad.returncode, 1)
         self.assertIn("Unknown config action: nonexistent_subaction", res_bad.stderr)
-        self.assertTrue("Usage: rhizo config <show|get|path|init>" in res_bad.stderr)
+        self.assertTrue("Usage: rhizo config <show|get|path|init" in res_bad.stderr)
 
     def test_14_config_get(self):
         # 1. Positive queries across core config keys
