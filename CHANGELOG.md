@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.27] - 2026-10-25
+
 ### Added
 - **Project-Scoped `@orchestrator` & `@lead` Resolution (`src/rhizo.nim`, `tests/test_tenancy_orchestrator_and_session_pubkey.py`)**:
   - Dynamically resolves `@orchestrator` and `@lead` message targets to the active leader of the sender's own project by inspecting sender project metadata and querying the distributed leader lease `orchestrator:<project>`.

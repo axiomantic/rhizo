@@ -145,7 +145,7 @@ const
   strandLua*     = staticRead("../scripts/strand.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.26"
+  RhizoVersion*  = "0.2.27"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
