@@ -24,14 +24,14 @@ def test_guide_install_new_file():
         assert target.exists()
 
         content = target.read_text()
-        assert "<!-- BEGIN RHIZO GUIDE [v1.9] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v2.0] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
         assert "Rhizo Multi-Agent Coordination Guide" in content
         assert "Single-Orchestrator Mutual Exclusion via Leader Leases" in content
         assert "Deprecation of Aliases in Favor of Sovereign Handles & Capability Tags" in content
         assert "Pre-Authorized Directives & Active Fleet Fast-Path" in content
         assert "Mandatory ask_question Tool Discipline" in content
-        assert "Fleet-First Mandate" in content
+        assert "Project-Scoped Fleet Mandate" in content
         assert "Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED" in content
         assert "garden-swarm.json" not in content
         assert "<project>-orchestrator" not in content
@@ -48,7 +48,7 @@ def test_guide_install_preserves_custom_content():
 
         content = target.read_text()
         assert custom_header.strip() in content
-        assert "<!-- BEGIN RHIZO GUIDE [v1.9] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v2.0] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
 
 def test_guide_install_updates_in_place():
@@ -71,7 +71,7 @@ def test_guide_install_updates_in_place():
         assert "Keep this text intact!" in content
         assert "Keep this footer intact too!" in content
         assert "Old outdated guide body" not in content
-        assert "<!-- BEGIN RHIZO GUIDE [v1.9] -->" in content
+        assert "<!-- BEGIN RHIZO GUIDE [v2.0] -->" in content
         assert "<!-- END RHIZO GUIDE -->" in content
 
 def test_guide_uninstall_cleans_block():
@@ -149,7 +149,7 @@ def test_guide_section_8_autonomous_dispatch_discipline():
         assert "### 8. Orchestrator Non-Implementation & Intake Gate" in content
         assert "Pre-Authorized Directives & Active Fleet Fast-Path" in content
         assert "Mandatory ask_question Tool Discipline" in content
-        assert "Fleet-First Mandate" in content
+        assert "Project-Scoped Fleet Mandate" in content
         assert "Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED" in content
 
 if __name__ == "__main__":

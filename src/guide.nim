@@ -7,13 +7,13 @@
 import std/[os, strutils]
 
 const
-  GuideVersion* = "v1.9"
+  GuideVersion* = "v2.0"
   BeginMarker* = "<!-- BEGIN RHIZO GUIDE [" & GuideVersion & "] -->"
   EndMarker* = "<!-- END RHIZO GUIDE -->"
   MarkerPrefix* = "<!-- BEGIN RHIZO GUIDE"
 
 const CanonicalGuideContent* = """
-<!-- BEGIN RHIZO GUIDE [v1.9] -->
+<!-- BEGIN RHIZO GUIDE [v2.0] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `rhizo guide install` -->
 
 ## Rhizo Multi-Agent Coordination Guide
@@ -108,7 +108,7 @@ Orchestrator Non-Implementation Invariant: When acting as an Orchestrator (or in
 
 1. Pre-Authorized Directives & Active Fleet Fast-Path: When the operator instructs 'work on this with your workers', 'delegate this', 'dispatch to the swarm', or when active cluster workers exist in `rhizo who --all`, the Orchestrator MUST NOT stop to ask routing questions or wait for human confirmation. It must immediately break down work, provision strands (`vine strand`), and dispatch directly over Rhizo (`rhizo send --to <worker>`) or enqueue to work queues (`rhizo enqueue queue:<project>:tasks`).
 2. Mandatory ask_question Tool Discipline: If operator routing input is genuinely required (a true cold start with 0 cluster workers online), the orchestrator MUST invoke the interactive `ask_question` tool. Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED.
-3. Fleet-First Mandate: When online workers exist, NEVER output copy-paste prompt cards to the human operator. Dispatch or repurpose existing workers over Rhizo.
+3. Project-Scoped Fleet Mandate & Anti-Hijacking Invariant: When online workers exist FOR THIS PROJECT (or in the unassigned pool: project 'unassigned'/'default' or tagged 'pool'/'float'/'shared'), dispatch or repurpose existing workers over Rhizo. Workers assigned to another named project are protected against cross-project poaching. If only foreign project workers are online, the orchestrator MUST NOT hijack them, but must instead bootstrap dedicated workers via prompt cards.
 4. Cold-Start Routing Options (via ask_question only):
    - Enqueue to Cluster Work Queue (`rhizo enqueue queue:<project>:tasks`)
    - Dispatch Directly to Worker (`rhizo send <worker>`)
