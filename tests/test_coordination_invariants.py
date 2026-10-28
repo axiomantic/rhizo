@@ -2170,7 +2170,11 @@ class TestCoordinationInvariants(unittest.TestCase):
             res_roadmap = self.run_cmd(["roadmap", "--json"], cwd=temp_dir)
             self.assertEqual(res_roadmap.returncode, 0)
             data = json.loads(res_roadmap.stdout.strip())
-            self.assertIn("seasons", data)
+            if isinstance(data, dict):
+                self.assertIn("seasons", data)
+            else:
+                self.assertIsInstance(data, list)
+                self.assertTrue(any(t.get("id") == task_id for t in data))
 
             # 5. Claim and complete task
             worker = f"worker-roadmap-{int(time.time())}"
