@@ -122,7 +122,7 @@ proc notifyClusterOfUpgrade*(
 
     # Construct and sign directive
     let canonical = msgId & "|system:upgrade|" & agentName & "|directive|" & subject & "|" & guidanceBody & "|" & nowIso
-    let sig = try: computeHmacSha256(secret, canonical) except CatchableError: ""
+    let sig = try: computeHmacSha256(secret, canonical) except Exception: ""
 
     var msgObj = newJObject()
     msgObj["id"] = %msgId

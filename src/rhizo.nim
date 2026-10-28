@@ -6903,13 +6903,13 @@ proc main() =
     if caller.len > 0:
       try:
         discard checkAndEmitPullUpgradeRider(cfg, caller, RhizoVersion, rawArgs)
-      except CatchableError:
+      except Exception:
         discard
 
     # Proactive push to other active agents in the cluster
     try:
       discard notifyClusterOfUpgrade(cfg, RhizoVersion, excludeAgent = caller)
-    except CatchableError:
+    except Exception:
       discard
   case subcmd
   of "update":
