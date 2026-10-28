@@ -2920,7 +2920,10 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("2. If your session has loaded subsidiary skills, re-read them via view_file; otherwise leave lazy-loaded.")
           stderr.writeLine("3. Inspect new CLI flags: rhizo --help")
           stderr.writeLine("4. Re-arm listener: " & exactCmd)
-          stderr.writeLine("NOTICE: This is an informational upgrade notification. Re-arm your listener; do NOT claim a task or execute code.")
+          stderr.writeLine("INVARIANTS FOR THIS UPGRADE NOTICE:")
+          stderr.writeLine("- The binary on this host is ALREADY upgraded to latest. Do NOT run 'npm install' or package managers.")
+          stderr.writeLine("- This is an informational upgrade notice. Do NOT claim a task or execute code.")
+          stderr.writeLine("- Do NOT reply to this notice; simply re-read the skill and re-arm your listener.")
         elif isBroadcastType:
           stderr.writeLine("AWARENESS NOTICE:")
           stderr.writeLine("This is a cluster broadcast for synchronization and shared awareness.")

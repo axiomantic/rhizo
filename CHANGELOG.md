@@ -10,12 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.29] - 2026-10-28
 
 ### Fixed
-- **System-Throttled Upgrade Notifications (`src/upgrade_notify.nim`, `src/config.nim`, `src/rhizo.nim`, `tests/test_upgrade_system_throttling.nim`)**:
-  - Throttled proactive protocol upgrade notifications to at most ONE worker per system (`machine_id` / `host`), picking the most recently active, available idle worker.
-  - Silently advanced session watermarks (`last_version_notified:rhizo`) for all other workers on that system without pushing to their inboxes or publishing to their pubsub channels, eliminating token-thrashing broadcast cascades across multi-agent clusters.
-  - Silenced local upgrade notifications when the invoking session on that machine is already at `currentVer`.
+- **Protocol Upgrade Notification & Skill Resynchronization (`src/upgrade_notify.nim`, `src/changelog_data.nim`, `src/rhizo.nim`, `tests/test_upgrade_notify.nim`)**:
+  - Delivers upgrade notices (`type: "notice"`) to all active cluster agent sessions whose session watermark is older than the installed release, ensuring every active LLM session wakes up, re-reads the updated skill file (`SKILL.md`), and re-arms its listener.
+  - Explicitly documents and enforces across notification guidance and reception banners that the binary on the host is already upgraded, strictly prohibiting workers from running redundant `npm install` package updates.
+  - Mandates that upgrade notices are informational: workers must not claim tasks, execute code, or send conversational acknowledgment replies that thrash cluster token budgets.
   - Fixed indentation bug in `src/rhizo.nim` `doListen` where the `AUTONOMOUS WORKER MANDATE` banner was executed unconditionally on non-task messages (such as upgrade notifications).
-  - Clarified upgrade notice banner as `⚡ [RHIZO PROTOCOL UPGRADE NOTICE DELIVERED] ⚡`, instructing workers to re-arm their listeners rather than claiming tasks or attempting code execution.
+  - Clarified upgrade notice banner in `doListen` as `⚡ [RHIZO PROTOCOL UPGRADE NOTICE DELIVERED] ⚡`.
 
 ## [0.2.28] - 2026-10-28
 

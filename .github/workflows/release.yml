@@ -43,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y gcc-aarch64-linux-gnu libc6-arm64-cross curl
-          sudo apt-get install -y qemu-user-binfmt 2>/dev/null || sudo apt-get install -y qemu-user-static
+          sudo apt-get install -y qemu-user qemu-user-binfmt 2>/dev/null || sudo apt-get install -y qemu-user-static
           mkdir -p /tmp/arm64-ssl
           PKG=$(curl -sL https://ports.ubuntu.com/ubuntu-ports/pool/main/o/openssl/ | grep -o 'href="libssl3[^"]*arm64\.deb"' | tr -d '"' | sed 's/href=//' | grep 'noble' | head -n 1 || true)
           if [ -z "$PKG" ]; then
@@ -182,16 +182,17 @@ jobs:
           echo "=== [3/4] Verifying Linux arm64 tarball under QEMU ==="
           mkdir -p /tmp/clean-tar-arm64
           tar -xzf dist/rhizo-linux-arm64.tar.gz -C /tmp/clean-tar-arm64
-          qemu-aarch64-static -L /usr/aarch64-linux-gnu /tmp/clean-tar-arm64/rhizo --help | grep -F "Nim Native"
-          KEY3=$(qemu-aarch64-static -L /usr/aarch64-linux-gnu /tmp/clean-tar-arm64/rhizo get-secret)
+          QEMU_BIN=$(command -v qemu-aarch64-static || command -v qemu-aarch64)
+          $QEMU_BIN -L /usr/aarch64-linux-gnu /tmp/clean-tar-arm64/rhizo --help | grep -F "Nim Native"
+          KEY3=$($QEMU_BIN -L /usr/aarch64-linux-gnu /tmp/clean-tar-arm64/rhizo get-secret)
           test -n "$KEY3"
           test -f /tmp/clean-tar-arm64/skills/rhizo/SKILL.md
 
           echo "=== [4/4] Verifying Linux arm64 .deb extraction under QEMU ==="
           mkdir -p /tmp/clean-deb-arm64
           dpkg-deb -x dist/rhizo_${VERSION}_arm64.deb /tmp/clean-deb-arm64
-          qemu-aarch64-static -L /usr/aarch64-linux-gnu /tmp/clean-deb-arm64/usr/bin/rhizo --help | grep -F "Nim Native"
-          KEY4=$(qemu-aarch64-static -L /usr/aarch64-linux-gnu /tmp/clean-deb-arm64/usr/bin/rhizo get-secret)
+          $QEMU_BIN -L /usr/aarch64-linux-gnu /tmp/clean-deb-arm64/usr/bin/rhizo --help | grep -F "Nim Native"
+          KEY4=$($QEMU_BIN -L /usr/aarch64-linux-gnu /tmp/clean-deb-arm64/usr/bin/rhizo get-secret)
           test -n "$KEY4"
           test -f /tmp/clean-deb-arm64/usr/share/rhizo/skills/rhizo/SKILL.md
 

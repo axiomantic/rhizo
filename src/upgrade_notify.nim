@@ -4,17 +4,8 @@
 # dual-delivery (proactive push to active inboxes + reactive pull CLI rider),
 # and changelog diff formatting.
 
-import std/[strutils, os, times, json, openssl, random, net, tables, algorithm, sets]
+import std/[strutils, os, times, json, openssl, random, net]
 import config, redis, changelog_data, update
-
-type
-  AgentUpgradeCandidate* = object
-    name*: string
-    systemId*: string
-    lastSeen*: int64
-    isBusy*: bool
-    hasListener*: bool
-    lastNotifiedVer*: string
 
 proc HMAC*(evp_md: EVP_MD, key: pointer, key_len: cint, d: cstring, n: csize_t, md: pointer, md_len: ptr cuint): cstring {.cdecl, importc: "HMAC", dynlib: DLLUtilName.}
 
@@ -89,9 +80,9 @@ proc notifyClusterOfUpgrade*(
   force: bool = false,
   excludeAgent: string = ""
 ): int =
-  ## Proactive Push: Notifies AT MOST ONE worker per system/machine (the most recently
-  ## active, available idle worker), and advances session watermarks silently for all
-  ## other workers on that system to eliminate multi-agent wakeup thrashes.
+  ## Proactive Push: Notifies all active sessions whose watermark is older than currentVer
+  ## so each session's LLM re-reads the updated skill and re-arms its listener.
+  ## Explicitly instructs sessions NOT to run npm install or claim tasks.
   ## Returns number of agents notified.
   var notifiedCount = 0
   var client: Redis
@@ -111,134 +102,36 @@ proc notifyClusterOfUpgrade*(
   let nowSec = getTime().toUnix()
   let secret = getSecret(cfg)
   let normExclude = excludeAgent.toLowerAscii.strip()
-  let myMid = getMachineId()
-
-  # 1. Collect metadata for all active agents and group by systemId
-  var agentsBySystem = initTable[string, seq[AgentUpgradeCandidate]]()
-  var systemsAlreadyUpgraded = initHashSet[string]()
 
   for agent in activeAgents:
     let agentName = agent.toLowerAscii.strip()
-    if agentName.len == 0: continue
+    if agentName.len == 0 or (normExclude.len > 0 and agentName == normExclude): continue
 
     let agentKey = cfg.prefix & "agent:" & agentName
-    var lastNotifiedVer = ""
-    var mid = ""
-    var host = ""
-    var lastSeen: int64 = 0
-    var isBusy = false
-    var hasListener = false
+    let lastNotifiedVer = try:
+      let v = client.hGet(agentKey, "last_version_notified:rhizo")
+      if v != redisNil: v.strip() else: ""
+    except CatchableError: ""
 
-    try:
-      let meta = client.hMGet(agentKey, @["last_version_notified:rhizo", "machine_id", "host", "last_seen", "state", "current_task"])
-      if meta.len >= 1 and meta[0] != redisNil: lastNotifiedVer = meta[0].strip()
-      if meta.len >= 2 and meta[1] != redisNil: mid = meta[1].strip()
-      if meta.len >= 3 and meta[2] != redisNil: host = meta[2].strip()
-      if meta.len >= 4 and meta[3] != redisNil:
-        try: lastSeen = parseBiggestInt(meta[3].strip()) except CatchableError: lastSeen = 0
-      if meta.len >= 5 and meta[4] != redisNil:
-        let st = meta[4].toUpperAscii()
-        if st.startsWith("BUSY") or st.contains("BUSY"): isBusy = true
-      if meta.len >= 6 and meta[5] != redisNil and meta[5].strip().len > 0:
-        isBusy = true
-    except CatchableError:
-      discard
-
-    # Check listener key
-    let listenerKey = cfg.prefix & "listener:" & agentName
-    let listenerVal = try: client.get(listenerKey) except CatchableError: redisNil
-    if listenerVal != redisNil and listenerVal.len > 0:
-      hasListener = true
-      if mid.len == 0 or host.len == 0:
-        try:
-          let lnode = parseJson(listenerVal)
-          if mid.len == 0: mid = lnode.getOrDefault("machine_id").getStr("")
-          if host.len == 0: host = lnode.getOrDefault("host").getStr("")
-        except CatchableError:
-          discard
-
-    let sysId = if mid.len > 0: mid elif host.len > 0: host else: myMid
-
-    # If this agent is the excluded caller (e.g. caller who ran the command or whose session was already updated):
-    if normExclude.len > 0 and agentName == normExclude:
-      # If caller's watermark is already at currentVer, this system has already been upgraded!
-      if lastNotifiedVer == currentVer:
-        systemsAlreadyUpgraded.incl(sysId)
+    let needsNotify = force or (lastNotifiedVer.len == 0) or
+                      (lastNotifiedVer != currentVer and isNewerSemver(currentVer, lastNotifiedVer))
+    if not needsNotify:
       continue
 
-    # If this agent already has currentVer, record that this system is already upgraded
-    if lastNotifiedVer == currentVer and not force:
-      systemsAlreadyUpgraded.incl(sysId)
-
-    let candidate = AgentUpgradeCandidate(
-      name: agentName,
-      systemId: sysId,
-      lastSeen: lastSeen,
-      isBusy: isBusy,
-      hasListener: hasListener,
-      lastNotifiedVer: lastNotifiedVer
-    )
-
-    if not agentsBySystem.hasKey(sysId):
-      agentsBySystem[sysId] = @[]
-    agentsBySystem[sysId].add(candidate)
-
-  # 2. For each system, notify AT MOST ONE worker (the most recently active one),
-  # and advance watermarks silently for all others on that system.
-  for sysId, candidates in agentsBySystem:
-    # If this system is already marked as upgraded (e.g. caller or a worker already has currentVer),
-    # advance any lagging workers on this system silently without spamming their inboxes or waking them.
-    if systemsAlreadyUpgraded.contains(sysId) and not force:
-      for c in candidates:
-        if c.lastNotifiedVer != currentVer:
-          let agentKey = cfg.prefix & "agent:" & c.name
-          try:
-            discard client.hSet(agentKey, "last_version_notified:rhizo", currentVer)
-            discard client.hSet(agentKey, "last_version_notified_at:rhizo", nowIso)
-          except CatchableError: discard
-      continue
-
-    # Filter candidates that actually need notification
-    var unnotified: seq[AgentUpgradeCandidate] = @[]
-    for c in candidates:
-      let needsNotify = force or (c.lastNotifiedVer.len == 0) or
-                        (c.lastNotifiedVer != currentVer and isNewerSemver(currentVer, c.lastNotifiedVer))
-      if needsNotify:
-        unnotified.add(c)
-
-    if unnotified.len == 0:
-      continue
-
-    # Sort candidates by:
-    # 1. Not busy first (prefer idle worker over busy worker)
-    # 2. Has listener first (prefer actively listening process over detached)
-    # 3. Last seen descending (most recently active worker first)
-    sort(unnotified, proc(a, b: AgentUpgradeCandidate): int =
-      if a.isBusy != b.isBusy:
-        return if not a.isBusy: -1 else: 1
-      if a.hasListener != b.hasListener:
-        return if a.hasListener: -1 else: 1
-      if a.lastSeen != b.lastSeen:
-        return if a.lastSeen > b.lastSeen: -1 else: 1
-      return cmp(a.name, b.name)
-    )
-
-    # Pick the top candidate: the most recently active, available worker on this system!
-    let target = unnotified[0]
-
-    # Deliver notification message to the chosen target worker
-    let fromVer = target.lastNotifiedVer
+    # Compute changelog diff and upgrade body
+    let fromVer = lastNotifiedVer
     let guidanceBody = formatUpgradeGuidance("rhizo", fromVer, currentVer)
     let subject = "PROTOCOL_UPGRADE: rhizo " & (if fromVer.len > 0: fromVer else: "unrecorded") & " -> " & currentVer
-    let msgId = "msg_upgrade_" & $nowSec & "_" & target.name & "_" & $rand(1000..9999)
+    let msgId = "msg_upgrade_" & $nowSec & "_" & agentName & "_" & $rand(1000..9999)
 
-    let canonical = msgId & "|system:upgrade|" & target.name & "|notice|" & subject & "|" & guidanceBody & "|" & nowIso
+    # Construct and sign notice
+    let canonical = msgId & "|system:upgrade|" & agentName & "|notice|" & subject & "|" & guidanceBody & "|" & nowIso
     let sig = try: computeHmacSha256(secret, canonical) except Exception: ""
 
     var msgObj = newJObject()
     msgObj["id"] = %msgId
     msgObj["from"] = %"system:upgrade"
-    msgObj["to"] = %target.name
+    msgObj["to"] = %agentName
     msgObj["type"] = %"notice"
     msgObj["urgency"] = %"soon"
     msgObj["subject"] = %subject
@@ -248,29 +141,20 @@ proc notifyClusterOfUpgrade*(
     msgObj["encrypted"] = %false
 
     let msgJson = $msgObj
-    let targetInboxKey = cfg.prefix & "inbox:" & target.name
-    let targetChanKey = cfg.prefix & "channel:" & target.name
-    let targetAgentKey = cfg.prefix & "agent:" & target.name
+    let inboxKey = cfg.prefix & "inbox:" & agentName
+    let chanKey = cfg.prefix & "channel:" & agentName
 
     try:
-      discard client.lPush(targetInboxKey, msgJson)
-      discard client.publish(targetChanKey, msgJson)
-      discard client.hSet(targetAgentKey, "last_version_notified:rhizo", currentVer)
-      discard client.hSet(targetAgentKey, "last_version_notified_at:rhizo", nowIso)
+      # Push to inbox (FIFO)
+      discard client.lPush(inboxKey, msgJson)
+      # Wake blocking listeners
+      discard client.publish(chanKey, msgJson)
+      # Atomically update session watermark in Redis
+      discard client.hSet(agentKey, "last_version_notified:rhizo", currentVer)
+      discard client.hSet(agentKey, "last_version_notified_at:rhizo", nowIso)
       inc notifiedCount
     except CatchableError:
       discard
-
-    # For all OTHER workers on this system, advance their watermark silently
-    # so they are marked as current and will NOT wake up or thrash tokens!
-    for i in 1 ..< unnotified.len:
-      let other = unnotified[i]
-      let otherAgentKey = cfg.prefix & "agent:" & other.name
-      try:
-        discard client.hSet(otherAgentKey, "last_version_notified:rhizo", currentVer)
-        discard client.hSet(otherAgentKey, "last_version_notified_at:rhizo", nowIso)
-      except CatchableError:
-        discard
 
   return notifiedCount
 

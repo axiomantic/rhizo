@@ -178,7 +178,7 @@ proc getDiscoveredSkills*(coreToolName: string = "rhizo", runtimeDir: string = "
 proc formatUpgradeGuidance*(coreToolName, fromVer, toVer: string, runtimeDir: string = ""): string =
   let (coreSkill, subsidiaries) = getDiscoveredSkills(coreToolName, runtimeDir)
   var lines: seq[string] = @[]
-  lines.add("[" & coreToolName.toUpperAscii & " PROTOCOL UPGRADE DIRECTIVE]")
+  lines.add("[" & coreToolName.toUpperAscii & " PROTOCOL UPGRADE NOTICE]")
   lines.add(coreToolName & " was upgraded on this host from " & (if fromVer.len > 0: fromVer else: "unrecorded") & " to " & toVer & ".")
   lines.add("")
   let diff = getChangelogDiff(fromVer, toVer)
@@ -187,8 +187,8 @@ proc formatUpgradeGuidance*(coreToolName, fromVer, toVer: string, runtimeDir: st
     lines.add(diff)
     lines.add("")
 
-  lines.add("### Mandatory Actions:")
-  lines.add("1. Core skill: file://~/.gemini/config/skills/" & coreSkill & "/SKILL.md (mandatory re-read)")
+  lines.add("### Action Required in This Session:")
+  lines.add("1. Re-read updated core skill (mandatory): file://~/.gemini/config/skills/" & coreSkill & "/SKILL.md")
   if subsidiaries.len > 0:
     lines.add("2. Associated skills: " & subsidiaries.join(", ") & " (if already loaded in this session, re-read now via view_file; otherwise leave lazy-loaded)")
     lines.add("3. Inspect new CLI flags: " & coreToolName & " --help")
@@ -196,5 +196,11 @@ proc formatUpgradeGuidance*(coreToolName, fromVer, toVer: string, runtimeDir: st
   else:
     lines.add("2. Inspect new CLI flags: " & coreToolName & " --help")
     lines.add("3. Re-arm listener: " & coreToolName & " listen <name>")
+
+  lines.add("")
+  lines.add("### Invariants for this Notice:")
+  lines.add("- DO NOT run 'npm install' or package managers (the binary on this host is already upgraded to " & toVer & ").")
+  lines.add("- DO NOT claim a task or execute code. This is an informational upgrade notice, not a task directive.")
+  lines.add("- DO NOT reply to this notice. Simply re-read the skill file and re-arm your listener.")
 
   return lines.join("\n")
