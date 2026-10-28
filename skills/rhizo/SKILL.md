@@ -134,8 +134,8 @@ When the operator instructs 'work on this with your workers', 'delegate this', '
 2. Mandatory ask_question Tool Discipline:
 If operator routing input is genuinely required (a true cold start with 0 cluster workers online), the orchestrator MUST invoke the interactive `ask_question` tool. Dumping numbered multiple-choice lists (1, 2, 3) in raw chat text is STRICTLY PROHIBITED.
 
-3. Fleet-First Mandate:
-When online workers exist, NEVER output copy-paste prompt cards to the human operator. Dispatch or repurpose existing workers over Rhizo.
+3. Project-Scoped Fleet Mandate & Anti-Hijacking Invariant:
+When online workers exist FOR THIS PROJECT (or in the unassigned pool: project 'unassigned'/'default' or tagged 'pool'/'float'/'shared'), dispatch or repurpose them over Rhizo. Cross-project worker hijacking is strictly prohibited; if only workers belonging to other named projects exist, the orchestrator MUST NOT hijack them, but must instead bootstrap dedicated workers via prompt cards (`garden prompts` / `garden launch`).
 
 4. Cold-Start Routing Options (via ask_question only):
 - Enqueue to Cluster Work Queue (`rhizo enqueue queue:<project>:tasks`)
