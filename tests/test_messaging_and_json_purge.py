@@ -26,7 +26,7 @@ class TestMessagingAndJsonPurge(unittest.TestCase):
         self.env["RHIZO_REDIS_PREFIX"] = TEST_PREFIX
         self.env["RHIZO_PROJECT"] = "test_project"
         self.env["RHIZO_ALLOW_DRIFT"] = "1"
-        self.r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        self.r = redis.Redis.from_url(REDIS_URL, decode_responses=True, protocol=2)
         self.assertTrue(os.path.isfile(BIN_PATH), f"Binary not found at {BIN_PATH}")
         self.run_rhizo(["nuke"])
 

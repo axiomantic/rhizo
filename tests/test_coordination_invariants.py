@@ -1300,7 +1300,7 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         # 6-tamper: Tampered gate token in Redis MUST be rejected by rhizo task complete
         import redis
-        r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        r = redis.Redis.from_url(REDIS_URL, decode_responses=True, protocol=2)
         orig_gate_token = passed_manifest.get("gate_token", "")
         strand_keys = [k for k in r.keys(f"*{task_id}*") if "strand" in k]
         for sk in strand_keys:

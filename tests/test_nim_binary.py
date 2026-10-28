@@ -5263,7 +5263,7 @@ secret = "my_inline_secret_test_555"
         try:
             # 2. Wait for worker heartbeat to register
             registered = False
-            for _ in range(20):
+            for _ in range(50):
                 time.sleep(0.1)
                 chk = subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", hb_key], capture_output=True, text=True, check=True)
                 if chk.stdout.strip() == "1":
