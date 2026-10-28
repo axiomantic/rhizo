@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.29] - 2026-10-28
+
 ### Fixed
 - **System-Throttled Upgrade Notifications (`src/upgrade_notify.nim`, `src/config.nim`, `src/rhizo.nim`, `tests/test_upgrade_system_throttling.nim`)**:
   - Throttled proactive protocol upgrade notifications to at most ONE worker per system (`machine_id` / `host`), picking the most recently active, available idle worker.
