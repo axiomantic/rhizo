@@ -1,0 +1,70 @@
+name: Dependency Configuration Verification
+
+on:
+  push:
+    paths:
+      - ".github/dependabot.yml"
+      - ".github/renovate.json"
+      - ".github/workflows/dependabot-verify.yml"
+  pull_request:
+    paths:
+      - ".github/dependabot.yml"
+      - ".github/renovate.json"
+      - ".github/workflows/dependabot-verify.yml"
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Validate Dependabot & Renovate Configurations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install --quiet pyyaml
+
+      - name: Validate dependabot.yml schema & syntax
+        run: |
+          python3 -c '
+          import yaml
+          with open(".github/dependabot.yml", "r") as f:
+              data = yaml.safe_load(f)
+          ver = data.get("version")
+          assert ver == 2, f"Expected version 2, got {ver}"
+          beta = data.get("enable-beta-ecosystems")
+          assert beta is True, f"enable-beta-ecosystems must be true, got {beta}"
+          updates = data.get("updates", [])
+          assert len(updates) >= 1, f"Expected at least 1 update ecosystem, got {len(updates)}"
+          ecosystems = [u["package-ecosystem"] for u in updates]
+          assert "github-actions" in ecosystems, f"Missing github-actions ecosystem: {ecosystems}"
+          assert "nimble" not in ecosystems, f"nimble is unsupported in GitHub Dependabot and must not be present: {ecosystems}"
+          print("Dependabot configuration validated successfully with ecosystems:", ecosystems)
+          '
+
+      - name: Validate renovate.json schema & syntax
+        run: |
+          python3 -c '
+          import json, re
+          with open(".github/renovate.json", "r") as f:
+              data = json.load(f)
+          assert "extends" in data, "renovate.json missing extends"
+          assert "config:recommended" in data["extends"], "renovate.json missing config:recommended"
+          assert "nimble" not in data, "renovate.json contains unsupported top-level nimble option"
+          assert "customManagers" in data, "renovate.json missing customManagers"
+          cms = data["customManagers"]
+          assert len(cms) >= 1, f"Expected at least 1 customManager for template tracking, got {len(cms)}"
+          for cm in cms:
+              for s in cm.get("matchStrings", []):
+                  py_s = re.sub(r"\(\?<([a-zA-Z0-9_]+)>", r"(?P<\1>", s)
+                  re.compile(py_s)
+          print(f"Renovate configuration validated successfully with {len(cms)} custom managers.")
+          '
+          npx --yes --package renovate renovate-config-validator .github/renovate.json
