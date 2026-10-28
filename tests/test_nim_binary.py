@@ -5253,8 +5253,9 @@ secret = "my_inline_secret_test_555"
 
         # 1. Spawn background claim worker on empty queue
         p = subprocess.Popen(
-            [BIN_PATH, "claim", q, "25"],
+            [BIN_PATH, "claim", q, "25", "--worker", worker],
             env={**self.env, "RHIZO_AGENT_NAME": worker},
+            cwd=self.test_home,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
@@ -5263,17 +5264,25 @@ secret = "my_inline_secret_test_555"
         try:
             # 2. Wait for worker heartbeat to register
             registered = False
+            r_client = redis.Redis.from_url(REDIS_URL, decode_responses=True, protocol=2)
             for _ in range(100):
                 if p.poll() is not None:
                     break
                 time.sleep(0.1)
-                chk = subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", hb_key], capture_output=True, text=True, check=True)
+                try:
+                    if r_client.exists(hb_key):
+                        registered = True
+                        break
+                except Exception:
+                    pass
+                chk = subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", hb_key], capture_output=True, text=True)
                 if chk.stdout.strip() == "1":
                     registered = True
                     break
-            if not registered and p.poll() is not None:
+            if not registered:
+                p.kill()
                 stdout, stderr = p.communicate()
-                self.fail(f"Claim worker exited early with code {p.returncode} before heartbeat registered!\nSTDOUT: {stdout}\nSTDERR: {stderr}")
+                self.fail(f"Claim worker failed to register heartbeat in Redis key {hb_key}!\nEXIT: {p.returncode}\nSTDOUT: {stdout}\nSTDERR: {stderr}")
             self.assertTrue(registered, "Claim worker failed to register heartbeat in Redis")
 
             # 3. Sever all normal client connections via Redis CLIENT KILL

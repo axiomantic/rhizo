@@ -3405,10 +3405,11 @@ proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: s
 
 proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int
 
-proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSec: int = 120, rawOutput: bool = false, runId: string = "") =
+proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSec: int = 120, rawOutput: bool = false, runId: string = "", explicitWorker: string = "") =
   let normQueue = sanitizeIdentifier(queueName)
   let secret = getSecret(cfg)
-  let workerName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
+  let workerName = if explicitWorker.len > 0: sanitizeIdentifier(explicitWorker)
+                   else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
   let effectiveTimeout = if isForever: 0 elif timeoutSec > 0: timeoutSec else: (if cfg.listenTimeout > 0: cfg.listenTimeout else: 60)
   let startTime = epochTime()
@@ -8365,6 +8366,7 @@ proc main() =
       var lease = 120
       var rawOutput = false
       var runId = ""
+      var explicitWorker = ""
 
       var i = 2
       while i < args.len:
@@ -8384,13 +8386,23 @@ proc main() =
         elif a == "--run-id" and i + 1 < args.len:
           runId = args[i+1]
           inc i
+        elif a.startsWith("--worker="):
+          explicitWorker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len:
+          explicitWorker = args[i+1]
+          inc i
+        elif a.startsWith("--agent-name="):
+          explicitWorker = a[13..^1]
+        elif a == "--agent-name" and i + 1 < args.len:
+          explicitWorker = args[i+1]
+          inc i
         elif a == "--raw":
           rawOutput = true
         elif not a.startsWith("-"):
           timeout = parseRequiredInt(a, "timeout")
         inc i
 
-      doClaim(cfg, queueName, timeout, lease, rawOutput, runId)
+      doClaim(cfg, queueName, timeout, lease, rawOutput, runId, explicitWorker)
 
   of "ack":
     if args.len < 3:
