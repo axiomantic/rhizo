@@ -75,11 +75,13 @@ jobs:
       # Windows requires runtime OpenSSL DLLs for HMAC/SHA256 in Nim
       - name: Install Nim Windows runtime DLLs
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          curl -sSfL --connect-timeout 10 --max-time 30 https://nim-lang.org/download/dlls.zip -o dlls.zip
-          unzip -q -o dlls.zip -d "$GITHUB_WORKSPACE/nim-dlls"
-          echo "$GITHUB_WORKSPACE/nim-dlls" >> "$GITHUB_PATH"
+          curl.exe -sSfL --connect-timeout 10 --max-time 30 https://nim-lang.org/download/dlls.zip -o dlls.zip
+          New-Item -ItemType Directory -Force -Path "bin"
+          Expand-Archive dlls.zip -DestinationPath "bin" -Force
+          Expand-Archive dlls.zip -DestinationPath "$env:GITHUB_WORKSPACE\nim-dlls" -Force
+          Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\nim-dlls"
 
       - name: Verify Nim compiler
         run: |

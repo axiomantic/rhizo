@@ -66,6 +66,10 @@ proc isMachineOutputContext*(rawArgs: seq[string]): bool =
 proc isAutonomousModeActive*(): bool =
   if getEnv("AUTONOMOUS_MODE", "") in ["1", "true", "yes"]:
     return true
+  if getEnv("RHIZO_ALLOW_DRIFT", "") in ["1", "true", "yes"]:
+    return true
+  if getEnv("RHIZO_TEST", "") in ["1", "true", "yes"]:
+    return true
   if fileExists(".autonomous"):
     return true
   return false
