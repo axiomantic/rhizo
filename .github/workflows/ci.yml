@@ -72,18 +72,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Windows requires runtime DLLs for HTTPS and SSL support in Nimble
-      - name: Install Nim Windows runtime DLLs
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest https://nim-lang.org/download/dlls.zip -OutFile dlls.zip
-          Expand-Archive dlls.zip -DestinationPath "$env:GITHUB_WORKSPACE\nim-dlls" -Force
-          Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\nim-dlls"
-          Invoke-WebRequest https://curl.se/ca/cacert.pem -OutFile "$env:GITHUB_WORKSPACE\cacert.pem"
-          Add-Content $env:GITHUB_ENV "SSL_CERT_FILE=$env:GITHUB_WORKSPACE\cacert.pem"
-
       - name: Verify Nim compiler
         run: |
           which nim
