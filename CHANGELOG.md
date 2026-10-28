@@ -7,10 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.28] - 2026-10-28
+
 ### Added
 - **Project-Scoped Fleet Mandate & Anti-Hijacking Invariant (`src/guide.nim`, `AGENTS.md`, `tests/test_guide.py`)**:
   - Bumped embedded Rhizo guide to `v2.0`.
   - Replaced ambiguous global Fleet-First Mandate with the Project-Scoped Fleet Mandate and Anti-Hijacking Invariant, prohibiting cross-project worker hijacking across multi-agent swarms.
+- **Skills and Multi-Agent Orchestration Alignment (`skills/`)**:
+  - Synchronized `garden`, `orchestrate-swarm`, and `rhizo` skills to codify project-scoped fleet discipline.
 
 ## [0.2.27] - 2026-10-25
 
