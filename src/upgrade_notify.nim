@@ -66,6 +66,10 @@ proc isMachineOutputContext*(rawArgs: seq[string]): bool =
 proc isAutonomousModeActive*(): bool =
   if getEnv("AUTONOMOUS_MODE", "") in ["1", "true", "yes"]:
     return true
+  if getEnv("RHIZO_ALLOW_DRIFT", "") in ["1", "true", "yes"]:
+    return true
+  if getEnv("RHIZO_TEST", "") in ["1", "true", "yes"]:
+    return true
   if fileExists(".autonomous"):
     return true
   return false
@@ -122,7 +126,7 @@ proc notifyClusterOfUpgrade*(
 
     # Construct and sign directive
     let canonical = msgId & "|system:upgrade|" & agentName & "|directive|" & subject & "|" & guidanceBody & "|" & nowIso
-    let sig = try: computeHmacSha256(secret, canonical) except CatchableError: ""
+    let sig = try: computeHmacSha256(secret, canonical) except Exception: ""
 
     var msgObj = newJObject()
     msgObj["id"] = %msgId

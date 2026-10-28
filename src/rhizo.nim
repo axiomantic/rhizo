@@ -3405,10 +3405,11 @@ proc doWork*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, runId: s
 
 proc doAck*(cfg: RhizoConfig, queueName, taskId: string): int
 
-proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSec: int = 120, rawOutput: bool = false, runId: string = "") =
+proc doClaim*(cfg: RhizoConfig, queueName: string, timeoutSec: int = -1, leaseSec: int = 120, rawOutput: bool = false, runId: string = "", explicitWorker: string = "") =
   let normQueue = sanitizeIdentifier(queueName)
   let secret = getSecret(cfg)
-  let workerName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
+  let workerName = if explicitWorker.len > 0: sanitizeIdentifier(explicitWorker)
+                   else: sanitizeIdentifier(getActiveAgentName(cfg, ""))
   let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
   let effectiveTimeout = if isForever: 0 elif timeoutSec > 0: timeoutSec else: (if cfg.listenTimeout > 0: cfg.listenTimeout else: 60)
   let startTime = epochTime()
@@ -6902,13 +6903,13 @@ proc main() =
     if caller.len > 0:
       try:
         discard checkAndEmitPullUpgradeRider(cfg, caller, RhizoVersion, rawArgs)
-      except CatchableError:
+      except Exception:
         discard
 
     # Proactive push to other active agents in the cluster
     try:
       discard notifyClusterOfUpgrade(cfg, RhizoVersion, excludeAgent = caller)
-    except CatchableError:
+    except Exception:
       discard
   case subcmd
   of "update":
@@ -7589,7 +7590,14 @@ proc main() =
   of "roadmap":
     var passArgs: seq[string] = @[]
     for a in rawArgs[1..^1]: passArgs.add(quoteShell(a))
-    let (gOut, gCode) = execCmdEx("garden roadmap " & passArgs.join(" "))
+    var gOut = ""
+    var gCode = 1
+    try:
+      let (outp, code) = execCmdEx("garden roadmap " & passArgs.join(" "))
+      gOut = outp
+      gCode = code
+    except CatchableError:
+      gCode = 1
     if gCode == 0:
       echo gOut.strip()
       quit(0)
@@ -7598,6 +7606,7 @@ proc main() =
       echo res
     else:
       echo formatTasksTable(res)
+    quit(0)
 
   of "ping":
     var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
@@ -8357,6 +8366,7 @@ proc main() =
       var lease = 120
       var rawOutput = false
       var runId = ""
+      var explicitWorker = ""
 
       var i = 2
       while i < args.len:
@@ -8376,13 +8386,23 @@ proc main() =
         elif a == "--run-id" and i + 1 < args.len:
           runId = args[i+1]
           inc i
+        elif a.startsWith("--worker="):
+          explicitWorker = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len:
+          explicitWorker = args[i+1]
+          inc i
+        elif a.startsWith("--agent-name="):
+          explicitWorker = a[13..^1]
+        elif a == "--agent-name" and i + 1 < args.len:
+          explicitWorker = args[i+1]
+          inc i
         elif a == "--raw":
           rawOutput = true
         elif not a.startsWith("-"):
           timeout = parseRequiredInt(a, "timeout")
         inc i
 
-      doClaim(cfg, queueName, timeout, lease, rawOutput, runId)
+      doClaim(cfg, queueName, timeout, lease, rawOutput, runId, explicitWorker)
 
   of "ack":
     if args.len < 3:
@@ -9408,7 +9428,14 @@ proc main() =
     of "roadmap":
       var passArgs: seq[string] = @[]
       for a in args[2..^1]: passArgs.add(quoteShell(a))
-      let (gOut, gCode) = execCmdEx("garden roadmap " & passArgs.join(" "))
+      var gOut = ""
+      var gCode = 1
+      try:
+        let (outp, code) = execCmdEx("garden roadmap " & passArgs.join(" "))
+        gOut = outp
+        gCode = code
+      except CatchableError:
+        gCode = 1
       if gCode == 0:
         echo gOut.strip()
         quit(0)
@@ -9418,6 +9445,7 @@ proc main() =
       let res = doTask(cfg, "list", [])
       if jsonOut: echo res
       else: echo formatTasksTable(res)
+      quit(0)
 
     else:
       stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, gate-report, complete, yield, current, sweep, get, list, roadmap")

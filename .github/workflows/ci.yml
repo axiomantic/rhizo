@@ -7,6 +7,21 @@ on:
     branches: [ main ]
 
 jobs:
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install and run Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.0"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --verbose --redact
+
   test:
     name: Test (${{ matrix.os }} / Nim)
     runs-on: ${{ matrix.os }}
@@ -57,17 +72,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Windows requires runtime DLLs for HTTPS and SSL support in Nimble
+      # Windows requires runtime OpenSSL DLLs for HMAC/SHA256 in Nim
       - name: Install Nim Windows runtime DLLs
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest https://nim-lang.org/download/dlls.zip -OutFile dlls.zip
+          curl.exe -sSfL --connect-timeout 10 --max-time 30 https://nim-lang.org/download/dlls.zip -o dlls.zip
+          New-Item -ItemType Directory -Force -Path "bin"
+          Expand-Archive dlls.zip -DestinationPath "bin" -Force
           Expand-Archive dlls.zip -DestinationPath "$env:GITHUB_WORKSPACE\nim-dlls" -Force
           Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\nim-dlls"
-          Invoke-WebRequest https://curl.se/ca/cacert.pem -OutFile "$env:GITHUB_WORKSPACE\cacert.pem"
-          Add-Content $env:GITHUB_ENV "SSL_CERT_FILE=$env:GITHUB_WORKSPACE\cacert.pem"
 
       - name: Verify Nim compiler
         run: |

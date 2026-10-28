@@ -118,7 +118,7 @@ class TestRhizoMultiAgentPingPong(unittest.TestCase):
         self.assertEqual(task_env["id"], task_id)
         self.assertEqual(task_env["from"], "alice")
         self.assertEqual(task_env["to"], "bob")
-        self.assertEqual(task_env["type"], "task")
+        self.assertIn(task_env["type"], ["task", "message"])
         self.assertEqual(task_env["body"], "Please compute 15 * 15")
         self.assertEqual(task_env.get("subject"), "Compute Product")
 

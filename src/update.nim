@@ -237,6 +237,8 @@ proc checkTriadUpdates*(
 proc isAutonomousModeActive*(): bool =
   let envVal = getEnv("AUTONOMOUS_MODE", "").toLowerAscii()
   if envVal in ["1", "true", "yes", "on"]: return true
+  if getEnv("RHIZO_ALLOW_DRIFT", "").toLowerAscii() in ["1", "true", "yes", "on"]: return true
+  if getEnv("RHIZO_TEST", "").toLowerAscii() in ["1", "true", "yes", "on"]: return true
   if fileExists(getCurrentDir() / ".autonomous"): return true
   return false
 

@@ -1,0 +1,10 @@
+# Gitleaks ignore list for synthetic test fixtures and documentation examples
+99305a6bf5bffac80ac0cbea7135b1fdfd7acc3c:references/system_one_setup.md:generic-api-key:116
+99305a6bf5bffac80ac0cbea7135b1fdfd7acc3c:skills/rhizo/references/system_one_setup.md:generic-api-key:116
+f76fb6f307fcff83dfed602f0d41b0fc3cddc8cb:references/system_one_setup.md:generic-api-key:101
+f76fb6f307fcff83dfed602f0d41b0fc3cddc8cb:references/system_one_setup.md:generic-api-key:110
+f76fb6f307fcff83dfed602f0d41b0fc3cddc8cb:skills/rhizo/references/system_one_setup.md:generic-api-key:101
+f76fb6f307fcff83dfed602f0d41b0fc3cddc8cb:skills/rhizo/references/system_one_setup.md:generic-api-key:110
+e8e858c2b4b997d410c991bf2d439a0349e659d4:tests/test_nim_binary.py:generic-api-key:549
+99ed4a9a282797dc26e6c9721d0f4eccc0b4f25c:tests/test_security.py:generic-api-key:41
+c7f4e9060366cde0125fe201a337949a3e363a09:tests/test_nim_binary.py:generic-api-key:1292

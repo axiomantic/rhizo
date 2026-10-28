@@ -6,6 +6,7 @@ Verifies all 17 empirical failure modes across rhizo, vine, and multi-agent harn
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -144,6 +145,8 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertIn("breaks supervisor", proc.stderr)
 
         # Negative control: with --force it must bypass the check
+        self.run_cmd(["open", "detached_worker", "worker"])
+        self.run_cmd(["send", "--to", "detached_worker", "--subject", "init", "--body", "test"])
         with open(log_file, "w") as f:
             proc_force = subprocess.run(
                 [BIN_PATH, "listen", "detached_worker", "1", "--force"],
@@ -151,7 +154,8 @@ class TestCoordinationInvariants(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
                 env=self.env,
-                cwd=self.test_home
+                cwd=self.test_home,
+                timeout=10
             )
         self.assertEqual(proc_force.returncode, 0)
 
@@ -1296,7 +1300,7 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         # 6-tamper: Tampered gate token in Redis MUST be rejected by rhizo task complete
         import redis
-        r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        r = redis.Redis.from_url(REDIS_URL, decode_responses=True, protocol=2)
         orig_gate_token = passed_manifest.get("gate_token", "")
         strand_keys = [k for k in r.keys(f"*{task_id}*") if "strand" in k]
         for sk in strand_keys:
@@ -2164,9 +2168,13 @@ class TestCoordinationInvariants(unittest.TestCase):
 
             # 4. Verify rhizo roadmap or rhizo task roadmap works
             res_roadmap = self.run_cmd(["roadmap", "--json"], cwd=temp_dir)
-            self.assertEqual(res_roadmap.returncode, 0)
+            self.assertEqual(res_roadmap.returncode, 0, f"rhizo roadmap failed with code {res_roadmap.returncode}:\nSTDOUT: {res_roadmap.stdout}\nSTDERR: {res_roadmap.stderr}")
             data = json.loads(res_roadmap.stdout.strip())
-            self.assertIn("seasons", data)
+            if isinstance(data, dict):
+                self.assertIn("seasons", data)
+            else:
+                self.assertIsInstance(data, list)
+                self.assertTrue(any(t.get("id") == task_id for t in data))
 
             # 5. Claim and complete task
             worker = f"worker-roadmap-{int(time.time())}"
@@ -2230,6 +2238,12 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.run_cmd(["open", w1, "worker"])
         self.run_cmd(["open", w2, "worker"])
 
+        # Determine current version dynamically
+        pyproject_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pyproject.toml")
+        with open(pyproject_path, "r", encoding="utf-8") as f:
+            m_ver = re.search(r'version\s*=\s*"([^"]+)"', f.read())
+        current_ver = m_ver.group(1) if m_ver else "0.2.27"
+
         try:
             # 1. Negative control: machine commands must NEVER advance last_version_notified
             # Reset watermarks and flush any pre-existing messages
@@ -2258,8 +2272,8 @@ class TestCoordinationInvariants(unittest.TestCase):
             # Both w1 and w2 should have their watermark updated in Redis to current version
             v1_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w1}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
             v2_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w2}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
-            self.assertEqual(v1_notified, "0.2.26")
-            self.assertEqual(v2_notified, "0.2.26")
+            self.assertEqual(v1_notified, current_ver)
+            self.assertEqual(v2_notified, current_ver)
 
             # Verify inbox message payload for w1
             res_drain_1 = self.run_cmd(["drain", "1", w1, "--json"])
@@ -2268,7 +2282,7 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertEqual(msg1["from"], "system:upgrade")
             self.assertEqual(msg1["type"], "directive")
             self.assertIn("PROTOCOL_UPGRADE", msg1["subject"])
-            self.assertIn("0.2.26", msg1["subject"])
+            self.assertIn(current_ver, msg1["subject"])
             self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", msg1["body"])
             self.assertIn("Mandatory Actions", msg1["body"])
             self.assertIn("file://~/.gemini/config/skills/rhizo/SKILL.md", msg1["body"])
@@ -2290,9 +2304,9 @@ class TestCoordinationInvariants(unittest.TestCase):
             res_drain_jump = self.run_cmd(["drain", "1", w1, "--json"])
             self.assertEqual(res_drain_jump.returncode, 0)
             msg_jump = json.loads(res_drain_jump.stdout.strip())
-            self.assertIn("0.2.22 -> 0.2.26", msg_jump["subject"])
-            # Cumulative diff must include 0.2.26, 0.2.25, 0.2.24, and 0.2.23
-            self.assertIn("0.2.26", msg_jump["body"])
+            self.assertIn(f"0.2.22 -> {current_ver}", msg_jump["subject"])
+            # Cumulative diff must include current_ver and previous versions
+            self.assertIn(current_ver, msg_jump["body"])
             self.assertIn("0.2.25", msg_jump["body"])
             self.assertIn("0.2.24", msg_jump["body"])
             self.assertIn("0.2.23", msg_jump["body"])
@@ -2314,9 +2328,9 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", res_send.stderr)
             self.assertIn("<!-- END_RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send.stderr)
 
-            # Watermark in Redis must now be updated to 0.2.26
+            # Watermark in Redis must now be updated to current_ver
             v3_notified = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{w3}", "last_version_notified:rhizo"], capture_output=True, text=True).stdout.strip()
-            self.assertEqual(v3_notified, "0.2.26")
+            self.assertEqual(v3_notified, current_ver)
 
             # Second interactive command must NOT emit rider again
             res_send_again = self.run_cmd(

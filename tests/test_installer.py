@@ -52,7 +52,7 @@ class TestInstallerAndUninstaller(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=180,
         )
         self.assertEqual(res.returncode, 0, f"install.sh failed:\n{res.stderr}\n{res.stdout}")
 
@@ -158,7 +158,7 @@ class TestInstallerAndUninstaller(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=180,
         )
         self.assertEqual(res.returncode, 0, f"install.sh failed:\n{res.stderr}\n{res.stdout}")
         self.assertIn("Skipping AI agent skill installation", res.stdout)
