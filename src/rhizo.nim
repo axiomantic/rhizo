@@ -7589,7 +7589,14 @@ proc main() =
   of "roadmap":
     var passArgs: seq[string] = @[]
     for a in rawArgs[1..^1]: passArgs.add(quoteShell(a))
-    let (gOut, gCode) = execCmdEx("garden roadmap " & passArgs.join(" "))
+    var gOut = ""
+    var gCode = 1
+    try:
+      let (outp, code) = execCmdEx("garden roadmap " & passArgs.join(" "))
+      gOut = outp
+      gCode = code
+    except CatchableError:
+      gCode = 1
     if gCode == 0:
       echo gOut.strip()
       quit(0)
@@ -7598,6 +7605,7 @@ proc main() =
       echo res
     else:
       echo formatTasksTable(res)
+    quit(0)
 
   of "ping":
     var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
@@ -9408,7 +9416,14 @@ proc main() =
     of "roadmap":
       var passArgs: seq[string] = @[]
       for a in args[2..^1]: passArgs.add(quoteShell(a))
-      let (gOut, gCode) = execCmdEx("garden roadmap " & passArgs.join(" "))
+      var gOut = ""
+      var gCode = 1
+      try:
+        let (outp, code) = execCmdEx("garden roadmap " & passArgs.join(" "))
+        gOut = outp
+        gCode = code
+      except CatchableError:
+        gCode = 1
       if gCode == 0:
         echo gOut.strip()
         quit(0)
@@ -9418,6 +9433,7 @@ proc main() =
       let res = doTask(cfg, "list", [])
       if jsonOut: echo res
       else: echo formatTasksTable(res)
+      quit(0)
 
     else:
       stderr.writeLine("Unknown task action: '" & action & "'. Valid actions: create, claim, progress, gate-report, complete, yield, current, sweep, get, list, roadmap")

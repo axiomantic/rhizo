@@ -5263,12 +5263,17 @@ secret = "my_inline_secret_test_555"
         try:
             # 2. Wait for worker heartbeat to register
             registered = False
-            for _ in range(50):
+            for _ in range(100):
+                if p.poll() is not None:
+                    break
                 time.sleep(0.1)
                 chk = subprocess.run(["redis-cli", "-u", REDIS_URL, "EXISTS", hb_key], capture_output=True, text=True, check=True)
                 if chk.stdout.strip() == "1":
                     registered = True
                     break
+            if not registered and p.poll() is not None:
+                stdout, stderr = p.communicate()
+                self.fail(f"Claim worker exited early with code {p.returncode} before heartbeat registered!\nSTDOUT: {stdout}\nSTDERR: {stderr}")
             self.assertTrue(registered, "Claim worker failed to register heartbeat in Redis")
 
             # 3. Sever all normal client connections via Redis CLIENT KILL

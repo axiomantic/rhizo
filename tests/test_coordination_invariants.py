@@ -2168,7 +2168,7 @@ class TestCoordinationInvariants(unittest.TestCase):
 
             # 4. Verify rhizo roadmap or rhizo task roadmap works
             res_roadmap = self.run_cmd(["roadmap", "--json"], cwd=temp_dir)
-            self.assertEqual(res_roadmap.returncode, 0)
+            self.assertEqual(res_roadmap.returncode, 0, f"rhizo roadmap failed with code {res_roadmap.returncode}:\nSTDOUT: {res_roadmap.stdout}\nSTDERR: {res_roadmap.stderr}")
             data = json.loads(res_roadmap.stdout.strip())
             if isinstance(data, dict):
                 self.assertIn("seasons", data)
