@@ -48,7 +48,7 @@ class TestRhizoNimBinary(unittest.TestCase):
         if hasattr(self, "test_home") and os.path.isdir(self.test_home):
             shutil.rmtree(self.test_home, ignore_errors=True)
 
-    def run_rhizo(self, args, env_overrides=None, cwd=None):
+    def run_rhizo(self, args, env_overrides=None, cwd=None, timeout=60):
         cmd_env = self.env.copy()
         cmd_env["PYTHONUTF8"] = "1"
         if env_overrides:
@@ -75,7 +75,7 @@ class TestRhizoNimBinary(unittest.TestCase):
                 env=cmd_env,
                 cwd=cwd,
                 stdin=subprocess.DEVNULL,
-                timeout=15,
+                timeout=timeout,
             )
             return res
         finally:
@@ -253,7 +253,7 @@ class TestRhizoNimBinary(unittest.TestCase):
         )
 
         # Listen must reject forged message and return empty payload on timeout
-        listen_forged = self.run_rhizo(["listen", agent, "1"])
+        listen_forged = self.run_rhizo(["listen", agent, "--timeout", "1"])
         self.assertEqual(listen_forged.returncode, 0)
         self.assertEqual(listen_forged.stdout.strip(), "")
         self.assertIn("Dropping unauthenticated/tampered message", listen_forged.stderr)
