@@ -3,7 +3,44 @@
 # Handles cascading resolution across CLI flags, env vars, workspace TOML,
 # user config, system config, defaults, and named profiles.
 
-import std/[os, strutils, tables, json, options, uri, sets]
+import std/[os, strutils, tables, json, options, uri, sets, net, nativesockets]
+
+when defined(macosx) or defined(macos) or defined(bsd):
+  proc sysctlbyname(name: cstring, oldp: pointer, oldlenp: ptr csize_t, newp: pointer, newlen: csize_t): cint {.importc: "sysctlbyname", header: "<sys/sysctl.h>".}
+
+proc getHostNameStr*(): string =
+  try:
+    let h = getHostName()
+    if h.len > 0: return h
+  except CatchableError:
+    discard
+  let e = getEnv("HOSTNAME", "").strip()
+  if e.len > 0: return e
+  return "localhost"
+
+proc getMachineId*(): string =
+  let envMid = getEnv("RHIZO_MACHINE_ID", "").strip()
+  if envMid.len > 0: return envMid
+
+  # macOS / BSD kernel UUID via C sysctlbyname (zero-subprocess, FFI native)
+  when defined(macosx) or defined(macos) or defined(bsd):
+    var buf = newString(64)
+    var size: csize_t = 64
+    if sysctlbyname("kern.uuid", addr buf[0], addr size, nil, 0) == 0:
+      if size > 1:
+        let uid = buf[0 ..< int(size - 1)].strip()
+        if uid.len > 0: return uid
+
+  # Linux machine-id
+  for p in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
+    if fileExists(p):
+      try:
+        let id = readFile(p).strip()
+        if id.len > 0: return id
+      except CatchableError:
+        discard
+
+  return getHostNameStr()
 
 # Universal Redis / Valkey URL parser
 proc parseRedisUrl*(rawUrl: string): tuple[host: string, port: int, password: string, db: int, tls: bool] =

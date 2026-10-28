@@ -12,41 +12,6 @@ import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_n
 
 proc sanitizeIdentifier*(raw: string): string
 
-when defined(macosx) or defined(macos) or defined(bsd):
-  proc sysctlbyname(name: cstring, oldp: pointer, oldlenp: ptr csize_t, newp: pointer, newlen: csize_t): cint {.importc: "sysctlbyname", header: "<sys/sysctl.h>".}
-
-proc getHostNameStr*(): string =
-  try:
-    let h = getHostName()
-    if h.len > 0: return h
-  except Exception:
-    discard
-  return getEnv("RHIZO_HOSTNAME", getEnv("HOSTNAME", getEnv("COMPUTERNAME", "localhost")))
-
-proc getMachineId*(): string =
-  let envMid = getEnv("RHIZO_MACHINE_ID", "").strip()
-  if envMid.len > 0: return envMid
-
-  # macOS / BSD kernel UUID via C sysctlbyname (zero-subprocess, FFI native)
-  when defined(macosx) or defined(macos) or defined(bsd):
-    var buf = newString(64)
-    var size: csize_t = 64
-    if sysctlbyname("kern.uuid", addr buf[0], addr size, nil, 0) == 0:
-      if size > 1:
-        let uid = buf[0 ..< int(size - 1)].strip()
-        if uid.len > 0: return uid
-
-  # Linux machine-id
-  for p in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
-    if fileExists(p):
-      try:
-        let id = readFile(p).strip()
-        if id.len > 0: return id
-      except CatchableError:
-        discard
-
-  return getHostNameStr()
-
 proc isPidAlive*(pid: int, remoteMachineId: string = "", remoteHost: string = ""): bool =
   if pid <= 0: return false
   let myMid = getMachineId()
@@ -2685,6 +2650,8 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
   # Record current session watermark for this listener
   try:
+    discard client.hSet(cfg.prefix & "agent:" & name, "machine_id", myMid)
+    discard client.hSet(cfg.prefix & "agent:" & name, "host", myHost)
     discard client.hSet(cfg.prefix & "agent:" & name, "last_version_notified:rhizo", RhizoVersion)
     let nowIso = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
     discard client.hSet(cfg.prefix & "agent:" & name, "last_version_notified_at:rhizo", nowIso)
@@ -2927,7 +2894,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         if isReassign:
           stderr.writeLine("🔄 [RHIZO SWARM REASSIGNMENT DIRECTIVE DELIVERED] 🔄")
         elif isUpgrade:
-          stderr.writeLine("⚡ [RHIZO PROTOCOL UPGRADE DIRECTIVE DELIVERED] ⚡")
+          stderr.writeLine("⚡ [RHIZO PROTOCOL UPGRADE NOTICE DELIVERED] ⚡")
         elif isTaskType:
           stderr.writeLine("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨")
         elif isBroadcastType:
@@ -2953,6 +2920,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("2. If your session has loaded subsidiary skills, re-read them via view_file; otherwise leave lazy-loaded.")
           stderr.writeLine("3. Inspect new CLI flags: rhizo --help")
           stderr.writeLine("4. Re-arm listener: " & exactCmd)
+          stderr.writeLine("NOTICE: This is an informational upgrade notification. Re-arm your listener; do NOT claim a task or execute code.")
         elif isBroadcastType:
           stderr.writeLine("AWARENESS NOTICE:")
           stderr.writeLine("This is a cluster broadcast for synchronization and shared awareness.")
@@ -2973,42 +2941,42 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           stderr.writeLine("1. OPERATOR OVERRIDE PRIORITY: A prompt, command, or slash command from the human")
           stderr.writeLine("   operator in this chat window ALWAYS takes absolute precedence over cluster tasks.")
           stderr.writeLine("2. ARM NOW & IMMEDIATE BACKGROUND LISTENER (DO NOT YIELD TURN):")
-        stderr.writeLine("   - In background-capable harnesses (Antigravity): Launch your background listener ('" & exactCmd & "')")
-        stderr.writeLine("     IMMEDIATELY right now in this very turn BEFORE writing code.")
-        stderr.writeLine("   - CRITICAL ANTIGRAVITY NON-YIELD INVARIANT: When you launch the background listener, your harness will say:")
-        stderr.writeLine("     'YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or B) simply update the user and end the turn. DO NOTHING ELSE.'")
-        stderr.writeLine("     YOU MUST ALWAYS CHOOSE (A) PROCEED TO OTHER RELEVANT WORK! NEVER choose (B) or end the turn.")
-        stderr.writeLine("   - Immediately claim the task ('rhizo task claim " & id & " --lease 900' or send a quick ACK reply)")
-        stderr.writeLine("     WITHOUT passing --listen. NEVER pass --listen on initial CLAIM or ACK replies.")
-        stderr.writeLine("   - For tasks taking >2 minutes (e.g. E2E/Playwright/builds), emit periodic progress:")
-        stderr.writeLine("     rhizo task progress " & id & " \"Step X/Y: ...\"")
-        stderr.writeLine("3. EXECUTE NOW: You are an autonomous cluster worker. A directive has been delivered.")
-        stderr.writeLine("   DO NOT wait for operator prompt. DO NOT yield your turn with a passive acknowledgment.")
-        stderr.writeLine("   Immediately read the message payload above, claim the task, and begin implementation.")
-        stderr.writeLine("4. RE-ARM BEFORE TURN-END: The listener has EXITED (0) after delivering this message.")
-        stderr.writeLine("   Ensure your single-shot listener is running in the background before concluding your turn (or use")
-        stderr.writeLine("   'rhizo reply --to " & fromAgent & " ... --listen' when sending your FINAL completion report):")
-        stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\" --listen")
-        stderr.writeLine("   Exact command: " & exactCmd)
-        stderr.writeLine("   Re-arm Listen: " & exactCmd)
-        stderr.writeLine("   Or if finished: rhizo close " & name)
-        stderr.writeLine("Capability-Tier Invocations (SKILL.md Section 3):")
-        case harness
-        of "opencode", "pi":
-          stderr.writeLine("  - Tier 1 (In-Process Extension): In-process extension fiber is active. DO NOT run a blocking 'rhizo listen'.")
-        of "antigravity":
-          stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
-        of "codex":
-          stderr.writeLine("  - Tier 3 (Codex Native Wakeup): Arm supervised single-shot listener ('" & exactCmd & "'); senders wake idle chats via native RHIZO_WAKE.")
-          stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly. Do not wrap in a loop.")
-        of "claude", "cursor", "copilot":
-          stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --claude")
-          stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
-        else:
-          stderr.writeLine("  - Tier 2 (Daemon Shell): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
-          stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): rhizo hook install [--codex|--claude]")
-          stderr.writeLine("  - Tier 4 (Synchronous Shell): Run '" & exactCmd & "' directly in foreground (or 'rhizo check-inbox')")
-        stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
+          stderr.writeLine("   - In background-capable harnesses (Antigravity): Launch your background listener ('" & exactCmd & "')")
+          stderr.writeLine("     IMMEDIATELY right now in this very turn BEFORE writing code.")
+          stderr.writeLine("   - CRITICAL ANTIGRAVITY NON-YIELD INVARIANT: When you launch the background listener, your harness will say:")
+          stderr.writeLine("     'YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or B) simply update the user and end the turn. DO NOTHING ELSE.'")
+          stderr.writeLine("     YOU MUST ALWAYS CHOOSE (A) PROCEED TO OTHER RELEVANT WORK! NEVER choose (B) or end the turn.")
+          stderr.writeLine("   - Immediately claim the task ('rhizo task claim " & id & " --lease 900' or send a quick ACK reply)")
+          stderr.writeLine("     WITHOUT passing --listen. NEVER pass --listen on initial CLAIM or ACK replies.")
+          stderr.writeLine("   - For tasks taking >2 minutes (e.g. E2E/Playwright/builds), emit periodic progress:")
+          stderr.writeLine("     rhizo task progress " & id & " \"Step X/Y: ...\"")
+          stderr.writeLine("3. EXECUTE NOW: You are an autonomous cluster worker. A directive has been delivered.")
+          stderr.writeLine("   DO NOT wait for operator prompt. DO NOT yield your turn with a passive acknowledgment.")
+          stderr.writeLine("   Immediately read the message payload above, claim the task, and begin implementation.")
+          stderr.writeLine("4. RE-ARM BEFORE TURN-END: The listener has EXITED (0) after delivering this message.")
+          stderr.writeLine("   Ensure your single-shot listener is running in the background before concluding your turn (or use")
+          stderr.writeLine("   'rhizo reply --to " & fromAgent & " ... --listen' when sending your FINAL completion report):")
+          stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\" --listen")
+          stderr.writeLine("   Exact command: " & exactCmd)
+          stderr.writeLine("   Re-arm Listen: " & exactCmd)
+          stderr.writeLine("   Or if finished: rhizo close " & name)
+          stderr.writeLine("Capability-Tier Invocations (SKILL.md Section 3):")
+          case harness
+          of "opencode", "pi":
+            stderr.writeLine("  - Tier 1 (In-Process Extension): In-process extension fiber is active. DO NOT run a blocking 'rhizo listen'.")
+          of "antigravity":
+            stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
+          of "codex":
+            stderr.writeLine("  - Tier 3 (Codex Native Wakeup): Arm supervised single-shot listener ('" & exactCmd & "'); senders wake idle chats via native RHIZO_WAKE.")
+            stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly. Do not wrap in a loop.")
+          of "claude", "cursor", "copilot":
+            stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --claude")
+            stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
+          else:
+            stderr.writeLine("  - Tier 2 (Daemon Shell): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
+            stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): rhizo hook install [--codex|--claude]")
+            stderr.writeLine("  - Tier 4 (Synchronous Shell): Run '" & exactCmd & "' directly in foreground (or 'rhizo check-inbox')")
+          stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
         stderr.writeLine("================================================================================\n")
         stderr.writeLine("(To silence this notice, pass --quiet / -q, or set RHIZO_QUIET=1)")
       return

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **System-Throttled Upgrade Notifications (`src/upgrade_notify.nim`, `src/config.nim`, `src/rhizo.nim`, `tests/test_upgrade_system_throttling.nim`)**:
+  - Throttled proactive protocol upgrade notifications to at most ONE worker per system (`machine_id` / `host`), picking the most recently active, available idle worker.
+  - Silently advanced session watermarks (`last_version_notified:rhizo`) for all other workers on that system without pushing to their inboxes or publishing to their pubsub channels, eliminating token-thrashing broadcast cascades across multi-agent clusters.
+  - Silenced local upgrade notifications when the invoking session on that machine is already at `currentVer`.
+  - Fixed indentation bug in `src/rhizo.nim` `doListen` where the `AUTONOMOUS WORKER MANDATE` banner was executed unconditionally on non-task messages (such as upgrade notifications).
+  - Clarified upgrade notice banner as `⚡ [RHIZO PROTOCOL UPGRADE NOTICE DELIVERED] ⚡`, instructing workers to re-arm their listeners rather than claiming tasks or attempting code execution.
+
 ## [0.2.28] - 2026-10-28
 
 ### Added
