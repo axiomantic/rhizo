@@ -9194,23 +9194,6 @@ proc main() =
         stderr.writeLine(res)
         quit(1)
 
-      # Write local task mirror file
-      let mirrorFile = currentTaskFilePath(worker)
-      try:
-        var mirrorObj = newJObject()
-        mirrorObj["task_id"] = %taskId
-        mirrorObj["id"] = %taskId
-        mirrorObj["owner"] = %worker
-        mirrorObj["worker"] = %worker
-        mirrorObj["claimed_at"] = %getTime().toUnix()
-        mirrorObj["lease_until"] = %(getTime().toUnix() + leaseSec)
-        if strandPath.len > 0:
-          mirrorObj["strand_path"] = %strandPath
-        createDir(mirrorFile.splitPath.head)
-        writeFile(mirrorFile, pretty(mirrorObj))
-      except CatchableError:
-        discard
-
       if worker.len > 0 and isCryptoAvailable():
         let privKey = loadSessionPrivKey(worker)
         if privKey.len == 64:
