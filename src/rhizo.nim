@@ -4757,8 +4757,13 @@ proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken
 
     if weave:
       stderr.writeLine("[VINE] Fast-forward weaving strand into trunk...")
-      let weaveCmd = if strandPath.len > 0: "vine weave --dir " & quoteShell(strandPath) else: "vine weave"
-      let (wOut, wCode) = execCmdEx(weaveCmd)
+      let vineExe = findExe("vine")
+      let weaveArgs = if strandPath.len > 0: "weave --dir " & quoteShell(strandPath) else: "weave"
+      let (wOut, wCode) =
+        when defined(windows):
+          execCmdEx("cmd.exe /c " & quoteShell(if vineExe.len > 0: vineExe else: "vine") & " " & weaveArgs)
+        else:
+          execCmdEx(quoteShell(if vineExe.len > 0: vineExe else: "vine") & " " & weaveArgs)
       if wCode != 0:
         stderr.writeLine("Error: Vine weave failed: " & wOut)
         quit(1)
@@ -9157,11 +9162,16 @@ proc main() =
 
       # Auto-provision Vine strand if vine is available and not disabled
       if not noVine and strandPath.len == 0:
-        if findExe("vine").len == 0:
+        let vineExe = findExe("vine")
+        if vineExe.len == 0:
           stderr.writeLine("Error: 'vine' binary not found in PATH. To claim without Vine strand isolation, pass '--no-vine' or specify an existing strand with '--strand <path>'.")
           quit(1)
 
-        let (vOut, vCode) = execCmdEx("vine new " & quoteShell(taskId))
+        let (vOut, vCode) =
+          when defined(windows):
+            execCmdEx("cmd.exe /c " & quoteShell(vineExe) & " new " & quoteShell(taskId))
+          else:
+            execCmdEx(quoteShell(vineExe) & " new " & quoteShell(taskId))
         if vCode != 0:
           stderr.writeLine("Error: 'vine new " & taskId & "' failed (exit " & $vCode & "):\n" & vOut.strip())
           quit(vCode)
