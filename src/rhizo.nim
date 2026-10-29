@@ -9126,18 +9126,60 @@ proc main() =
         quit(1)
 
       # Auto-provision Vine strand if vine is available and not disabled
-      if not noVine and strandPath.len == 0 and findExe("vine").len > 0:
+      if not noVine and strandPath.len == 0:
+        if findExe("vine").len == 0:
+          stderr.writeLine("Error: 'vine' binary not found in PATH. To claim without Vine strand isolation, pass '--no-vine' or specify an existing strand with '--strand <path>'.")
+          quit(1)
+
         let (vOut, vCode) = execCmdEx("vine new " & quoteShell(taskId))
-        if vCode == 0:
-          strandPath = ".vine/strands/" & taskId
-          stderr.writeLine("[VINE] Provisioned isolated strand: " & strandPath)
-        else:
-          stderr.writeLine("[VINE NOTICE] vine new failed or skipped: " & vOut.strip())
+        if vCode != 0:
+          stderr.writeLine("Error: 'vine new " & taskId & "' failed (exit " & $vCode & "):\n" & vOut.strip())
+          quit(vCode)
+
+        try:
+          let vJson = parseJson(vOut.strip())
+          if vJson.hasKey("strand_path") and vJson["strand_path"].kind == JString and vJson["strand_path"].getStr().len > 0:
+            strandPath = vJson["strand_path"].getStr().normalizedPath
+          elif vJson.hasKey("path") and vJson["path"].kind == JString and vJson["path"].getStr().len > 0:
+            strandPath = vJson["path"].getStr().normalizedPath
+          else:
+            stderr.writeLine("Error: Vine output missing valid 'strand_path':\n" & vOut.strip())
+            quit(1)
+        except CatchableError as e:
+          stderr.writeLine("Error: Failed to parse Vine output as JSON: " & e.msg & "\nOutput: " & vOut.strip())
+          quit(1)
+
+        if not dirExists(strandPath):
+          stderr.writeLine("Error: Provisioned strand path does not exist on disk: " & strandPath)
+          quit(1)
+        stderr.writeLine("[VINE] Provisioned isolated strand: " & strandPath)
+      elif strandPath.len > 0:
+        strandPath = strandPath.normalizedPath
+        if not dirExists(strandPath):
+          stderr.writeLine("Error: Specified strand path does not exist on disk: " & strandPath)
+          quit(1)
 
       let res = doTask(cfg, "claim", [taskId, worker, $leaseSec, strandPath])
       if res.startsWith("ERR"):
         stderr.writeLine(res)
         quit(1)
+
+      # Write local task mirror file
+      let mirrorFile = currentTaskFilePath(worker)
+      try:
+        var mirrorObj = newJObject()
+        mirrorObj["task_id"] = %taskId
+        mirrorObj["id"] = %taskId
+        mirrorObj["owner"] = %worker
+        mirrorObj["worker"] = %worker
+        mirrorObj["claimed_at"] = %getTime().toUnix()
+        mirrorObj["lease_until"] = %(getTime().toUnix() + leaseSec)
+        if strandPath.len > 0:
+          mirrorObj["strand_path"] = %strandPath
+        createDir(mirrorFile.splitPath.head)
+        writeFile(mirrorFile, pretty(mirrorObj))
+      except CatchableError:
+        discard
 
       if worker.len > 0 and isCryptoAvailable():
         let privKey = loadSessionPrivKey(worker)
