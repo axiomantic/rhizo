@@ -2014,6 +2014,15 @@ proc resetWatchdogStreak*(cfg: RhizoConfig, agentName: string) =
     discard client.hSet(cfg.prefix & "watchdog:" & normName, "streak", "0")
   except CatchableError: discard
 
+proc canonicalizePath*(p: string): string =
+  if p.len == 0: return ""
+  try:
+    if dirExists(p) or fileExists(p):
+      return expandFilename(p).normalizedPath
+  except CatchableError:
+    discard
+  return p.normalizedPath
+
 proc findVineManifestPath*(startDir: string = ""): string =
   var cur = if startDir.len > 0:
               try: expandFilename(startDir) except CatchableError: startDir
@@ -9139,9 +9148,9 @@ proc main() =
         try:
           let vJson = parseJson(vOut.strip())
           if vJson.hasKey("strand_path") and vJson["strand_path"].kind == JString and vJson["strand_path"].getStr().len > 0:
-            strandPath = vJson["strand_path"].getStr().normalizedPath
+            strandPath = canonicalizePath(vJson["strand_path"].getStr())
           elif vJson.hasKey("path") and vJson["path"].kind == JString and vJson["path"].getStr().len > 0:
-            strandPath = vJson["path"].getStr().normalizedPath
+            strandPath = canonicalizePath(vJson["path"].getStr())
           else:
             stderr.writeLine("Error: Vine output missing valid 'strand_path':\n" & vOut.strip())
             quit(1)
@@ -9154,7 +9163,7 @@ proc main() =
           quit(1)
         stderr.writeLine("[VINE] Provisioned isolated strand: " & strandPath)
       elif strandPath.len > 0:
-        strandPath = strandPath.normalizedPath
+        strandPath = canonicalizePath(strandPath)
         if not dirExists(strandPath):
           stderr.writeLine("Error: Specified strand path does not exist on disk: " & strandPath)
           quit(1)

@@ -68,14 +68,15 @@ exit 1
         # 2. Claim task - should invoke mock vine and capture custom_workspace
         code, out, err = run_cmd(f"{RHIZO_BIN} task claim task-101 --lease 600", env=env, cwd=tmpdir)
         assert code == 0, f"Failed to claim task: {err}\nStdout: {out}"
-        assert f"strand: {custom_workspace}" in out, f"User-visible output missing actual strand path: {out}"
+        resolved_custom = str(custom_workspace.resolve())
+        assert (f"strand: {custom_workspace}" in out or f"strand: {resolved_custom}" in out), f"User-visible output missing actual strand path: {out}"
         assert "[VINE] Provisioned isolated strand:" in err, f"Stderr missing vine notice: {err}"
 
         # 3. Verify Redis task record via task get --json
         code, out, err = run_cmd(f"{RHIZO_BIN} task get task-101 --json", env=env, cwd=tmpdir)
         assert code == 0, f"task get failed: {err}"
         task_data = json.loads(out)
-        assert task_data.get("strand_path") == str(custom_workspace), f"Redis task record missing strand_path: {task_data}"
+        assert task_data.get("strand_path") in [str(custom_workspace), resolved_custom], f"Redis task record missing strand_path: {task_data}"
         assert task_data.get("state") == "IN_PROGRESS"
         assert task_data.get("owner") == "test-worker-1"
 
@@ -83,7 +84,7 @@ exit 1
         mirror_file = home_dir / ".config" / "rhizo" / "current_task_test-worker-1.json"
         assert mirror_file.exists(), f"Local task mirror file not found at {mirror_file}"
         mirror_data = json.loads(mirror_file.read_text())
-        assert mirror_data.get("strand_path") == str(custom_workspace), f"Mirror missing strand_path: {mirror_data}"
+        assert mirror_data.get("strand_path") in [str(custom_workspace), resolved_custom], f"Mirror missing strand_path: {mirror_data}"
         assert mirror_data.get("task_id") == "task-101"
         assert mirror_data.get("owner") == "test-worker-1"
 
@@ -107,12 +108,13 @@ def test_task_claim_explicit_strand_override():
         # Pass explicit --strand
         code, out, err = run_cmd(f"{RHIZO_BIN} task claim task-102 --strand '{explicit_strand}'", env=env, cwd=tmpdir)
         assert code == 0, f"claim with --strand failed: {err}"
-        assert f"strand: {explicit_strand}" in out
+        resolved_explicit = str(explicit_strand.resolve())
+        assert (f"strand: {explicit_strand}" in out or f"strand: {resolved_explicit}" in out)
 
         code, out, err = run_cmd(f"{RHIZO_BIN} task get task-102 --json", env=env, cwd=tmpdir)
         assert code == 0
         task_data = json.loads(out)
-        assert task_data.get("strand_path") == str(explicit_strand)
+        assert task_data.get("strand_path") in [str(explicit_strand), resolved_explicit]
 
         # Negative control: non-existent strand path must fail
         code, out, err = run_cmd(f"{RHIZO_BIN} task create task-103 --title 'Bad Strand Test'", env=env, cwd=tmpdir)
@@ -253,7 +255,8 @@ def test_task_claim_real_vine_integration():
         assert code == 0, f"Claim failed with real vine: {err}\nStdout: {out}"
 
         # 3. Verify user-visible output carries actual strand path inside custom_workspaces
-        assert str(custom_workspaces) in out, f"Output does not contain custom workspace dir: {out}"
+        resolved_custom = str(custom_workspaces.resolve())
+        assert (str(custom_workspaces) in out or resolved_custom in out), f"Output does not contain custom workspace dir: {out}"
         assert "CLAIMED task 'task-real-1' for worker 'real-worker'" in out
 
         # 4. Verify task record in Redis
@@ -262,7 +265,7 @@ def test_task_claim_real_vine_integration():
         task_data = json.loads(out)
         claimed_strand = task_data.get("strand_path")
         assert claimed_strand is not None and len(claimed_strand) > 0, "Redis task record missing strand_path"
-        assert claimed_strand.startswith(str(custom_workspaces)), f"Strand path not under custom workspaces: {claimed_strand}"
+        assert (claimed_strand.startswith(str(custom_workspaces)) or claimed_strand.startswith(resolved_custom)), f"Strand path not under custom workspaces: {claimed_strand}"
         assert os.path.isdir(claimed_strand), f"Provisioned strand path does not exist on disk: {claimed_strand}"
 
         # 5. Verify local mirror
