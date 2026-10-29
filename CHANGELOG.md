@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.30] - 2026-10-29
+
+### Fixed
+- **Actual Provisioned Strand Path Consumption in `rhizo task claim` (`src/rhizo.nim`, `tests/test_task_claim_strand.py`)**:
+  - `rhizo task claim` now directly parses and consumes the machine-readable `strand_path` emitted by Vine (`vine new <taskId>`) instead of assuming `.vine/strands/<taskId>`.
+  - Validates that the provisioned strand directory exists on disk and exits with code 1 if Vine fails or returns invalid/missing JSON.
+  - Correctly records the validated path in the Redis task record, local mirror `~/.config/rhizo/current_task_<agent>.json`, and user output.
+  - Preserves explicit `--strand <path>` manual overrides and `--no-vine` non-mutating task execution workflows.
+- **Canonical Path Resolution for Symlinks and Windows Drive Letters (`src/rhizo.nim`, `tests/test_task_claim_strand.py`)**:
+  - Implemented `canonicalizePath(p: string)` via `expandFilename(p).normalizedPath` to ensure strand paths match across processes regardless of symlinked directories (e.g. `/var` vs `/private/var` on macOS) or Windows drive letter casing (`c:\` vs `C:\`).
+
 ## [0.2.29] - 2026-10-28
 
 ### Fixed

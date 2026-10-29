@@ -10,6 +10,9 @@ when defined(posix):
   import posix
 import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_notify, session_crypto, std/[net, asyncdispatch, httpclient]
 
+when not compiles(type(RedisResponseError)):
+  type RedisResponseError* = object of RedisError
+
 proc sanitizeIdentifier*(raw: string): string
 
 proc isPidAlive*(pid: int, remoteMachineId: string = "", remoteHost: string = ""): bool =
@@ -110,7 +113,7 @@ const
   strandLua*     = staticRead("../scripts/strand.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.29"
+  RhizoVersion*  = "0.2.30"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -2014,6 +2017,15 @@ proc resetWatchdogStreak*(cfg: RhizoConfig, agentName: string) =
     discard client.hSet(cfg.prefix & "watchdog:" & normName, "streak", "0")
   except CatchableError: discard
 
+proc canonicalizePath*(p: string): string =
+  if p.len == 0: return ""
+  try:
+    if dirExists(p) or fileExists(p):
+      return expandFilename(p).normalizedPath
+  except CatchableError:
+    discard
+  return p.normalizedPath
+
 proc findVineManifestPath*(startDir: string = ""): string =
   var cur = if startDir.len > 0:
               try: expandFilename(startDir) except CatchableError: startDir
@@ -2933,10 +2945,28 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         elif not isTaskType:
           stderr.writeLine("CONVERSATIONAL COORDINATION GUIDANCE:")
           stderr.writeLine("1. Review the conversational query / message payload above.")
-          stderr.writeLine("2. Respond to @" & fromAgent & " as appropriate:")
-          stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\"")
+          stderr.writeLine("2. Respond to @" & fromAgent & " as appropriate (or append --listen):")
+          stderr.writeLine("   Reply Command: rhizo reply --to " & fromAgent & " --subject " & quoteShell(replySubj) & " --body \"...\" --listen")
           stderr.writeLine("3. Re-arm your background listener before concluding turn:")
           stderr.writeLine("   Exact command: " & exactCmd)
+          stderr.writeLine("   Or if finished: rhizo close " & name)
+          stderr.writeLine("Capability-Tier Invocations (SKILL.md Section 3):")
+          case harness
+          of "opencode", "pi":
+            stderr.writeLine("  - Tier 1 (In-Process Extension): In-process extension fiber is active. DO NOT run a blocking 'rhizo listen'.")
+          of "antigravity":
+            stderr.writeLine("  - Tier 2 (Shell Daemon): Native daemon reactive pattern: run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
+          of "codex":
+            stderr.writeLine("  - Tier 3 (Codex Native Wakeup): Arm supervised single-shot listener ('" & exactCmd & "'); senders wake idle chats via native RHIZO_WAKE.")
+            stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly. Do not wrap in a loop.")
+          of "claude", "cursor", "copilot":
+            stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): Ensure stop hook is installed: rhizo hook install --claude")
+            stderr.writeLine("  - Session listener: Run '" & exactCmd & "' directly or append --listen to rhizo reply.")
+          else:
+            stderr.writeLine("  - Tier 2 (Daemon Shell): run_command(CommandLine=\"" & exactCmd & "\", IsDaemon=true, WaitMsBeforeAsync=500)")
+            stderr.writeLine("  - Tier 3 (Autonomous Stop Hook): rhizo hook install [--codex|--claude]")
+            stderr.writeLine("  - Tier 4 (Synchronous Shell): Run '" & exactCmd & "' directly in foreground (or 'rhizo check-inbox')")
+          stderr.writeLine("  RULE: Never wrap in 'while true' bash loop. Re-arming must be an independent task/turn.")
           stderr.writeLine("NOTICE: This is an informational peer message, not an autonomous task assignment.")
           stderr.writeLine("Do NOT run 'rhizo task claim'.")
         else:
@@ -4727,8 +4757,13 @@ proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken
 
     if weave:
       stderr.writeLine("[VINE] Fast-forward weaving strand into trunk...")
-      let weaveCmd = if strandPath.len > 0: "vine weave --dir " & quoteShell(strandPath) else: "vine weave"
-      let (wOut, wCode) = execCmdEx(weaveCmd)
+      let vineExe = findExe("vine")
+      let weaveArgs = if strandPath.len > 0: "weave --dir " & quoteShell(strandPath) else: "weave"
+      let (wOut, wCode) =
+        when defined(windows):
+          execCmdEx("cmd.exe /c " & quoteShell(if vineExe.len > 0: vineExe else: "vine") & " " & weaveArgs)
+        else:
+          execCmdEx(quoteShell(if vineExe.len > 0: vineExe else: "vine") & " " & weaveArgs)
       if wCode != 0:
         stderr.writeLine("Error: Vine weave failed: " & wOut)
         quit(1)
@@ -9126,13 +9161,43 @@ proc main() =
         quit(1)
 
       # Auto-provision Vine strand if vine is available and not disabled
-      if not noVine and strandPath.len == 0 and findExe("vine").len > 0:
-        let (vOut, vCode) = execCmdEx("vine new " & quoteShell(taskId))
-        if vCode == 0:
-          strandPath = ".vine/strands/" & taskId
-          stderr.writeLine("[VINE] Provisioned isolated strand: " & strandPath)
-        else:
-          stderr.writeLine("[VINE NOTICE] vine new failed or skipped: " & vOut.strip())
+      if not noVine and strandPath.len == 0:
+        let vineExe = findExe("vine")
+        if vineExe.len == 0:
+          stderr.writeLine("Error: 'vine' binary not found in PATH. To claim without Vine strand isolation, pass '--no-vine' or specify an existing strand with '--strand <path>'.")
+          quit(1)
+
+        let (vOut, vCode) =
+          when defined(windows):
+            execCmdEx("cmd.exe /c " & quoteShell(vineExe) & " new " & quoteShell(taskId))
+          else:
+            execCmdEx(quoteShell(vineExe) & " new " & quoteShell(taskId))
+        if vCode != 0:
+          stderr.writeLine("Error: 'vine new " & taskId & "' failed (exit " & $vCode & "):\n" & vOut.strip())
+          quit(vCode)
+
+        try:
+          let vJson = parseJson(vOut.strip())
+          if vJson.hasKey("strand_path") and vJson["strand_path"].kind == JString and vJson["strand_path"].getStr().len > 0:
+            strandPath = canonicalizePath(vJson["strand_path"].getStr())
+          elif vJson.hasKey("path") and vJson["path"].kind == JString and vJson["path"].getStr().len > 0:
+            strandPath = canonicalizePath(vJson["path"].getStr())
+          else:
+            stderr.writeLine("Error: Vine output missing valid 'strand_path':\n" & vOut.strip())
+            quit(1)
+        except CatchableError as e:
+          stderr.writeLine("Error: Failed to parse Vine output as JSON: " & e.msg & "\nOutput: " & vOut.strip())
+          quit(1)
+
+        if not dirExists(strandPath):
+          stderr.writeLine("Error: Provisioned strand path does not exist on disk: " & strandPath)
+          quit(1)
+        stderr.writeLine("[VINE] Provisioned isolated strand: " & strandPath)
+      elif strandPath.len > 0:
+        strandPath = canonicalizePath(strandPath)
+        if not dirExists(strandPath):
+          stderr.writeLine("Error: Specified strand path does not exist on disk: " & strandPath)
+          quit(1)
 
       let res = doTask(cfg, "claim", [taskId, worker, $leaseSec, strandPath])
       if res.startsWith("ERR"):
