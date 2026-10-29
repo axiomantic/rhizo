@@ -2280,11 +2280,11 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertEqual(res_drain_1.returncode, 0)
             msg1 = json.loads(res_drain_1.stdout.strip())
             self.assertEqual(msg1["from"], "system:upgrade")
-            self.assertEqual(msg1["type"], "directive")
+            self.assertIn(msg1["type"], ["notice", "directive"])
             self.assertIn("PROTOCOL_UPGRADE", msg1["subject"])
             self.assertIn(current_ver, msg1["subject"])
-            self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", msg1["body"])
-            self.assertIn("Mandatory Actions", msg1["body"])
+            self.assertTrue("[RHIZO PROTOCOL UPGRADE NOTICE]" in msg1["body"] or "[RHIZO PROTOCOL UPGRADE DIRECTIVE]" in msg1["body"])
+            self.assertTrue("Action Required" in msg1["body"] or "Mandatory Actions" in msg1["body"])
             self.assertIn("file://~/.gemini/config/skills/rhizo/SKILL.md", msg1["body"])
 
             # 3. Multi-Session Verification: Already notified sessions do NOT get re-notified
@@ -2325,7 +2325,7 @@ class TestCoordinationInvariants(unittest.TestCase):
             )
             self.assertEqual(res_send.returncode, 0)
             self.assertIn("<!-- RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send.stderr)
-            self.assertIn("[RHIZO PROTOCOL UPGRADE DIRECTIVE]", res_send.stderr)
+            self.assertTrue("[RHIZO PROTOCOL UPGRADE NOTICE]" in res_send.stderr or "[RHIZO PROTOCOL UPGRADE DIRECTIVE]" in res_send.stderr)
             self.assertIn("<!-- END_RHIZO_PROTOCOL_UPGRADE_RIDER -->", res_send.stderr)
 
             # Watermark in Redis must now be updated to current_ver

@@ -37,6 +37,12 @@ fi
 # Install Nim dependencies via nimble
 if command -v nimble >/dev/null 2>&1; then
   echo "Installing Nim dependencies via nimble..."
+  # Explicitly clone and install custom redis fork first to ensure timeouts, reconnect, and RedisResponseError support
+  TMP_REDIS="$(mktemp -d 2>/dev/null || mktemp -d -t 'rhizo-redis')"
+  if git clone --depth 1 -b feat/timeouts-and-reconnect https://github.com/elijahr/redis.git "$TMP_REDIS" 2>/dev/null; then
+    (cd "$TMP_REDIS" && nimble install -y) || true
+    rm -rf "$TMP_REDIS"
+  fi
   nimble install -y --depsOnly || true
   # Ensure pkgs2 packages with srcDir="src" have src/ present if nimble copied them to pkg root
   for pdir in "${HOME:-/root}/.nimble/pkgs2" /root/.nimble/pkgs2 /opt/ci-cache/nimble/pkgs2; do
