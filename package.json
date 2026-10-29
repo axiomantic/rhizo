@@ -1,6 +1,6 @@
 {
   "name": "@axiomantic/rhizo",
-  "version": "0.2.29",
+  "version": "0.2.30",
   "description": "Inter-assistant communication bus, monotonic fencing locks, and work queues over Redis",
   "main": "bin/run.js",
   "bin": {
