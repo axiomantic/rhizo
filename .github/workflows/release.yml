@@ -14,7 +14,7 @@ jobs:
     name: Build & Verify Linux Packages
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract version tag
         id: vars
@@ -209,7 +209,7 @@ jobs:
     name: Build & Verify macOS Packages
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Nim via mise
         uses: jdx/mise-action@v4
@@ -280,7 +280,7 @@ jobs:
     name: Build & Verify Windows Package
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Nim compiler
         uses: jiro4989/setup-nim-action@v2
@@ -350,7 +350,7 @@ jobs:
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all release artifacts
         uses: actions/download-artifact@v8
@@ -432,7 +432,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js (v22)
         uses: actions/setup-node@v4
