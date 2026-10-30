@@ -64,7 +64,18 @@ jobs:
           pip install -e . "skilz>=0.1.0"
 
       - name: Compile native Nim binary
-        run: scripts/ci/build.sh
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          rm -f bin/rhizo bin/rhizo.exe
+          TMP_REDIS="$(mktemp -d 2>/dev/null || mktemp -d -t 'rhizo-redis')"
+          if git clone --depth 1 -b feat/timeouts-and-reconnect https://github.com/elijahr/redis.git "$TMP_REDIS" 2>/dev/null; then
+            (cd "$TMP_REDIS" && nimble install -y) || true
+            rm -rf "$TMP_REDIS"
+          fi
+          nimble install -y --depsOnly || true
+          nimble build -y -d:release
+          ./bin/rhizo --version || ./bin/rhizo --help >/dev/null
 
       - name: Run LLM Integration Tests
         env:

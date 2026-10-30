@@ -96,19 +96,50 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: scripts/ci/install-deps.sh
+        run: |
+          set -euo pipefail
+          TMP_REDIS="$(mktemp -d 2>/dev/null || mktemp -d -t 'rhizo-redis')"
+          if git clone --depth 1 -b feat/timeouts-and-reconnect https://github.com/elijahr/redis.git "$TMP_REDIS" 2>/dev/null; then
+            (cd "$TMP_REDIS" && nimble install -y) || true
+            rm -rf "$TMP_REDIS"
+          fi
+          nimble install -y --depsOnly || true
+          for pdir in "${HOME:-/root}/.nimble/pkgs2" /root/.nimble/pkgs2; do
+            if [ -d "$pdir" ]; then
+              for d in "$pdir"/*; do
+                if [ -d "$d" ] && [ ! -e "$d/src" ]; then
+                  ln -s . "$d/src" 2>/dev/null || true
+                fi
+              done
+            fi
+          done
+          python -m pip install --upgrade pip
+          python -m pip install -e . "skilz>=0.1.0" || python -m pip install -e .
 
       - name: Verify rule files in sync with AGENTS.md
         run: python scripts/compile_rules.py --check
 
       - name: Compile native Nim binary
-        run: scripts/ci/build.sh
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          rm -f bin/rhizo bin/rhizo.exe
+          if command -v nimble >/dev/null 2>&1; then
+            nimble build -y -d:release
+          else
+            nim c -d:release -o:bin/rhizo src/rhizo.nim
+          fi
+          if [ -f "./bin/rhizo.exe" ]; then
+            ./bin/rhizo.exe --version || ./bin/rhizo.exe --help >/dev/null
+          else
+            ./bin/rhizo --version || ./bin/rhizo --help >/dev/null
+          fi
 
       - name: Run test suite
         env:
           RHIZO_REDIS_URL: redis://127.0.0.1:6379
           PYTHONUTF8: "1"
-        run: scripts/ci/test.sh
+        run: python -m pytest -v -m "not llm"
 
   auto-tag:
     name: Auto-Tag on Version Bump

@@ -29,7 +29,7 @@ fmt:
 
 # 5. Build Artifacts
 build:
-    scripts/ci/build.sh
+    mkdir -p bin && nimble build -y -d:release
 
 # 8. Clean Build Artifacts
 clean:

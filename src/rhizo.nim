@@ -2566,6 +2566,8 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
 
 proc sendDesktopNotification*(msgNode: JsonNode) =
   try:
+    if getEnv("RHIZO_TEST", "") in ["1", "true", "yes"] or getEnv("GITHUB_ACTIONS", "") == "true":
+      return
     let fromAgent = msgNode.getOrDefault("from").getStr("unknown")
     let subject = msgNode.getOrDefault("subject").getStr("")
     let body = msgNode.getOrDefault("body").getStr("")

@@ -54,8 +54,6 @@ brew services start redis  # or: docker run -d -p 6379:6379 redis:alpine
 
 # 5. Run full test suite
 pytest
-# Or using shared CI script:
-./scripts/ci/test.sh
 ```
 
 ## Architectural Guidelines
@@ -69,18 +67,15 @@ pytest
 3. **EVALSHA Caching**:
    - All Lua scripts in `scripts/` are embedded at compile-time into `src/rhizo.nim` and cached using Redis `EVALSHA` with automatic `EVAL` fallback.
 
-## Continuous Integration & Dual-CI Architecture
+## Continuous Integration
 
-Rhizo uses a dual-CI architecture with shared execution scripts:
-- **Shared CI Scripts**: Build and test logic lives in `scripts/ci/` (`install-deps.sh`, `build.sh`, `test.sh`). These scripts can be run directly by developers locally from any terminal.
-- **Forgejo Actions (`.forgejo/workflows/ci.yml`)**: Covers Linux builds and test suite matrices against multiple Nim versions on the self-hosted Linux (Podman-backed) runner.
-- **GitHub Actions (`.github/workflows/ci.yml`)**: Preserves macOS (`macos-latest`) and Windows (`windows-latest`) platform verification legs where private runner capacity is not available, as well as release packaging.
+Rhizo runs continuous integration via GitHub Actions (`.github/workflows/ci.yml`) across Linux (`ubuntu-latest`), macOS (`macos-latest`), and Windows (`windows-latest`), as well as release packaging.
 
 ## Pull Request Process
 
 1. Fork the repo and create a topic branch from `main`.
-2. Ensure all unit and integration tests pass: `./scripts/ci/test.sh` (or `pytest`).
-3. If modifying `scripts/*.lua`, recompile `bin/rhizo` (`./scripts/ci/build.sh`).
+2. Ensure all unit and integration tests pass (`pytest`).
+3. If modifying `scripts/*.lua`, recompile `bin/rhizo` (`just build` or `nimble build -y -d:release`).
 4. Submit a Pull Request describing your changes, motivation, and test evidence.
 
 ---
@@ -250,7 +245,7 @@ Follow this 6-stage lifecycle:
 3. **Skill Adaptation**: Add prompt guidance in `SKILL.md` explaining how the harness invokes Rhizo.
 4. **Automated Testing**: Write unit tests verifying session mapping, hook execution, and urgency routing.
 5. **Installer Integration**: Add detection and placement logic to `scripts/install.sh`.
-6. **CI Verification**: Ensure all tests pass in `./scripts/ci/test.sh`.
+6. **CI Verification**: Ensure all tests pass (`pytest`).
 
 ### 12. How will we track and report any issues during deployment?
 - **Stderr Security Warnings**: All dropped, unauthenticated, or malformed messages produce explicit warnings on stderr with `[RHIZO SECURITY]`.

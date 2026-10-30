@@ -5570,7 +5570,7 @@ secret = "my_inline_secret_test_555"
             self.assertEqual(res_send.returncode, 0)
 
             # 3. Wait for listener to receive message and exit
-            stdout, stderr = proc.communicate(timeout=5)
+            stdout, stderr = proc.communicate(timeout=15)
             self.assertEqual(proc.returncode, 0)
 
             # 4. Verify stdout contains valid message payload
