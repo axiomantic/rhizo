@@ -197,7 +197,7 @@ jobs:
           test -f /tmp/clean-deb-arm64/usr/share/rhizo/skills/rhizo/SKILL.md
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-assets
           path: |
@@ -269,7 +269,7 @@ jobs:
           fi
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-assets
           path: |
@@ -339,7 +339,7 @@ jobs:
           Write-Host "Scoop manifest syntax verified successfully."
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-assets
           path: |
