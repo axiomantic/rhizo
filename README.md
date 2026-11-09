@@ -906,7 +906,7 @@ rhizo task complete <task_id>
 rhizo reply --to <orchestrator> --subject "Task Done" --body "..." --reply-to "<id>"
 ```
 
-- **Automatic Pre-Flight Verification**: When `rhizo task complete` or `rhizo reply` is called from within an active Vine strand (or when `.vine.json` is present), Rhizo automatically invokes `vine gate` (and verifies Key 3 independent adversarial audit ratification).
+- **Automatic Pre-Flight Verification**: When `rhizo task complete` or `rhizo reply` is called from within an active Vine strand, Rhizo automatically invokes `vine gate` (and verifies Key 3 independent adversarial audit ratification).
 - **Enforces Key 1, Key 2 & Key 3**:
   - **Key 1 (Mechanical)**: In-memory conflict check (`git merge-tree --write-tree`).
   - **Key 2 (Semantic)**: Live compiler, test suite, and changelog verification inside the strand (`vine gate`).

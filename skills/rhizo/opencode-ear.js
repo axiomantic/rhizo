@@ -665,7 +665,7 @@ function getOrientationReminder(sessionId) {
       }
     }
   }
-  return `[RHIZO NOTICE: If this task was operating in an isolated workspace/strand, inspect active workspaces ` + `(e.g., via 'vine list' or checking ~/Development/workspaces/) and .vine.json to reorient ` + `yourself before making edits in the canonical repository root.]`;
+  return `[RHIZO NOTICE: If this task was operating in an isolated workspace/strand, inspect active workspaces ` + `(e.g., via 'vine list' or checking ~/Development/workspaces/) to reorient ` + `yourself before making edits in the canonical repository root.]`;
 }
 
 // src/index.ts

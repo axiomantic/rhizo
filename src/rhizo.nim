@@ -4,7 +4,7 @@
 
 import std/[
   os, osproc, strutils, json, openssl, sha1, terminal,
-  times, random, options, base64, tables, sets, nativesockets, sequtils
+  times, random, options, base64, tables, strtabs, sets, nativesockets, sequtils
 ]
 when defined(posix):
   import posix
@@ -1001,37 +1001,85 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
     return ensureProjectScopedName(cfg, cfg.agentName)
   return ""
 
-proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string] =
+proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string, mode: string] =
   let normName = sanitizeIdentifier(name)
   var client: Redis
   try:
     client = openRedisClient(cfg.redisUrl)
   except CatchableError:
-    return (false, 0, "")
+    return (false, 0, "", "")
   defer:
     try: client.close() except CatchableError: discard
 
   try:
     let val = client.get(cfg.prefix & "listener:" & normName)
     if val == redisNil or val.len == 0:
-      return (false, 0, "")
+      return (false, 0, "", "")
     let node = parseJson(val)
     let pid = node.getOrDefault("pid").getInt(0)
     let host = node.getOrDefault("host").getStr("")
     let mid = node.getOrDefault("machine_id").getStr("")
+    let mode = node.getOrDefault("mode").getStr("")
     let currentHost = getHostNameStr()
     let currentMid = getMachineId()
     if (mid == currentMid or (mid.len == 0 and host == currentHost)) and pid > 0:
       if not isPidAlive(pid, mid, host):
         # Stale lock: process is no longer alive on this machine
         discard client.del(@[cfg.prefix & "listener:" & normName])
-        return (false, 0, "")
+        return (false, 0, "", "")
       else:
-        return (true, pid, host)
+        return (true, pid, host, mode)
     else:
-      return (true, pid, host)
+      return (true, pid, host, mode)
   except CatchableError:
-    return (false, 0, "")
+    return (false, 0, "", "")
+
+proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bool =
+  let normName = sanitizeIdentifier(name)
+  if normName.len == 0: return false
+  if getEnv("RHIZO_EAR_DISABLED", "") in ["1", "true", "yes"]: return false
+  if getEnv("PYTEST_CURRENT_TEST", "").len > 0: return false
+
+  let (alreadyListening, existingPid, existingHost, existingMode) = getActiveListenerInfo(cfg, normName)
+  if alreadyListening:
+    return true
+
+  var lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
+  var convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+  var rClient = client
+  var closeClient = false
+  if rClient == nil:
+    try:
+      rClient = openRedisClient(cfg.redisUrl)
+      closeClient = true
+    except CatchableError:
+      return false
+  defer:
+    if closeClient and rClient != nil:
+      try: rClient.close() except CatchableError: discard
+
+  if lsAddr.len == 0 and rClient != nil:
+    try:
+      let v = rClient.hGet(cfg.prefix & "agent:" & normName, "agy_ls_address")
+      if v != redisNil and v.len > 0: lsAddr = v.strip()
+    except CatchableError: discard
+
+  if convId.len == 0 and rClient != nil:
+    try:
+      let v = rClient.hGet(cfg.prefix & "agent:" & normName, "agy_conversation_id")
+      if v != redisNil and v.len > 0: convId = v.strip()
+    except CatchableError: discard
+
+  if lsAddr.len > 0 and convId.len > 0:
+    let logDir = getHomeDir() / ".config" / "rhizo" / "logs"
+    try: createDir(logDir) except CatchableError: discard
+    let logPath = logDir / ("agy-ear-" & normName & ".log")
+    let rhizoExe = getAppFilename()
+    let cmd = "nohup " & quoteShell(rhizoExe) & " listen " & quoteShell(normName) & " --agy-ear --quiet < /dev/null > " & quoteShell(logPath) & " 2>&1 &"
+    discard execCmd(cmd)
+    return true
+
+  return false
 
 proc parseIsoOrUnix*(tsStr: string): int64 =
   if tsStr.len == 0: return 0
@@ -1393,6 +1441,9 @@ proc doHeartbeat*(cfg: RhizoConfig, agentName: string): string =
     resObj["session_pubkey"] = %pubHex
   return $resObj
 
+proc checkAndMintAuditTicket*(cfg: RhizoConfig, client: Redis, auditorName: string, parsed: JsonNode): tuple[isSubmitted: bool, taskId: string, ticketHex: string]
+proc printAuditTicketBanner*(auditorName, taskId, ticketHex: string)
+
 proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false, peek: bool = false): string =
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -1511,6 +1562,11 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
         stderr.writeLine("⚠️  [RHIZO WARNING] Stale message " & verb & "! Age: " & ageHuman & " (sent at " & ts & ").")
       else:
         parsed["is_stale"] = %false
+
+    if not peek:
+      let (isSubmitted, submittedTaskId, ticketHex) = checkAndMintAuditTicket(cfg, client, name, parsed)
+      if isSubmitted:
+        printAuditTicketBanner(name, submittedTaskId, ticketHex)
 
     validMessages.add(parsed)
 
@@ -1802,7 +1858,7 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
     return formatDirectoryJson(raw)
   return formatDirectory(raw)
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false)
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 proc extractTaskId*(subject: string, body: string = ""): string
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string
@@ -2000,8 +2056,34 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     echo "\n[PENDING BACKLOG]:"
     echo backlog
 
+  let harness = detectHarness(cfg)
+  if harness == "antigravity":
+    let lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
+    let csrfToken = getEnv("ANTIGRAVITY_CSRF_TOKEN", "").strip()
+    let projId = getEnv("ANTIGRAVITY_PROJECT_ID", "").strip()
+    let convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+    var agyExe = getEnv("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
+    if agyExe.len == 0:
+      let defaultAgy = getHomeDir() / ".gemini" / "antigravity" / "bin" / "agentapi"
+      if fileExists(defaultAgy): agyExe = defaultAgy
+      else: agyExe = findExe("agentapi")
+
+    try:
+      if lsAddr.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_ls_address", lsAddr)
+      if csrfToken.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_csrf_token", csrfToken)
+      if projId.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_project_id", projId)
+      if convId.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_conversation_id", convId)
+      if agyExe.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_agentapi_exe", agyExe)
+      if convId.len > 0:
+        discard client.hSet(cfg.prefix & "sessions", "agy:" & convId, name)
+        discard client.hSet(cfg.prefix & "agent_sessions", name, "agy:" & convId)
+    except CatchableError: discard
+
+    if not rearmListen and getEnv("RHIZO_EAR_DISABLED", "") notin ["1", "true", "yes"] and getEnv("PYTEST_CURRENT_TEST", "").len == 0:
+      discard ensureAgyEarAlive(cfg, name, client)
+
   if rearmListen:
-    let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, name)
+    let (alreadyListening, existingPid, existingHost, _) = getActiveListenerInfo(cfg, name)
     if alreadyListening:
       stderr.writeLine("[RHIZO LISTENER] Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Skipping duplicate listener.")
     else:
@@ -2074,6 +2156,59 @@ proc extractTaskId*(subject: string, body: string = ""): string =
       return sanitizeIdentifier(clean)
 
   return ""
+
+proc generateAuditTicket*(): string =
+  var rndBytes: array[3, uint8]
+  if RAND_bytes(rndBytes[0].addr, 3) != 1:
+    for i in 0..<3: rndBytes[i] = uint8(rand(255))
+  result = toHex(rndBytes[0].int, 2) & toHex(rndBytes[1].int, 2) & toHex(rndBytes[2].int, 2)
+  result = result.toLowerAscii
+
+proc checkAndMintAuditTicket*(cfg: RhizoConfig, client: Redis, auditorName: string, parsed: JsonNode): tuple[isSubmitted: bool, taskId: string, ticketHex: string] =
+  let subject = parsed.getOrDefault("subject").getStr("")
+  let body = parsed.getOrDefault("body").getStr("")
+  var isStrandSubmitted = subject.toUpperAscii().startsWith("STRAND_SUBMITTED")
+  var submittedTaskId = ""
+
+  if not isStrandSubmitted:
+    try:
+      let bNode = parseJson(body)
+      if bNode.kind == JObject and bNode.getOrDefault("event").getStr("").toUpperAscii() == "STRAND_SUBMITTED":
+        isStrandSubmitted = true
+        submittedTaskId = bNode.getOrDefault("task_id").getStr("")
+    except CatchableError: discard
+  else:
+    try:
+      let bNode = parseJson(body)
+      if bNode.kind == JObject:
+        submittedTaskId = bNode.getOrDefault("task_id").getStr("")
+    except CatchableError: discard
+    if submittedTaskId.len == 0:
+      submittedTaskId = extractTaskId(subject, body)
+
+  if isStrandSubmitted and submittedTaskId.len > 0:
+    let ticketHex = generateAuditTicket()
+    let ticketHash = computeSha256(ticketHex)
+    if client != nil:
+      try:
+        discard client.hSet("vine:strand:" & submittedTaskId, "audit_ticket_hash", ticketHash)
+        discard client.hSet(cfg.prefix & "strand:" & submittedTaskId, "audit_ticket_hash", ticketHash)
+        discard client.hSet(cfg.prefix & "vine:strand:" & submittedTaskId, "audit_ticket_hash", ticketHash)
+      except CatchableError: discard
+
+    parsed["audit_ticket"] = %ticketHex
+    parsed["audit_ticket_hash"] = %ticketHash
+    return (true, submittedTaskId, ticketHex)
+
+  return (false, "", "")
+
+proc printAuditTicketBanner*(auditorName, taskId, ticketHex: string) =
+  stderr.writeLine("")
+  stderr.writeLine("================================================================================")
+  stderr.writeLine("[AUDIT TICKET] Strand " & taskId & " audit ticket: " & ticketHex)
+  stderr.writeLine("  Approve: vine audit approve " & taskId & " --auditor " & auditorName & " --ticket " & ticketHex & " --weave --listen")
+  stderr.writeLine("  Reject : vine audit reject " & taskId & " --auditor " & auditorName & " --ticket " & ticketHex & " --reason \"...\" --listen")
+  stderr.writeLine("================================================================================")
 
 proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string] =
   var vj: JsonNode = nil
@@ -2201,8 +2336,8 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
   let lifecycle = vj.getOrDefault("lifecycle_state").getStr("").toUpperAscii()
   let gatePassedBool = vj.getOrDefault("gate_passed").getBool(false)
 
-  let statusOk = (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED"]) or
-                 (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED"]) or
+  let statusOk = (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "WOVEN"]) or
+                 (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "WOVEN"]) or
                  gatePassedBool
 
   var token = explicitGateToken
@@ -2210,6 +2345,8 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
     token = vj.getOrDefault("gate_token").getStr("")
   if token.len == 0:
     token = vj.getOrDefault("merge_tree_sha").getStr("")
+  if token.len == 0 and (status == "WOVEN" or lifecycle == "WOVEN"):
+    token = "woven"
 
   let tokenOk = (token.len > 0)
 
@@ -2537,7 +2674,7 @@ proc doSend*(cfg: RhizoConfig, toAgent, msgType, fromAgent, subject, body: strin
     if listenerAgent.len == 0:
       stderr.writeLine("Error: Cannot listen after send: no agent name identified. Pass '--listen <agent>' or '--from <agent>'.")
       quit(1)
-    let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, listenerAgent)
+    let (alreadyListening, existingPid, existingHost, _) = getActiveListenerInfo(cfg, listenerAgent)
     if alreadyListening:
       stderr.writeLine("[RHIZO BUS] Message sent to " & toAgent & ". Active listener already running for " & listenerAgent & " (PID " & $existingPid & " on " & existingHost & "); skipping duplicate listener.")
       return res
@@ -2592,7 +2729,137 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
   except Exception:
     discard
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false) =
+proc isRoutineAck*(rawMsgType, subject, body: string): bool =
+  if rawMsgType == "ack": return true
+  if rawMsgType in ["task", "work", "directive"]: return false
+  let lowerSubj = subject.toLowerAscii.strip
+  let lowerBody = body.toLowerAscii.strip
+  if lowerSubj.startsWith("ack") or lowerSubj.startsWith("re: ack") or
+     lowerSubj.contains("task claim") or lowerSubj.contains("claim acknowledged") or
+     lowerSubj.contains("audit claim") or lowerSubj == "task claimed":
+    if lowerBody.len < 300 or lowerBody.startsWith("ack") or
+       lowerBody.contains("acknowledged") or lowerBody.contains("claimed"):
+      return true
+  return false
+
+proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: JsonNode, id, fromAgent, subject, body: string, isTask: bool, effectiveTaskId: string) =
+  var convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+  if convId.len == 0 and client != nil:
+    try:
+      let v = client.hGet(cfg.prefix & "agent:" & name, "agy_conversation_id")
+      if v != redisNil and v.len > 0: convId = v.strip()
+    except CatchableError: discard
+  if convId.len == 0 and client != nil:
+    try:
+      let v = client.hGet(cfg.prefix & "agent:" & name, "conversation_id")
+      if v != redisNil and v.len > 0: convId = v.strip()
+    except CatchableError: discard
+  if convId.len == 0 and client != nil:
+    try:
+      let sessVal = client.hGet(cfg.prefix & "agent_sessions", name)
+      if sessVal != redisNil and sessVal.startsWith("agy:"):
+        convId = sessVal.substr(4).strip()
+    except CatchableError: discard
+  if convId.len == 0 and client != nil:
+    try:
+      let allSess = client.hGetAll(cfg.prefix & "sessions")
+      var i = 0
+      while i < allSess.len - 1:
+        let k = allSess[i]
+        let v = allSess[i+1]
+        if v.toLowerAscii == name.toLowerAscii and k.startsWith("agy:"):
+          convId = k.substr(4).strip()
+          break
+        i += 2
+    except CatchableError: discard
+
+  if convId.len == 0:
+    stderr.writeLine("[rhizo-agy-ear] WARNING: Could not resolve Antigravity conversation ID for @" & name & "; skipping agentapi delivery.")
+    return
+
+  var agyExe = getEnv("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
+  if agyExe.len == 0 and client != nil:
+    try:
+      let savedExe = client.hGet(cfg.prefix & "agent:" & name, "agy_agentapi_exe")
+      if savedExe != redisNil and savedExe.len > 0: agyExe = savedExe.strip()
+    except CatchableError: discard
+  if agyExe.len == 0:
+    let defaultAgyPath = getHomeDir() / ".gemini" / "antigravity" / "bin" / "agentapi"
+    if fileExists(defaultAgyPath):
+      agyExe = defaultAgyPath
+    else:
+      agyExe = findExe("agentapi")
+
+  if agyExe.len == 0:
+    stderr.writeLine("[rhizo-agy-ear] WARNING: agentapi executable not found; skipping agentapi delivery.")
+    return
+
+  var lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
+  var csrfToken = getEnv("ANTIGRAVITY_CSRF_TOKEN", "").strip()
+  var projId = getEnv("ANTIGRAVITY_PROJECT_ID", "").strip()
+  if (lsAddr.len == 0 or csrfToken.len == 0 or projId.len == 0) and client != nil:
+    try:
+      if lsAddr.len == 0:
+        let v = client.hGet(cfg.prefix & "agent:" & name, "agy_ls_address")
+        if v != redisNil and v.len > 0: lsAddr = v.strip()
+      if csrfToken.len == 0:
+        let v = client.hGet(cfg.prefix & "agent:" & name, "agy_csrf_token")
+        if v != redisNil and v.len > 0: csrfToken = v.strip()
+      if projId.len == 0:
+        let v = client.hGet(cfg.prefix & "agent:" & name, "agy_project_id")
+        if v != redisNil and v.len > 0: projId = v.strip()
+    except CatchableError: discard
+
+  let title = "[RHIZO] @" & fromAgent & " -> @" & name & ": " & subject
+  var payload = ""
+  if isTask:
+    payload.add("🚨 [RHIZO TASK DELIVERED: IMMEDIATE AUTONOMOUS ACTION REQUIRED] 🚨\n")
+    payload.add("Subject: " & subject & "\n\n")
+    payload.add("Payload:\n```json\n" & pretty(parsed, 2) & "\n```\n\n")
+    payload.add("AUTONOMOUS ACTION MANDATE:\n")
+    payload.add("1. Inspect the task payload and instructions.\n")
+    payload.add("2. Claim the task: rhizo task claim " & (if effectiveTaskId.len > 0: effectiveTaskId else: id) & " --lease 900\n")
+    payload.add("3. Provision or enter your assigned Vine strand, execute changes, verify with 'vine gate', and submit via 'vine submit'.\n")
+  else:
+    payload.add("💬 [RHIZO MESSAGE RECEIVED: @" & fromAgent & " -> @" & name & "]\n")
+    payload.add("Subject: " & subject & "\n\n")
+    payload.add("Payload:\n```json\n" & pretty(parsed, 2) & "\n```\n\n")
+    payload.add("CONVERSATIONAL GUIDANCE: Review message and reply if appropriate:\n")
+    payload.add("  rhizo reply --to " & fromAgent & " --subject " & quoteShell("Re: " & subject) & " --body \"...\"\n")
+
+  if parsed.hasKey("audit_ticket"):
+    let ticket = parsed["audit_ticket"].getStr("")
+    let tId = if effectiveTaskId.len > 0: effectiveTaskId else: id
+    payload.add("\n[AUDIT TICKET REQUIRED FOR RATIFICATION]\n")
+    payload.add("Strand : " & tId & "\n")
+    payload.add("Ticket : " & ticket & "\n")
+    payload.add("Approve: vine audit approve " & tId & " --auditor @" & name & " --ticket " & ticket & " --weave --listen\n")
+    payload.add("Reject : vine audit reject " & tId & " --auditor @" & name & " --ticket " & ticket & " --reason \"...\" --listen\n\n")
+
+  var cmdArgs: seq[string] = @[]
+  if agyExe.contains("language_server") or agyExe.endsWith("language_server"):
+    cmdArgs.add("agentapi")
+  cmdArgs.add("send-message")
+  cmdArgs.add("--title")
+  cmdArgs.add(title)
+  cmdArgs.add(convId)
+  cmdArgs.add(payload)
+
+  var callEnv = newStringTable(modeCaseSensitive)
+  for k, v in envPairs():
+    callEnv[k] = v
+  if lsAddr.len > 0: callEnv["ANTIGRAVITY_LS_ADDRESS"] = lsAddr
+  if csrfToken.len > 0: callEnv["ANTIGRAVITY_CSRF_TOKEN"] = csrfToken
+  if projId.len > 0: callEnv["ANTIGRAVITY_PROJECT_ID"] = projId
+
+  try:
+    let p = startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
+    discard p.waitForExit()
+    p.close()
+  except CatchableError as e:
+    stderr.writeLine("[rhizo-agy-ear] Error invoking agentapi send-message: " & e.msg)
+
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false) =
   var cleanName = ensureProjectScopedName(cfg, name)
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -2613,7 +2880,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   checkRedisPersistenceAdvisory(cfg, name, client)
   let secret = getSecret(cfg)
   let inboxKey = cfg.prefix & "inbox:" & name
-  let isForever = (timeoutSec <= 0 and (timeoutSec == 0 or cfg.listenTimeout <= 0))
+  let isForever = if timeoutSec > 0: false elif agyEar: true else: (timeoutSec == 0 or cfg.listenTimeout <= 0)
   let hbTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
   let pollChunk = min(60, max(1, hbTtl div 2))
 
@@ -2653,6 +2920,8 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   listenerNode["host"] = %myHost
   listenerNode["machine_id"] = %myMid
   listenerNode["started"] = %(getTime().toUnix())
+  if agyEar:
+    listenerNode["mode"] = %"agy-ear"
   let listenerJson = $listenerNode
   let listenerKey = cfg.prefix & "listener:" & name
   try:
@@ -2869,6 +3138,10 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       let isCompleteFlag = parsed.getOrDefault("complete").getBool(false) or (rawMsgType == "complete")
       let isTask = (rawMsgType in ["task", "work"]) and not isBroadcastMsg and not isCompleteFlag
 
+      let (isSubmitted, submittedTaskId, ticketHex) = checkAndMintAuditTicket(cfg, client, name, parsed)
+      if isSubmitted:
+        printAuditTicketBanner(name, submittedTaskId, ticketHex)
+
       if isTask:
         var effectiveTaskId = parsed.getOrDefault("task_id").getStr("")
         if effectiveTaskId.len == 0:
@@ -2881,10 +3154,28 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         except CatchableError:
           discard
 
+      if agyEar:
+        let isRoutine = isRoutineAck(rawMsgType, subject, body)
+        let suppressAck = getEnv("RHIZO_SUPPRESS_ACK_WAKE", "1") in ["1", "true", "yes"]
+        if isRoutine and suppressAck:
+          discard
+        else:
+          var effectiveTaskId = parsed.getOrDefault("task_id").getStr("")
+          if effectiveTaskId.len == 0:
+            effectiveTaskId = extractTaskId(subject, body)
+          if effectiveTaskId.len == 0:
+            effectiveTaskId = id
+          dispatchAgyMessage(cfg, client, name, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
+
       echo $parsed
       flushFile(stdout)
 
-      if continuous:
+      if continuous or agyEar:
+        if not isForever:
+          let elapsed = int(getTime().toUnix() - startTime)
+          remaining = max(0, effectiveTimeout - elapsed)
+          if remaining == 0:
+            return
         continue
 
       if not quiet and getEnv("RHIZO_QUIET", "0") notin ["1", "true", "yes"]:
@@ -5914,6 +6205,244 @@ proc doHookCodexStop*(cfg: RhizoConfig, agentNameParam: string = "", expectWorke
 
   return "{}"
 
+proc readStdinJson*(): JsonNode =
+  try:
+    if terminal.isatty(stdin):
+      return newJObject()
+    let raw = stdin.readAll().strip()
+    if raw.len > 0:
+      return parseJson(raw)
+  except CatchableError:
+    discard
+  return newJObject()
+
+proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: JsonNode = nil): string =
+  var normName = sanitizeIdentifier(agentNameParam)
+  if normName.len > 0:
+    return normName
+  let envAgent = getEnv("RHIZO_AGENT_NAME", "").strip()
+  if envAgent.len > 0:
+    return sanitizeIdentifier(envAgent)
+
+  var convId = ""
+  if stdinNode != nil and stdinNode.kind == JObject:
+    convId = stdinNode.getOrDefault("conversationId").getStr(stdinNode.getOrDefault("conversation_id").getStr("")).strip()
+
+  if convId.len == 0:
+    convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+
+  if convId.len > 0:
+    try:
+      var client = openRedisClient(cfg.redisUrl)
+      defer: (try: client.close() except CatchableError: discard)
+      let mapped = client.hGet(cfg.prefix & "sessions", "agy:" & convId)
+      if mapped != redisNil and mapped.len > 0:
+        return sanitizeIdentifier(mapped)
+    except CatchableError: discard
+
+  let act = getActiveAgentName(cfg, "")
+  if act.len > 0:
+    return sanitizeIdentifier(act)
+
+  return sanitizeIdentifier(resolveActiveAgentFromRedis(cfg))
+
+proc doHookAgyPreInvocation*(cfg: RhizoConfig, agentNameParam: string = ""): string =
+  let stdinNode = readStdinJson()
+  var normName = resolveAgyAgent(cfg, agentNameParam, stdinNode)
+  if normName.len == 0:
+    return "{}"
+
+  var messages: seq[string] = @[]
+
+  # Check active Vine strand
+  let strandFile = getCurrentDir() / ".vine.json"
+  if fileExists(strandFile):
+    try:
+      let vNode = parseJson(readFile(strandFile).strip())
+      let strandPath = vNode.getOrDefault("strand_path").getStr("")
+      let taskId = vNode.getOrDefault("task_id").getStr("")
+      if strandPath.len > 0:
+        messages.add("🌱 Active Vine Strand: " & strandPath & " (Task: " & taskId & "). Remember to verify with 'vine gate' before completion.")
+    except CatchableError: discard
+
+  # Check active piggyback reminders
+  let piggy = evaluatePiggyback(cfg, normName, 2)
+  let rems = piggy.getOrDefault("reminders")
+  if rems != nil and rems.kind == JArray and rems.len > 0:
+    for r in rems:
+      let rtext = r.getOrDefault("text").getStr("")
+      if rtext.len > 0:
+        messages.add("Advisory: " & rtext)
+
+  if messages.len == 0:
+    return "{}"
+
+  let combined = messages.join("\n")
+  var outNode = newJObject()
+  var stepsArr = newJArray()
+  var stepObj = newJObject()
+  stepObj["ephemeralMessage"] = %combined
+  stepsArr.add(stepObj)
+  outNode["injectSteps"] = stepsArr
+  return $outNode
+
+proc doHookAgyPostTool*(cfg: RhizoConfig, agentNameParam: string = ""): string =
+  let stdinNode = readStdinJson()
+  var normName = resolveAgyAgent(cfg, agentNameParam, stdinNode)
+  if normName.len == 0:
+    return "{}"
+
+  var client: Redis
+  try:
+    client = connectRedis(cfg.redisUrl)
+  except CatchableError:
+    return "{}"
+  defer:
+    try: client.close() except CatchableError: discard
+
+  let nowSec = getTime().toUnix()
+  let throttleKey = cfg.prefix & "agy_post_tool_throttle:" & normName
+  try:
+    let lastSeenStr = client.get(throttleKey)
+    if lastSeenStr != redisNil and lastSeenStr.len > 0:
+      let lastSeen = parseInt(lastSeenStr)
+      if nowSec - lastSeen < 15:
+        return "{}"
+    discard client.setEx(throttleKey, 30, $nowSec)
+  except CatchableError: discard
+
+  let hbTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
+  try:
+    discard client.setEx(cfg.prefix & "heartbeat:" & normName, hbTtl, "1")
+    discard client.hSet(cfg.prefix & "agent:" & normName, "last_seen", $nowSec)
+  except CatchableError: discard
+
+  let toolCall = stdinNode.getOrDefault("toolCall")
+  let toolName = if toolCall != nil and toolCall.kind == JObject: toolCall.getOrDefault("name").getStr("") else: ""
+  if toolName.len > 0:
+    let cTaskStr = doTask(cfg, "current", [normName])
+    if cTaskStr.len > 0 and cTaskStr != "{}":
+      try:
+        let tNode = parseJson(cTaskStr)
+        let tid = tNode.getOrDefault("id").getStr("")
+        let tState = tNode.getOrDefault("state").getStr("")
+        if tid.len > 0 and tState in ["CLAIMED", "IN_PROGRESS"]:
+          discard doTask(cfg, "progress", [tid, "Tool executed: " & toolName, "300"])
+      except CatchableError: discard
+
+  return "{}"
+
+proc doHookAgyStop*(cfg: RhizoConfig, agentNameParam: string = ""): string =
+  let stdinNode = readStdinJson()
+  var normName = resolveAgyAgent(cfg, agentNameParam, stdinNode)
+  if normName.len == 0:
+    return "{}"
+
+  var client: Redis
+  try:
+    client = connectRedis(cfg.redisUrl)
+  except CatchableError:
+    return "{}"
+  defer:
+    try: client.close() except CatchableError: discard
+
+  var probeTarget = normName
+  let aliasVal = try: client.hGet(cfg.prefix & "aliases", normName) except CatchableError: redisNil
+  if aliasVal != redisNil and aliasVal.len > 0:
+    probeTarget = sanitizeIdentifier(aliasVal)
+
+  let thrashKey = cfg.prefix & "hook_blocks:" & probeTarget
+  var blockCount = 0
+  try:
+    let bVal = client.get(thrashKey)
+    if bVal != redisNil and bVal.len > 0:
+      blockCount = parseInt(bVal)
+  except CatchableError:
+    blockCount = 0
+
+  if blockCount >= 3:
+    return "{}"
+
+  # 1. Active unacknowledged work item check
+  let agentTaskFile = currentTaskFilePath(probeTarget)
+  let legacyTaskFile = currentTaskFilePath("")
+  var pendingTaskPayload = ""
+  if fileExists(agentTaskFile):
+    try:
+      let rawStamp = readFile(agentTaskFile).strip()
+      let sNode = parseJson(rawStamp)
+      let owner = sNode.getOrDefault("owner").getStr(sNode.getOrDefault("target").getStr(sNode.getOrDefault("to").getStr("")))
+      if owner.len == 0 or sanitizeIdentifier(owner) == probeTarget:
+        pendingTaskPayload = rawStamp
+    except CatchableError: discard
+  elif fileExists(legacyTaskFile):
+    try:
+      let rawStamp = readFile(legacyTaskFile).strip()
+      let sNode = parseJson(rawStamp)
+      let owner = sNode.getOrDefault("owner").getStr(sNode.getOrDefault("target").getStr(sNode.getOrDefault("to").getStr("")))
+      if owner.len == 0 or sanitizeIdentifier(owner) == probeTarget:
+        pendingTaskPayload = rawStamp
+    except CatchableError: discard
+
+  if pendingTaskPayload.len == 0:
+    let cTaskStr = doTask(cfg, "current", [probeTarget])
+    if cTaskStr.len > 0 and cTaskStr != "{}":
+      pendingTaskPayload = cTaskStr
+
+  if pendingTaskPayload.len > 0:
+    try:
+      let tNode = parseJson(pendingTaskPayload)
+      let tState = tNode.getOrDefault("state").getStr("DELIVERED")
+      if tState in ["DELIVERED", "CLAIMED", "IN_PROGRESS"]:
+        let tid = tNode.getOrDefault("id").getStr("")
+        let tTitle = tNode.getOrDefault("title").getStr(tNode.getOrDefault("subject").getStr(""))
+        let tSpec = tNode.getOrDefault("spec").getStr(tNode.getOrDefault("body").getStr(""))
+
+        let newCount = client.incr(thrashKey)
+        if newCount == 1:
+          discard client.expire(thrashKey, 60)
+
+        var reason = "🚨 [CRITICAL RHIZO INTERLOCK] You have an UNACKNOWLEDGED ACTIVE TASK waiting for execution (@" & normName & ")!\n\n"
+        reason.add("Task ID: " & tid & "\n")
+        reason.add("Title: " & tTitle & "\n")
+        reason.add("State: " & tState & "\n")
+        if tSpec.len > 0:
+          reason.add("Instructions / Spec:\n" & tSpec & "\n\n")
+        reason.add("MANDATORY DIRECTIVE: You are an autonomous cluster worker. DO NOT yield your turn with unhandled tasks! Claim the task ('rhizo task claim " & tid & "'), execute in your Vine strand, verify with 'vine gate', and submit via 'vine submit'.")
+
+        var jOut = newJObject()
+        jOut["decision"] = %"continue"
+        jOut["reason"] = %reason
+        return $jOut
+    except CatchableError: discard
+
+  # 2. Unread inbox backlog
+  let inboxKey = cfg.prefix & "inbox:" & probeTarget
+  let inboxDepth = try: client.lLen(inboxKey) except CatchableError: 0
+  if inboxDepth > 0:
+    try:
+      let newCount = client.incr(thrashKey)
+      if newCount == 1:
+        discard client.expire(thrashKey, 60)
+    except CatchableError: discard
+
+    let messagesText = doDrain(cfg, probeTarget, 10, "hook")
+    var reason = "🚨 [CRITICAL RHIZO INTERLOCK] You have " & $inboxDepth & " unread message(s) waiting in your Rhizo inbox (@" & normName & ")!\n\n"
+    if messagesText.len > 0:
+      reason.add(messagesText & "\n\n")
+    reason.add("MANDATORY DIRECTIVE: You are an autonomous cluster worker. DO NOT yield your turn with unhandled messages! Read the tasks above and execute them immediately in your Vine strand.")
+
+    var jOut = newJObject()
+    jOut["decision"] = %"continue"
+    jOut["reason"] = %reason
+    return $jOut
+
+  try:
+    discard client.del(@[thrashKey])
+  except CatchableError: discard
+
+  return "{}"
+
 proc resolveSkillFile(filename: string): string =
   let envDir = getEnv("RHIZO_SKILLS_DIR", "")
   if envDir.len > 0:
@@ -6094,8 +6623,78 @@ proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentName
       getHomeDir() / ".pi" / "agent" / "extensions"
     return installEarFile("Pi ear extension", "pi-ear.ts", "rhizo-ear.ts", targetDir, EmbeddedPiEar)
 
+  of "antigravity", "agy":
+    let targetDir = if isLocal:
+      getCurrentDir() / ".agents"
+    else:
+      getHomeDir() / ".gemini" / "config"
+    createDir(targetDir)
+    let hooksFile = targetDir / "hooks.json"
+
+    var rootNode = newJObject()
+    if fileExists(hooksFile):
+      try:
+        rootNode = parseFile(hooksFile)
+      except CatchableError:
+        rootNode = newJObject()
+
+    if not rootNode.hasKey("rhizo") or rootNode["rhizo"].kind != JObject:
+      rootNode["rhizo"] = newJObject()
+
+    let agyPreInvCmd = if normName.len > 0:
+      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-pre-invocation --agent " & normName & "'"
+    else:
+      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-pre-invocation'"
+
+    let agyPostToolCmd = if normName.len > 0:
+      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-post-tool --agent " & normName & "'"
+    else:
+      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-post-tool'"
+
+    let agyStopCmd = if normName.len > 0:
+      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-stop --agent " & normName & "'"
+    else:
+      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-stop'"
+
+    # 1. PreInvocation (flat array of handler objects)
+    var preInvArr = newJArray()
+    var preInvObj = newJObject()
+    preInvObj["type"] = %"command"
+    preInvObj["command"] = %agyPreInvCmd
+    preInvObj["timeout"] = %10
+    preInvArr.add(preInvObj)
+    rootNode["rhizo"]["PreInvocation"] = preInvArr
+
+    # 2. PostToolUse (grouped: array of matcher objects)
+    var postToolHooks = newJArray()
+    var postToolObj = newJObject()
+    postToolObj["type"] = %"command"
+    postToolObj["command"] = %agyPostToolCmd
+    postToolObj["timeout"] = %10
+    postToolHooks.add(postToolObj)
+
+    var postToolWrapper = newJObject()
+    postToolWrapper["matcher"] = %"*"
+    postToolWrapper["hooks"] = postToolHooks
+
+    var postToolArr = newJArray()
+    postToolArr.add(postToolWrapper)
+    rootNode["rhizo"]["PostToolUse"] = postToolArr
+
+    # 3. Stop (flat array of handler objects)
+    var stopArr = newJArray()
+    var stopObj = newJObject()
+    stopObj["type"] = %"command"
+    stopObj["command"] = %agyStopCmd
+    stopObj["timeout"] = %10
+    stopArr.add(stopObj)
+    rootNode["rhizo"]["Stop"] = stopArr
+
+    writeFile(hooksFile, pretty(rootNode, 2) & "\n")
+    return "✓ Successfully installed Rhizo Antigravity hooks in " & hooksFile & "\n  PreInvocation : " & agyPreInvCmd & "\n  PostToolUse   : " & agyPostToolCmd & "\n  Stop          : " & agyStopCmd
+
   else:
-    return "Error: Unknown harness '" & targetHarness & "'. Supported: codex, claude, opencode, pi"
+    return "Error: Unknown harness '" & targetHarness & "'. Supported: codex, claude, opencode, pi, antigravity"
 
 # Local Laya System 1 Daemon Setup
 proc checkLayaHealth(endpoint: string, timeoutMs: int = 1000): bool =
@@ -6250,8 +6849,9 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     echo "  --json, -j            Output heartbeat status as JSON"
     return true
 
-  of "listen":
-    echo "Usage: rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--roster-guard/-R]"
+  of "listen", "ear":
+    echo "Usage: rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--agy-ear|--ear] [--roster-guard/-R]"
+    echo "       rhizo ear [name] [--quiet/-q]"
     echo ""
     echo "Options:"
     echo "  --timeout <sec>       Seconds to wait before exiting (default: 0 / infinite)"
@@ -6259,6 +6859,7 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     echo "  --notify, -n          Emit desktop notification on message receipt"
     echo "  --quiet, -q           Silence lifecycle postamble and diagnostic banners"
     echo "  --continuous, -c      Run continuously as daemon instead of single-shot"
+    echo "  --agy-ear, --ear      Run Antigravity continuous background ear (streams to agentapi send-message)"
     echo "  --roster-guard, -R    Reject unbootstrapped/alien agent messages"
     return true
 
@@ -6628,11 +7229,20 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
 
   of "hook":
     if subAction in ["codex-stop", "stop"]:
-      echo "Usage: rhizo hook codex-stop"
+      echo "Usage: rhizo hook codex-stop [--agent <name>]"
+    elif subAction in ["agy-pre-invocation", "pre-invocation"]:
+      echo "Usage: rhizo hook agy-pre-invocation [--agent <name>]"
+    elif subAction in ["agy-post-tool", "post-tool"]:
+      echo "Usage: rhizo hook agy-post-tool [--agent <name>]"
+    elif subAction in ["agy-stop"]:
+      echo "Usage: rhizo hook agy-stop [--agent <name>]"
     else:
       echo "Usage:"
-      echo "  rhizo hook install [--claude|--opencode|--pi|--codex] [--global|--local]"
-      echo "  rhizo hook codex-stop"
+      echo "  rhizo hook install [--claude|--opencode|--pi|--codex|--antigravity] [--global|--local]"
+      echo "  rhizo hook codex-stop [--agent <name>]"
+      echo "  rhizo hook agy-pre-invocation [--agent <name>]"
+      echo "  rhizo hook agy-post-tool [--agent <name>]"
+      echo "  rhizo hook agy-stop [--agent <name>]"
     return true
 
   of "session":
@@ -6830,7 +7440,8 @@ proc main() =
     echo "  rhizo version"
     echo "  rhizo name [prefix] [--ttl <sec>] [--json]"
     echo "  rhizo open [name] [tags] [--listen/-l]"
-    echo "  rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] (default timeout: 0 / infinite)"
+    echo "  rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--agy-ear] (default timeout: 0 / infinite)"
+    echo "  rhizo ear [name] [--quiet/-q]"
     echo "  rhizo send --to <agent> [--type task|query|reply|status] --subject <subj> --body <body> [--listen/-l]"
     echo "  rhizo reply --to <agent> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l]"
     echo "  rhizo broadcast [--tags <tags>] --subject <subj> --body <body>"
@@ -6876,7 +7487,7 @@ proc main() =
     echo "  rhizo config <show|get|path|init>"
     echo "  rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
     echo "  rhizo guide <install|uninstall|check> [path]"
-    echo "  rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local]"
+    echo "  rhizo hook <codex-stop|install|agy-pre-invocation|agy-post-tool|agy-stop> [--codex|--claude|--opencode|--pi|--antigravity] [--global] [--local]"
     echo "  rhizo session <set|get|resolve|remove|list> [args...]"
     echo "  rhizo alias <set|get|list|del> [args...] (DEPRECATED: use capability tags)"
     echo ""
@@ -7187,7 +7798,7 @@ proc main() =
     else:
       echo "Heartbeat renewed: " & res
 
-  of "listen":
+  of "listen", "ear":
     var explicitName = ""
     var timeout = cfg.listenTimeout
     var forceListen = false
@@ -7195,6 +7806,7 @@ proc main() =
     var quiet = false
     var continuous = false
     var rosterGuard = false
+    var agyEar = (subcmd == "ear")
     var i = 1
     while i < args.len:
       let a = args[i]
@@ -7208,6 +7820,13 @@ proc main() =
         continuous = true
       elif a in ["--once"]:
         continuous = false
+      elif a.startsWith("--timeout="):
+        try: timeout = parseInt(a[10..^1]) except ValueError: discard
+      elif a in ["--timeout", "-t"] and i + 1 < args.len:
+        try: timeout = parseInt(args[i+1]) except ValueError: discard
+        inc i
+      elif a in ["--agy-ear", "--ear"]:
+        agyEar = true
       elif a in ["--roster-guard", "-R"]:
         rosterGuard = true
       elif not a.startsWith("-"):
@@ -7226,13 +7845,17 @@ proc main() =
       name = ensureProjectScopedName(cfg, name)
 
     if not forceListen:
-      let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, name)
+      let (alreadyListening, existingPid, existingHost, existingMode) = getActiveListenerInfo(cfg, name)
       if alreadyListening:
-        stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
-        stderr.writeLine("CRITICAL GUARD FOR AI ASSISTANTS: If you are an AI assistant in a separate session/window, DO NOT kill PID " & $existingPid & " and DO NOT assume it is an orphaned process! That process is actively listening for messages for agent '" & name & "' in another session. You must allocate your own identity via 'rhizo name' + 'rhizo open <name>' or ask the operator which persona this window represents.")
-        quit(1)
+        if existingMode == "agy-ear" and not agyEar:
+          echo "[rhizo-agy-ear] Continuous Antigravity Ear is already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Skipping manual re-arm."
+          quit(0)
+        else:
+          stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
+          stderr.writeLine("CRITICAL GUARD FOR AI ASSISTANTS: If you are an AI assistant in a separate session/window, DO NOT kill PID " & $existingPid & " and DO NOT assume it is an orphaned process! That process is actively listening for messages for agent '" & name & "' in another session. You must allocate your own identity via 'rhizo name' + 'rhizo open <name>' or ask the operator which persona this window represents.")
+          quit(1)
 
-    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous, rosterGuard)
+    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous, rosterGuard, agyEar)
 
   of "send", "broadcast", "reply":
     let isBroadcast = (subcmd == "broadcast")
@@ -8945,7 +9568,7 @@ proc main() =
       echo res
     else:
       stderr.writeLine("[RHIZO STATUS] " & res)
-      let (alreadyListening, existingPid, existingHost) = getActiveListenerInfo(cfg, name)
+      let (alreadyListening, existingPid, existingHost, _) = getActiveListenerInfo(cfg, name)
       if alreadyListening:
         stderr.writeLine("[RHIZO LISTENER] Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Skipping duplicate listener.")
       else:
@@ -10103,7 +10726,7 @@ proc main() =
 
   of "hook":
     if args.len < 2:
-      stderr.writeLine("Usage: rhizo hook <codex-stop|install> [--codex|--claude|--opencode|--pi] [--global] [--local] [options]")
+      stderr.writeLine("Usage: rhizo hook <codex-stop|install|agy-pre-invocation|agy-post-tool|agy-stop> [--codex|--claude|--opencode|--pi|--antigravity] [--global] [--local] [options]")
       quit(1)
     let action = args[1].toLowerAscii
     case action
@@ -10125,6 +10748,51 @@ proc main() =
         inc i
       let res = doHookCodexStop(cfg, targetAgent, expectWorker)
       echo res
+    of "agy-pre-invocation", "pre-invocation":
+      var targetAgent = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--agent="):
+          targetAgent = a[8..^1]
+        elif a in ["--agent", "-a"] and i + 1 < args.len:
+          targetAgent = args[i+1]
+          inc i
+        elif not a.startsWith("-") and targetAgent.len == 0:
+          targetAgent = a
+        inc i
+      let res = doHookAgyPreInvocation(cfg, targetAgent)
+      echo res
+    of "agy-post-tool", "post-tool":
+      var targetAgent = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--agent="):
+          targetAgent = a[8..^1]
+        elif a in ["--agent", "-a"] and i + 1 < args.len:
+          targetAgent = args[i+1]
+          inc i
+        elif not a.startsWith("-") and targetAgent.len == 0:
+          targetAgent = a
+        inc i
+      let res = doHookAgyPostTool(cfg, targetAgent)
+      echo res
+    of "agy-stop":
+      var targetAgent = ""
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--agent="):
+          targetAgent = a[8..^1]
+        elif a in ["--agent", "-a"] and i + 1 < args.len:
+          targetAgent = args[i+1]
+          inc i
+        elif not a.startsWith("-") and targetAgent.len == 0:
+          targetAgent = a
+        inc i
+      let res = doHookAgyStop(cfg, targetAgent)
+      echo res
     of "install":
       var harness = "codex"
       var targetAgent = ""
@@ -10141,6 +10809,8 @@ proc main() =
           harness = "opencode"
         elif a in ["--pi"]:
           harness = "pi"
+        elif a in ["--antigravity", "--agy"]:
+          harness = "antigravity"
         elif a in ["--global", "-g"]:
           isGlobal = true
         elif a in ["--local", "-l"]:
@@ -10156,7 +10826,7 @@ proc main() =
           targetAgent = args[i+1]
           inc i
         elif not a.startsWith("-"):
-          if a.toLowerAscii in ["codex", "claude", "opencode", "pi"]:
+          if a.toLowerAscii in ["codex", "claude", "opencode", "pi", "antigravity", "agy"]:
             harness = a.toLowerAscii
           elif targetAgent.len == 0:
             targetAgent = a
@@ -10164,7 +10834,7 @@ proc main() =
       let res = doHookInstall(cfg, harness, targetAgent, isGlobal, isLocal)
       echo res
     else:
-      stderr.writeLine("Error: Unknown hook action: '" & action & "'. Valid actions: codex-stop, install")
+      stderr.writeLine("Error: Unknown hook action: '" & action & "'. Valid actions: codex-stop, agy-pre-invocation, agy-post-tool, agy-stop, install")
       quit(1)
 
   of "title":

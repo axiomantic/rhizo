@@ -227,8 +227,8 @@ Inspect your available runtime tools and execute the highest matching tier:
 
 | Tier | Capability | Action | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Tier 1** | In-Process Extension (e.g. OpenCode `opencode-ear.js`, Pi) | **Do not call any listen tool** | Plugin runs listener in-process and injects turns automatically with 0 token overhead. |
-| **Tier 2** | Shell tool with daemon support (e.g. Antigravity `run_command(IsDaemon=true)`) | Run `rhizo listen <agent>` as managed daemon | Maintains direct line of communication in main chat with 0 token overhead. |
+| **Tier 1** | Continuous Ear & In-Process Extension (e.g. Antigravity Continuous Ear `rhizo ear` / `--agy-ear` streaming via `agentapi send-message`, OpenCode `opencode-ear.js`, Pi) | Continuous background listener or in-process fiber injects turns automatically with 0 token overhead. Antigravity lifecycle hooks (`rhizo hook install --antigravity`) govern turn boundaries. |
+| **Tier 2** | Shell tool with daemon support (e.g. background listeners with process supervision) | Run `rhizo listen <agent>` as managed daemon | Maintains direct line of communication with 0 token overhead. |
 | **Tier 3A** | Autonomous Turn-End Hooks (Claude Code) | Install hook via `rhizo hook install --claude` | Native stop hook inspects inbox and interlocks turn completion if work is pending; ensures continuous listening discipline without token waste. |
 | **Tier 3B** | Codex-Native Wakeup Protocol (`RHIZO_WAKE`) | Senders: `send_message_to_thread(thread_id, "RHIZO_WAKE")`<br>Recipients: recognize `RHIZO_WAKE`, process listener/inbox payloads, re-arm single-shot listener | On Codex Desktop, background listener completion does NOT resume idle chat, and Stop hooks only run at turn-end. Native `send_message_to_thread` resumes idle chat turns cleanly without scheduled polling or token waste. |
 | **Tier 4** | Synchronous foreground shell only | **Do not run `rhizo listen`**. Call `rhizo check-inbox` | Blocking foreground shell freezes the turn. Poll explicitly during user turns. |
@@ -623,15 +623,15 @@ Delivered Message: 'msg_104' from @<project>-orchestrator
 To continue listening, relaunch this EXACT command using your capability tier (NOT a shell loop!):
   Exact command: rhizo listen claude-worker-1
 Capability-Tier Invocations (SKILL.md Section 3):
-  - Tier 1 (In-Process Extension): In-process fiber handles listening automatically; DO NOT call listen.
+  - Tier 1 (Continuous Ear & In-Process Extension): Antigravity uses 'rhizo ear' / '--agy-ear' streaming with native hooks ('rhizo hook install --antigravity'); OpenCode/Pi run in-process fibers automatically.
   - Tier 2 (Shell Daemon): run_command(CommandLine="rhizo listen claude-worker-1", IsDaemon=true, WaitMsBeforeAsync=500)
   - Tier 3A (Claude Code Turn-End Hook): rhizo hook install --claude
   - Tier 3B (Codex Native Wakeup): Arm supervised single-shot 'rhizo listen codex-worker-1'; senders wake idle chats via RHIZO_WAKE.
   - Tier 4 (Synchronous Shell): Run 'rhizo listen claude-worker-1' directly in foreground (or 'rhizo check-inbox')
 ```
 Select the invocation matching your runtime environment's capability tier (defined in [Section 3: Capability-Based Listener Execution](#3-capability-based-listener-execution)):
-- **Tier 1 (In-Process Extension e.g. OpenCode, Pi)**: Native extension fiber is active in-process; never call any listen tool.
-- **Tier 2 (Shell Daemon e.g. Antigravity)**: Launch via `run_command(CommandLine="...", IsDaemon=true, WaitMsBeforeAsync=500)` to maintain direct unblocked conversation flow.
+- **Tier 1 (Continuous Ear & In-Process Extension e.g. Antigravity, OpenCode, Pi)**: Antigravity streams turns continuously via `rhizo ear` (`--agy-ear`) and lifecycle hooks (`rhizo hook install --antigravity`); OpenCode/Pi extensions run in-process fibers.
+- **Tier 2 (Shell Daemon)**: Launch via `run_command(CommandLine="...", IsDaemon=true, WaitMsBeforeAsync=500)` to maintain direct unblocked conversation flow.
 - **Tier 3A (Claude Code Turn-End Hook)**: Install lifecycle stop hook via `rhizo hook install --claude`.
 - **Tier 3B (Codex Native Wakeup)**: Arm supervised foreground single-shot `rhizo listen <agent>`. Senders wake idle sessions via `send_message_to_thread(thread_id, "RHIZO_WAKE")`. See [Section 3.5](#35-codex-native-wakeup-protocol-rhizo_wake).
 - **Tier 4 (Synchronous Foreground Shell)**: Run single-shot in foreground or poll non-blocking via `rhizo check-inbox`.

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tier 1 Continuous Antigravity Ear (`--agy-ear`, `rhizo ear`, `agentapi send-message`)**:
+  - Upgraded Google Antigravity to Tier 1 Continuous Ear in Rhizo.
+  - Implemented continuous streaming listener `rhizo listen --agy-ear` / `rhizo ear` using Antigravity's local language server API (`agentapi send-message --title ... <conv_id> <payload>`).
+  - Added routine ACK message suppression (`RHIZO_SUPPRESS_ACK_WAKE=1`, enabled by default for `--agy-ear`) to eliminate token thrash and ping-pong loops while waking on actionable directives.
+  - Registered Antigravity session environment variables (`agy_ls_address`, `agy_csrf_token`, `agy_project_id`, `agy_conversation_id`, `agy_agentapi_exe`) during `rhizo open` and mapped session keys in Redis (`agy:<conv_id>`).
+  - Graceful exit with code 0 if `rhizo listen` is invoked while a continuous `--agy-ear` listener daemon is already active.
+- **Native Antigravity Lifecycle Hooks (`rhizo hook install --antigravity`)**:
+  - Implemented generator and CLI installer for Antigravity lifecycle hooks (`.agents/hooks.json` or `~/.gemini/config/hooks.json`).
+  - Added hook actions `agy-pre-invocation` (inbox pre-read and context injection), `agy-post-tool` (ephemeral notifications and task guidance), and `agy-stop` (turn-end inbox interlock with `decision: continue` and 3-strike thrash valve).
+- **Per-Delivery Audit Ticket Minting on `STRAND_SUBMITTED` (`src/rhizo.nim`, `tests/test_agy_ear_and_hooks.py`)**:
+  - Implemented automatic 6-character hex audit ticket minting and SHA-256 ticket hashing on `STRAND_SUBMITTED` event delivery in `rhizo listen` and `rhizo drain`.
+  - Persisted `audit_ticket_hash` to both `vine:strand:<task_id>` and `<prefix>strand:<task_id>` in Redis.
+  - Emitted prominent auditor action banner with pre-formatted approve and reject CLI commands.
+
+### Changed
+- **Vine Gate Interlock `WOVEN` Lifecycle State Support (`src/rhizo.nim`, `tests/test_agy_ear_and_hooks.py`)**:
+  - Added `"WOVEN"` to permissible lifecycle and gate status lists in `checkVineGateInterlock`, enabling post-weave task completion (`vine weave && rhizo task complete <task_id>`) without requiring manual `--skip-gate` bypass.
+- **Purge of On-Disk `.vine.json` Residual References**:
+  - Removed outdated `.vine.json` references from `skills/rhizo/opencode-ear.js`, `extensions/opencode/src/orientation.ts`, and `README.md`.
+
 ## [0.2.30] - 2026-10-29
 
 ### Fixed
