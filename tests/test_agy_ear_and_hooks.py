@@ -199,7 +199,7 @@ exit 0
             # Register agent session in Redis
             agent_key = f"{TEST_PREFIX}agent:{agent}"
             sess_key = f"{TEST_PREFIX}sessions"
-            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "agy_conversation_id", conv_id, "agy_agentapi_exe", str(mock_agentapi)], capture_output=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "agy_conversation_id", conv_id, "agy_agentapi_exe", str(mock_agentapi), "last_version_notified:rhizo", "0.2.31"], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", sess_key, f"agy:{conv_id}", agent], capture_output=True)
 
             inbox_key = f"{TEST_PREFIX}inbox:{agent}"

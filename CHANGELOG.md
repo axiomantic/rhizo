@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.31] - 2026-11-09
+
 ### Added
 - **Tier 1 Continuous Antigravity Ear (`--agy-ear`, `rhizo ear`, `agentapi send-message`)**:
   - Upgraded Google Antigravity to Tier 1 Continuous Ear in Rhizo.
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Emitted prominent auditor action banner with pre-formatted approve and reject CLI commands.
 
 ### Changed
+- **WISM Task Claim State Collapse (`scripts/task.lua`, `src/rhizo.nim`)**:
+  - Enforced monotonic transition of delivered tasks directly into `IN_PROGRESS` upon claim, eliminating transient intermediate states.
 - **Vine Gate Interlock `WOVEN` Lifecycle State Support (`src/rhizo.nim`, `tests/test_agy_ear_and_hooks.py`)**:
   - Added `"WOVEN"` to permissible lifecycle and gate status lists in `checkVineGateInterlock`, enabling post-weave task completion (`vine weave && rhizo task complete <task_id>`) without requiring manual `--skip-gate` bypass.
 - **Purge of On-Disk `.vine.json` Residual References**:
