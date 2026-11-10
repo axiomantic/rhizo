@@ -6227,6 +6227,10 @@ proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: 
   var convId = ""
   if stdinNode != nil and stdinNode.kind == JObject:
     convId = stdinNode.getOrDefault("conversationId").getStr(stdinNode.getOrDefault("conversation_id").getStr("")).strip()
+    if convId.len == 0:
+      let artDir = stdinNode.getOrDefault("artifactDirectoryPath").getStr("").strip()
+      if artDir.len > 0:
+        convId = extractFilename(artDir.strip(chars = {'/'}))
 
   if convId.len == 0:
     convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
@@ -6237,6 +6241,12 @@ proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: 
       defer: (try: client.close() except CatchableError: discard)
       let mapped = client.hGet(cfg.prefix & "sessions", "agy:" & convId)
       if mapped != redisNil and mapped.len > 0:
+        try:
+          let mNode = parseJson(mapped)
+          if mNode.kind == JObject and mNode.hasKey("agent"):
+            let ag = mNode["agent"].getStr("").strip()
+            if ag.len > 0: return sanitizeIdentifier(ag)
+        except CatchableError: discard
         return sanitizeIdentifier(mapped)
     except CatchableError: discard
 
@@ -6244,7 +6254,7 @@ proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: 
   if act.len > 0:
     return sanitizeIdentifier(act)
 
-  return sanitizeIdentifier(resolveActiveAgentFromRedis(cfg))
+  return ""
 
 proc doHookAgyPreInvocation*(cfg: RhizoConfig, agentNameParam: string = ""): string =
   let stdinNode = readStdinJson()
