@@ -6337,7 +6337,7 @@ proc doHookAgyPostTool*(cfg: RhizoConfig, agentNameParam: string = ""): string =
         let tid = tNode.getOrDefault("id").getStr("")
         let tState = tNode.getOrDefault("state").getStr("")
         if tid.len > 0 and tState in ["CLAIMED", "IN_PROGRESS"]:
-          discard doTask(cfg, "progress", [tid, "Tool executed: " & toolName, "300"])
+          discard doTask(cfg, "progress", [tid, normName, "Tool executed: " & toolName])
       except CatchableError: discard
 
   return "{}"
