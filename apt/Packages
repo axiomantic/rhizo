@@ -1,13 +1,548 @@
 Package: rhizo
-Version: 0.2.31
-Section: utils
-Priority: optional
+Version: 0.1.10
 Architecture: amd64
 Maintainer: Axiomantic <info@axiomantic.org>
-Description: Message exchange and routing for software agents over Redis
- Standalone CLI client for inter-agent communication using Redis data
- structures without an intermediate background daemon. Includes HMAC-SHA256
- authentication, dead-agent pruning, and optional AES-256-CBC encryption.
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.10_amd64.deb
+Size: 618432
+MD5sum: b2faa1ee5c5d06ed6f2e6cc0cf3d0dac
+SHA256: 3a693f5b91a8994fcd69ffde012f79b583d76b79b715b35e2e9bc66dfacf6289
+
+Package: rhizo
+Version: 0.1.10
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.10_arm64.deb
+Size: 611040
+MD5sum: d4c4923d4bb90c6ebf56b60dab95375c
+SHA256: fd23109fb30c69329986107214be880e09dd64a3a9672930cbedbda452c93ff0
+
+Package: rhizo
+Version: 0.1.11
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.11_amd64.deb
+Size: 632634
+MD5sum: 6e1b35ac0031fd9e38473d47c39165e1
+SHA256: cfac4113e232553f19920026c7c4cc31ff03c1344bc9cad0edc0aebe609ace06
+
+Package: rhizo
+Version: 0.1.11
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.11_arm64.deb
+Size: 624106
+MD5sum: 1bbab6f0683c402f9f582cccb36382a7
+SHA256: 9e66b28c9a965c5a46c9eb5bb2a3f6a55c2787c2b4f55d79d92e95395466a66c
+
+Package: rhizo
+Version: 0.1.12
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.12_amd64.deb
+Size: 633086
+MD5sum: 9a5027c48eea9c2ddd90e6325a2a9b5a
+SHA256: 3b79666c6e4bb02b4b493de6f882457c226490b31cd6c9fccee387fdf4e2a88b
+
+Package: rhizo
+Version: 0.1.12
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.12_arm64.deb
+Size: 624102
+MD5sum: 4589b3892a02764751d18b101a29f05d
+SHA256: 54bde8b173562cf3128027adb62eb51813ac608e9759d9c0a1884e3331d2d9a8
+
+Package: rhizo
+Version: 0.1.6
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.6_amd64.deb
+Size: 592888
+MD5sum: 6181d4e4fcea31983baf8c676134768b
+SHA256: edad1cf3560ee27646bff2413e012e9e4ff917436c4d363b3f837ee2ab612e0a
+
+Package: rhizo
+Version: 0.1.6
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.6_arm64.deb
+Size: 585314
+MD5sum: 24e396695e615b22533d038dfb1491d3
+SHA256: ebadad9d81b952ebbae45283183118df4ceae0f8b7f83030dc1fa1d05972447a
+
+Package: rhizo
+Version: 0.1.7
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.7_amd64.deb
+Size: 592884
+MD5sum: 14b0795b096326344d2628eea5b5b7a6
+SHA256: 32c97d85d4babbbc836a097f866e3dd06803014c7cc7514cf59d7588e5c74bd9
+
+Package: rhizo
+Version: 0.1.7
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.7_arm64.deb
+Size: 585314
+MD5sum: b840cbcb2475ef54ead73ba8257fcfcb
+SHA256: 79d0751e4ecce01586232474168d4fae50a296297d6aaf519b7e4606148cd025
+
+Package: rhizo
+Version: 0.1.8
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.8_amd64.deb
+Size: 605762
+MD5sum: 18e141313c0c08b6f499926a9cdf7e90
+SHA256: 79d2a72d862b7703bc561e6fab36caae3f0b5fcbe06a5ddf503775ec919f7a34
+
+Package: rhizo
+Version: 0.1.8
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.8_arm64.deb
+Size: 597228
+MD5sum: c0c8d51c7ad2c59a184c9ec09cf09fa7
+SHA256: 19b69de6aa6cd3b939d97ac9f671cad79f7b90cf75dea5fffb92b9aa9873d49a
+
+Package: rhizo
+Version: 0.1.9
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.9_amd64.deb
+Size: 618048
+MD5sum: 205bfe3413c6dcc425807396af0e328d
+SHA256: 30e2f9e34488d43a6d521e95120303405b05710aefcbc25237fd3dd036c05aaf
+
+Package: rhizo
+Version: 0.1.9
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.1.9_arm64.deb
+Size: 610642
+MD5sum: cd7980064b0fde2493cdb264a834979f
+SHA256: 3457516e63bc7dc98c8340fdc0620e2258db078d9acf74802c07871628d4c7d5
+
+Package: rhizo
+Version: 0.2.0
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.0_amd64.deb
+Size: 692274
+MD5sum: 50b74c9e60f356d902450bf60310c5b0
+SHA256: 27cab6a35d366897f750eeb9902e42280dbbf594ded55975873259a0e043729b
+
+Package: rhizo
+Version: 0.2.0
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.0_arm64.deb
+Size: 685328
+MD5sum: dd11581d025a21262787e0f1c438a02a
+SHA256: c6623a2f716f480260d76a1bcf3281b2cb52bd1253e95b7e089773604ff7b027
+
+Package: rhizo
+Version: 0.2.10
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.10_amd64.deb
+Size: 767678
+MD5sum: dcdf8ffaa3462d0b6d9661b591b24acc
+SHA256: 3884382bc3265559278273d3eb0c05368175b500c534ea1c23fa803f17ffe7cf
+
+Package: rhizo
+Version: 0.2.10
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.10_arm64.deb
+Size: 757844
+MD5sum: 60f584bf42141aad1e14ab42a9ce4639
+SHA256: 563f37f96068e51e031e42f088c4c6413ec68b71c142cc0647375dd45d756c02
+
+Package: rhizo
+Version: 0.2.11
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.11_amd64.deb
+Size: 767486
+MD5sum: 73f709434522513d92591089d552f26e
+SHA256: cd7824eb41cf4d086a1a95b86552a2292cfc507be24d1c1bbba67a12c97346cc
+
+Package: rhizo
+Version: 0.2.11
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.11_arm64.deb
+Size: 757954
+MD5sum: 3f9449a2ed90e52e53246974c6513ff6
+SHA256: a61aaa36aa15eacdd811a48acb49a798126bfbb1da029ae6df4c61705ec5a928
+
+Package: rhizo
+Version: 0.2.12
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.12_amd64.deb
+Size: 766412
+MD5sum: fd92e3aeb680355132b76dc0c30d36e4
+SHA256: 44a9fdad0950df84b4c528adac5685b28bd462eeeef95b5ec727cd3ce2c79e1e
+
+Package: rhizo
+Version: 0.2.12
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.12_arm64.deb
+Size: 757936
+MD5sum: 4903b60beb63ebc86c9d2509be64f288
+SHA256: 0d9c46e343132ae4ccc09986e9aa7dff0de62f012dd7dde564ecafdd10fbc59d
+
+Package: rhizo
+Version: 0.2.13
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.13_amd64.deb
+Size: 780332
+MD5sum: 23624973a7855f1aa1aa1840af819d7e
+SHA256: 6eece31786948e5c4eadc414d9c89e5c234dad7bd500672edd679962c9e1b9dc
+
+Package: rhizo
+Version: 0.2.13
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.13_arm64.deb
+Size: 772154
+MD5sum: d946b7fa21f92da88ad719fa26a19f91
+SHA256: 45648e076716353b566f4e2aa366bf76f8c192a160c5f69ed3eba2990f35546a
+
+Package: rhizo
+Version: 0.2.14
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.14_amd64.deb
+Size: 785662
+MD5sum: 05797910de8ab1e9a4698d1a37157d29
+SHA256: a8e7d3badcd6b9245759668ce5ec009d2e3750728f4b718fde2848de6c9315a2
+
+Package: rhizo
+Version: 0.2.14
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.14_arm64.deb
+Size: 777162
+MD5sum: 8a6721346cc630f0ca322ad9fa335087
+SHA256: 04d9f121e90b727736fb0576b225db27c39c65f5217c461db4224db6e6b9c21c
+
+Package: rhizo
+Version: 0.2.15
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.15_amd64.deb
+Size: 785734
+MD5sum: d9142903adbcbcc23ab57c21549c87f9
+SHA256: cb29fc1fafa72732760075aefd7f068d688bc99dd4f32e11b321fd477e3156db
+
+Package: rhizo
+Version: 0.2.15
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.15_arm64.deb
+Size: 779198
+MD5sum: 14a25a337b65c869622544f86b72cf3a
+SHA256: d20c2f7e0445f2fe3405adb7ce27f12f07bd4a89d7bdf42c17e5c17af4441048
+
+Package: rhizo
+Version: 0.2.16
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.16_amd64.deb
+Size: 802846
+MD5sum: 2fe60ae791d5667bd671b04b2bb4920e
+SHA256: b13565d53b3c10a66fa1bae184fa80576bd6bb38fe0b7e9ab6fd5e4ea7309416
+
+Package: rhizo
+Version: 0.2.16
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.16_arm64.deb
+Size: 791772
+MD5sum: 3988f9178f36719484dfa561a3822539
+SHA256: 09c6f52dd07d8a8e33627defccff457a080006790b9e9d79fa713bcff1f5731e
+
+Package: rhizo
+Version: 0.2.17
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.17_amd64.deb
+Size: 803480
+MD5sum: ca75f189c1afc3334e9e85489b935be0
+SHA256: f5241669941cb440f5bb61a257aa03016d19fee4b46f215067371b4a040ffdb0
+
+Package: rhizo
+Version: 0.2.17
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.17_arm64.deb
+Size: 792378
+MD5sum: 6a34b17d631349b4da21d8e8466144d2
+SHA256: c4cebdd7889c42dd269ce6d7a9e26ddef4407b642840043ebb2809d03cb96470
+
+Package: rhizo
+Version: 0.2.18
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.18_amd64.deb
+Size: 808394
+MD5sum: cc0e6a9c49dabb35ca50c9dbff716bee
+SHA256: 52707535db06cd7e0eece0da8b4b69cf2439bbc79177f13995ec9a9b7b507eed
+
+Package: rhizo
+Version: 0.2.18
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.18_arm64.deb
+Size: 796762
+MD5sum: 4f42fe52804a6d6eadc421cb870cae00
+SHA256: 6055b24da2dfcb89727931ab14a72e3d987e18a905d65d82790711419369eccf
+
+Package: rhizo
+Version: 0.2.19
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.19_amd64.deb
+Size: 809042
+MD5sum: d339e15009654bf127bcbd8b1720ad88
+SHA256: c4e9749a50b5c33ec0e7e892d850514ae31f9a353ed538b74f92074eb750074e
+
+Package: rhizo
+Version: 0.2.19
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.19_arm64.deb
+Size: 799256
+MD5sum: a65fd3f3113e62c3511a5f92168402aa
+SHA256: 1019405f89c879683b5acd3d9355058c58a9f985f5b834484833c4490db06b79
+
+Package: rhizo
+Version: 0.2.1
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.1_amd64.deb
+Size: 710152
+MD5sum: b901aa47ae99d8529c2c4f7c28ecca6c
+SHA256: ab54e8f5d3316bc43811fad19d225e0273111d1236698e5a890e65b1d17b22b8
+
+Package: rhizo
+Version: 0.2.1
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.1_arm64.deb
+Size: 703992
+MD5sum: e94ce2306f3bf74fc0fa0aadaec8de25
+SHA256: 4557aa1398ace4c96360ae9ebacc72afb40366f71108ef36905c2c3f222e2a6d
+
+Package: rhizo
+Version: 0.2.20
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.20_amd64.deb
+Size: 821870
+MD5sum: f97599f2e690e2fbbbd9305132f57c93
+SHA256: ac1d8d848ce391762d2646613845be2dbdbfaf089f0cfe1dcd3ab15296c8cf52
+
+Package: rhizo
+Version: 0.2.20
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.20_arm64.deb
+Size: 813636
+MD5sum: 6c19282034c77da6351f16d2d2c8ed1d
+SHA256: 93055983dde8943f5c3cea8eb9a63eb3825344b8344e6b5884e441393ed0bfb0
+
+Package: rhizo
+Version: 0.2.21
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.21_amd64.deb
+Size: 844646
+MD5sum: 92ab4b6ccfb37d1dfbc56220e93dc827
+SHA256: f7931b04061b1cef33d4279a6730715e23ba4d00e6df3cad2c042f71a2b700d8
+
+Package: rhizo
+Version: 0.2.21
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.21_arm64.deb
+Size: 837012
+MD5sum: 5a7d8690e88b98b50fb1bf5ef75cc66f
+SHA256: 2baa39c4fa127337383dc357e411daeb97e0ae46dbdffcad3a917cbe260f3105
+
+Package: rhizo
+Version: 0.2.22
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.22_amd64.deb
+Size: 845738
+MD5sum: ed706457e6a3662f2df338d43d5e670e
+SHA256: 6de7ac1079b0c960531c77c913811c898c47fc6c234f79aff378799212e39de4
+
+Package: rhizo
+Version: 0.2.22
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.22_arm64.deb
+Size: 836216
+MD5sum: 270ccdd34a04d77d490febfd413030b8
+SHA256: c99970cea941725dc80bae6ee1f9d896294c03f5151ea5b993ec3797f31e2b54
+
+Package: rhizo
+Version: 0.2.23
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.23_amd64.deb
+Size: 849680
+MD5sum: 491afd4205db56b54313f3fd92d5e573
+SHA256: 2fe9586c90c19db72c006c10d36920a98884367fb42048163512212ecb042449
+
+Package: rhizo
+Version: 0.2.23
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.23_arm64.deb
+Size: 839770
+MD5sum: e6867e5c5dba1d70271ed647579cd388
+SHA256: 82c4fbb60cbcf9466e3a0750e4dd17609dae57319a839bd2f2d55cce41fc2ac8
+
+Package: rhizo
+Version: 0.2.24
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.24_amd64.deb
+Size: 862688
+MD5sum: da39e07afee5f93146ee97eb36cb1a85
+SHA256: bc070e472b4625e58f60a29e725c03990ea46a74aeeee1429f68e3602be97288
+
+Package: rhizo
+Version: 0.2.24
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.24_arm64.deb
+Size: 851666
+MD5sum: a760aaf9d858bca5f7db00ec8da38ec0
+SHA256: ff216926804861774cbfff2c173c2827edb03e2ac4526a5e6197bb4fc07697cc
+
+Package: rhizo
+Version: 0.2.29
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.29_amd64.deb
+Size: 974056
+MD5sum: 512fc55b428682d4c0dea587f1e4053c
+SHA256: 20daf00c499b26a03ba8d9c6bad37bd42ae0541a54315665167588650a78418b
+
+Package: rhizo
+Version: 0.2.29
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.29_arm64.deb
+Size: 965784
+MD5sum: bdd8f2d01b591772df7c3030f8c750d9
+SHA256: b123e3c1b63f7e361cc36dbbe7ed8463b933e263c43bf2c943dd8aeaaaa2c3cd
+
+Package: rhizo
+Version: 0.2.2
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.2_amd64.deb
+Size: 722976
+MD5sum: 95c9ccfd2b7bdb3bebcaab2855e84277
+SHA256: cde2718c2fb2aab6e41c5c106a0edceef823662059fd05e5f3485df70227f035
+
+Package: rhizo
+Version: 0.2.2
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.2_arm64.deb
+Size: 715060
+MD5sum: 5c82dc604634c6b4d85bd88410e0f541
+SHA256: 2c7863bdbae6fb167dad8b283cc07e3676b967db68cb9ba08641f58a2988a056
+
+Package: rhizo
+Version: 0.2.30
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.30_amd64.deb
+Size: 978144
+MD5sum: 0894f7b1ca954e205f46d0c5ac296736
+SHA256: c86425388fa468b06ab3bcd13949e930e4913175ef18c4aefd9b19da660359b7
+
+Package: rhizo
+Version: 0.2.30
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.30_arm64.deb
+Size: 966392
+MD5sum: 843f0d1ced38c4d36a784c11bd8e8ba2
+SHA256: d9447bd6c92f74e3501e3d5b045f360176cc696ecaa16f3ffd4c1bef245c8cd5
+
+Package: rhizo
+Version: 0.2.31
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
 Filename: rhizo_0.2.31_amd64.deb
 Size: 1010008
 MD5sum: 65a79058a9cdcbe8c625886cef4b8e5a
@@ -15,16 +550,151 @@ SHA256: 7ba6f700fd6ea02cde72cf3ca0c3f5b0be6a0ba2b5cc8ebe1d615af84e7a76ba
 
 Package: rhizo
 Version: 0.2.31
-Section: utils
-Priority: optional
 Architecture: arm64
 Maintainer: Axiomantic <info@axiomantic.org>
-Description: Message exchange and routing for software agents over Redis
- Standalone CLI client for inter-agent communication using Redis data
- structures without an intermediate background daemon. Includes HMAC-SHA256
- authentication, dead-agent pruning, and optional AES-256-CBC encryption.
+Description: Rhizo Inter-Assistant Redis Bus
 Filename: rhizo_0.2.31_arm64.deb
 Size: 998682
 MD5sum: 82958af8cbbd3274c9d46836923bfa4d
 SHA256: c14b8e35b807509f04ef73b68c1a5fff32bad25563dd6f56600d3a276970c913
+
+Package: rhizo
+Version: 0.2.3
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.3_amd64.deb
+Size: 722338
+MD5sum: d618bcc4f02861d7be066182cd37cd00
+SHA256: 155c3a8be00480c3163d83ed65c6e5e8db38f350e956c0458f3c37061bce34db
+
+Package: rhizo
+Version: 0.2.3
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.3_arm64.deb
+Size: 716910
+MD5sum: 559b903edbae0c3da8eab07df2d541fc
+SHA256: 06f77662adedec308bbfda59af4939bfeed7f4cb50b653c21ff27bd77daa8bcf
+
+Package: rhizo
+Version: 0.2.4
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.4_amd64.deb
+Size: 722926
+MD5sum: 73bfeaad6f41b5f4d6b4a58fb6a9aa81
+SHA256: a8b1aaa8b6433437af874678b74654c5632a6c994d77019548ba54f2c4ec23d6
+
+Package: rhizo
+Version: 0.2.4
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.4_arm64.deb
+Size: 717660
+MD5sum: cd7d0074b05c0ef870a6b2fe5ef5fe05
+SHA256: 7065f1932891d0e48e08b9df94427f29c6f57553ae9d63c11dd59db8b471aa1a
+
+Package: rhizo
+Version: 0.2.5
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.5_amd64.deb
+Size: 728650
+MD5sum: 838baec7d42f723813882f1a1e79b704
+SHA256: d300b6448f350f25a52f09e03387ed41b48b54277633546bb4367ca83c604051
+
+Package: rhizo
+Version: 0.2.5
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.5_arm64.deb
+Size: 722856
+MD5sum: 206e7212494979a6272fefe8777b6a27
+SHA256: 97c684570b866da4a2595dcf7ddb3bd62e5d6d7604a3f9b4f48688d2d410b730
+
+Package: rhizo
+Version: 0.2.6
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.6_amd64.deb
+Size: 743458
+MD5sum: 9fb3dda46781fbca0f2ee13b391790b2
+SHA256: 8f9e7880cec592331211346aae07ea3be950007c6cc5554a045051f952386f37
+
+Package: rhizo
+Version: 0.2.6
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.6_arm64.deb
+Size: 737064
+MD5sum: 7fbe0cffbd98cdd8d83f7a3245425468
+SHA256: 17e291b376a98aaa51675b53af689e703a97b613af05647f4a9bb80cd1454d08
+
+Package: rhizo
+Version: 0.2.7
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.7_amd64.deb
+Size: 755722
+MD5sum: b64d79f7596614237c25c00ffd089c48
+SHA256: 2dbee02a30ac432246cb3c766bfe7c3005393a5259ad245645239879a43f5283
+
+Package: rhizo
+Version: 0.2.7
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.7_arm64.deb
+Size: 747004
+MD5sum: 0283e244252ec9c74d47fdee86e6dfe8
+SHA256: facf8cdfca5dba15e0317843414b6974a461092b8e19c8dcc424577cffbe1c9c
+
+Package: rhizo
+Version: 0.2.8
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.8_amd64.deb
+Size: 757890
+MD5sum: f9241a2b446692a13c32f1cc23acf01b
+SHA256: b4f588a33b2ebf65f97470951e002c2650d3c87d14c602dd96ec761b7b3aed0a
+
+Package: rhizo
+Version: 0.2.8
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.8_arm64.deb
+Size: 749458
+MD5sum: 0ea8e970884a48739ccc7d34c124a1d4
+SHA256: b36e5286feff769cb5ebeba197a4837e2a2c373bad872a89aa0e3173bf33ea0d
+
+Package: rhizo
+Version: 0.2.9
+Architecture: amd64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.9_amd64.deb
+Size: 766284
+MD5sum: 74619f5be391a212a5f819bd09c682d8
+SHA256: 07619dbb7447140422fce4e8c126536a0c19b81d2670a7bb85fee2a06c9dde6f
+
+Package: rhizo
+Version: 0.2.9
+Architecture: arm64
+Maintainer: Axiomantic <info@axiomantic.org>
+Description: Rhizo Inter-Assistant Redis Bus
+Filename: rhizo_0.2.9_arm64.deb
+Size: 758454
+MD5sum: 55571afb03120974dbf1d314660f0d6b
+SHA256: 4323bfa648ab6fb06f1e44d4e6bb1783b68c25fc66e11b666422caf14dc86585
 
