@@ -937,6 +937,24 @@ const BareGenericRoles* = [
   "worker", "agent", "lead", "reviewer", "tester", "coder", "dev"
 ]
 
+proc isRoleNameNotUniqueId*(id: string): bool =
+  let s = id.toLowerAscii().strip()
+  if s.len == 0: return false
+  const bareRoles = [
+    "agent", "default", "orchestrator", "architect", "implementer",
+    "implementor", "auditor", "worker", "builder", "reviewer",
+    "lead", "coder", "tester", "verifier", "conductor"
+  ]
+  for r in bareRoles:
+    if s == r: return true
+  const roleSuffixes = [
+    "-orchestrator", "-architect", "-implementer", "-implementor",
+    "-auditor", "-reviewer", "-verifier", "-lead", "-builder"
+  ]
+  for suf in roleSuffixes:
+    if s.endsWith(suf): return true
+  return false
+
 proc isBareGenericRole*(name: string): bool =
   let lower = name.toLowerAscii
   for r in BareGenericRoles:
@@ -984,7 +1002,7 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
     if cfg.agentName.len > 0 and cfg.agentName != "agent":
       return ensureProjectScopedName(cfg, cfg.agentName)
-  let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", ""))).strip()
+  let envName = getEnv("RHIZO_AGENT_ID", getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))).strip()
   if envName.len > 0 and envName != "agent":
     return ensureProjectScopedName(cfg, envName)
 
@@ -1463,7 +1481,7 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
                   else: ""
 
   if agentName.len == 0:
-    let envAgent = getEnv("RHIZO_AGENT_NAME", "").strip()
+    let envAgent = getEnv("RHIZO_AGENT_ID", getEnv("RHIZO_AGENT_NAME", "")).strip()
     if envAgent.len > 0:
       agentName = sanitizeIdentifier(envAgent)
 
@@ -2155,19 +2173,31 @@ proc checkRedisPersistenceAdvisory*(cfg: RhizoConfig, agentName: string, client:
   except CatchableError:
     discard
 
-proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = false, listenTimeoutSec: int = -1, forceSteal: bool = false) =
+proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = false, listenTimeoutSec: int = -1, forceSteal: bool = false, role: string = "", allowRoleId: bool = false) =
   cleanupOldTmpFiles()
   randomize()
   var client = connectRedis(cfg.redisUrl)
   defer:
     try: client.close() except CatchableError: discard
 
+  let effectiveAllowRole = allowRoleId or (getEnv("RHIZO_ALLOW_ROLE_IDS", "") in ["1", "true", "yes"])
+  if not effectiveAllowRole:
+    let checkCandidate = if optName.len > 0: optName else: getActiveAgentName(cfg)
+    if isRoleNameNotUniqueId(checkCandidate):
+      stderr.writeLine("Error: ERR_ROLE_AS_ID: '" & checkCandidate & "' is a role name, not a unique agent_id! Allocate a unique listener ID via 'rhizo name <project>' (e.g. '<project>-sequoia') and pass the role via --role <role> or --tags.")
+      quit(1)
+
   var name = if optName.len > 0: ensureProjectScopedName(cfg, optName)
              else: getActiveAgentName(cfg)
+
+  if not effectiveAllowRole and isRoleNameNotUniqueId(name):
+    stderr.writeLine("Error: ERR_ROLE_AS_ID: '" & name & "' is a role name, not a unique agent_id! Allocate a unique listener ID via 'rhizo name <project>' (e.g. '<project>-sequoia') and pass the role via --role <role> or --tags.")
+    quit(1)
+
   let effectiveForceSteal = forceSteal or cfg.forceSteal
   if name.len == 0 or name == "agent" or name == cfg.project & "-agent":
-    stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name, or export RHIZO_AGENT_NAME=<name>.")
-    stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <name>'. Do NOT guess an existing identity from 'rhizo who' or static role files.")
+    stderr.writeLine("Error: No agent name specified. Run 'rhizo open <agent_id>', pass the agent ID, or export RHIZO_AGENT_ID=<id>.")
+    stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <agent_id>'. Do NOT guess an existing identity from 'rhizo who' or static role files.")
     quit(1)
   else:
     try:
@@ -2182,13 +2212,26 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
         echo "[NOTICE] Re-attaching to existing active agent '" & name & "'"
     except CatchableError:
       discard
-  let tags = if optTags.len > 0:
+
+  var baseTags = if optTags.len > 0:
     if optTags.startsWith(cfg.project): optTags else: cfg.project & "," & optTags
   else:
     cfg.project
 
+  if role.len > 0:
+    let tagList = baseTags.split(',')
+    var found = false
+    for t in tagList:
+      if t.strip.toLowerAscii == role.toLowerAscii: found = true; break
+    if not found:
+      if baseTags.len > 0: baseTags &= "," & role
+      else: baseTags = role
+
+  let tags = baseTags
+
   saveCurrentAgent(name)
   putEnv("RHIZO_AGENT_NAME", name)
+  putEnv("RHIZO_AGENT_ID", name)
   setTerminalTitle(name)
   let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
   if sid.len > 0:
@@ -2196,6 +2239,11 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     setRedisSessionMapping(cfg, sid, name, cfg.project, getCurrentDir())
 
   discard doRegister(cfg, name, tags, cfg.heartbeatTtl, cfg.project, effectiveForceSteal)
+  if role.len > 0:
+    try:
+      discard client.hSet(cfg.prefix & "agent:" & name, "role", role)
+    except CatchableError:
+      discard
   try:
     discard client.hSet(cfg.prefix & "agent:" & name, "machine_id", getMachineId())
     discard client.hSet(cfg.prefix & "agent:" & name, "host", getHostNameStr())
@@ -2223,6 +2271,8 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   echo "===================================================="
   echo "[RHIZO BUS] Registered Successfully"
   echo "- Agent Name : ", name
+  if role.len > 0:
+    echo "- Role       : ", role
   if sid.len > 0:
     echo "- Session ID : ", sid
   echo "- Project    : ", cfg.project
@@ -3723,6 +3773,7 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
   delEnv("OPENCODE_SESSION_ID")
   delEnv("PI_SESSION_ID")
   delEnv("RHIZO_AGENT_NAME")
+  delEnv("RHIZO_AGENT_ID")
 
   let rVal = try: client.get(cfg.prefix & "router:" & myMid) except CatchableError: redisNil
   if rVal != redisNil and rVal.len > 0:
@@ -6857,7 +6908,7 @@ proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: 
   var normName = sanitizeIdentifier(agentNameParam)
   if normName.len > 0:
     return normName
-  let envAgent = getEnv("RHIZO_AGENT_NAME", "").strip()
+  let envAgent = getEnv("RHIZO_AGENT_ID", getEnv("RHIZO_AGENT_NAME", "")).strip()
   if envAgent.len > 0:
     return sanitizeIdentifier(envAgent)
 
@@ -7510,8 +7561,8 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     return true
 
   of "listen", "ear":
-    echo "Usage: rhizo listen [name] [--timeout <sec>] [--blocking] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--agy-ear|--ear] [--roster-guard/-R]"
-    echo "       rhizo ear [name] [--all/-a] [--quiet/-q]"
+    echo "Usage: rhizo listen [agent_id] [--timeout <sec>] [--blocking] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--agy-ear|--ear] [--roster-guard/-R]"
+    echo "       rhizo ear [agent_id] [--all/-a] [--quiet/-q]"
     echo ""
     echo "Options:"
     echo "  --timeout <sec>       Seconds to wait before exiting (default: 0 / infinite)"
@@ -7526,10 +7577,10 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     return true
 
   of "send":
-    echo "Usage: rhizo send --to <agent> [--type task|query|reply|status] --subject <subj> --body <body> [--listen/-l] [--idle/-d] [--complete/-c] [--immediate|--soon]"
+    echo "Usage: rhizo send --to <agent_id> [--type task|query|reply|status] --subject <subj> --body <body> [--listen/-l] [--idle/-d] [--complete/-c] [--immediate|--soon]"
     echo ""
     echo "Options:"
-    echo "  --to <agent>          Target agent codename or multicast tag (@tag)"
+    echo "  --to <agent_id>       Target agent codename or multicast tag (@tag)"
     echo "  --type <type>         Message type: task, query, reply, status (default: task)"
     echo "  --subject <subj>      Message subject line"
     echo "  --body <body>         Message body payload"
@@ -7541,10 +7592,10 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     return true
 
   of "reply":
-    echo "Usage: rhizo reply --to <agent> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--idle/-d] [--complete/-c]"
+    echo "Usage: rhizo reply --to <agent_id> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l] [--idle/-d] [--complete/-c]"
     echo ""
     echo "Options:"
-    echo "  --to <agent>          Recipient agent codename"
+    echo "  --to <agent_id>       Recipient agent codename"
     echo "  --subject <subj>      Reply subject line"
     echo "  --body <body>         Reply body payload"
     echo "  --reply-to <id>       ID of message being replied to"
@@ -7563,9 +7614,12 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     return true
 
   of "open", "register":
-    echo "Usage: rhizo open [name] [tags] [--listen/-l] [--force-steal]"
+    echo "Usage: rhizo open <agent_id> [tags] [--role <role>] [--listen/-l] [--force-steal] [--allow-role-id]"
     echo ""
     echo "Options:"
+    echo "  --role <role>         Assign role (e.g. orchestrator, architect, worker) without embedding it in unique agent_id"
+    echo "  --id, --agent-id <id> Unique agent listener ID (from 'rhizo name', never a role name)"
+    echo "  --allow-role-id       Bypass ERR_ROLE_AS_ID check"
     echo "  --listen, -l          Atomically arm listener after registration"
     echo "  --force-steal         Force steal agent name lease from stale registration"
     return true
@@ -7909,10 +7963,10 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
 
   of "session":
     case subAction
-    of "register": echo "Usage: rhizo session register <agent> [--session <id>] [--harness <name>] [--force] [--json]"
-    of "set": echo "Usage: rhizo session set <agent> [--thread-id <id>] [--harness <name>] [--model <model>] [--cwd <path>] [--strand <strand>] [--account <acc>]"
-    of "get", "resolve": echo "Usage: rhizo session get <agent> [--thread-id] [--harness] [--model] [--json]"
-    of "remove", "rm", "del", "clear": echo "Usage: rhizo session remove <agent>"
+    of "register": echo "Usage: rhizo session register <agent_id> [--role <role>] [--session <id>] [--harness <name>] [--allow-role-id] [--force] [--json]"
+    of "set": echo "Usage: rhizo session set <agent_id> [--thread-id <id>] [--harness <name>] [--model <model>] [--cwd <path>] [--strand <strand>] [--account <acc>]"
+    of "get", "resolve": echo "Usage: rhizo session get <agent_id> [--thread-id] [--harness] [--model] [--json]"
+    of "remove", "rm", "del", "clear": echo "Usage: rhizo session remove <agent_id>"
     of "list", "ls": echo "Usage: rhizo session list [--json]"
     else:
       echo "Usage: rhizo session <register|set|get|resolve|remove|list> [args...]"
@@ -8047,7 +8101,11 @@ proc main() =
         positionalArgs.add(a)
     elif a.startsWith("--agent-name="):
       cli.agentName = a[13..^1]
-    elif a == "--agent-name" and i + 1 < rawArgs.len and not rawArgs[i+1].startsWith("-"):
+    elif a.startsWith("--agent-id="):
+      cli.agentName = a[11..^1]
+    elif a.startsWith("--id="):
+      cli.agentName = a[5..^1]
+    elif (a in ["--agent-name", "--agent-id", "--id"]) and i + 1 < rawArgs.len and not rawArgs[i+1].startsWith("-"):
       cli.agentName = rawArgs[i+1]; inc i
     elif a.startsWith("--session-id="):
       cli.sessionId = a[13..^1]
@@ -8409,6 +8467,8 @@ proc main() =
   of "open", "register":
     var name = ""
     var tags = ""
+    var role = ""
+    var allowRoleId = false
     var rearmListen = false
     var listenTimeout = -1
     var forceSteal = false
@@ -8445,8 +8505,13 @@ proc main() =
           quit(1)
         inc i
       elif a.startsWith("--agent="): name = a[8..^1]
-      elif (a == "--agent" or a == "--name") and i + 1 < args.len: name = args[i+1]; inc i
+      elif (a in ["--agent", "--name", "--id", "--agent-id"]) and i + 1 < args.len: name = args[i+1]; inc i
       elif a.startsWith("--name="): name = a[7..^1]
+      elif a.startsWith("--id="): name = a[5..^1]
+      elif a.startsWith("--agent-id="): name = a[11..^1]
+      elif a.startsWith("--role="): role = a[7..^1]
+      elif a == "--role" and i + 1 < args.len: role = args[i+1]; inc i
+      elif a == "--allow-role-id": allowRoleId = true
       elif a.startsWith("--tags="): tags = a[7..^1]
       elif a == "--tags" and i + 1 < args.len: tags = args[i+1]; inc i
       elif a.startsWith("--session="): sessionId = a[10..^1]
@@ -8468,7 +8533,7 @@ proc main() =
         if name.len == 0: name = a
         elif tags.len == 0: tags = a
       else:
-        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'open'. Valid flags: --listen, -l, --listen-timeout, --force-steal, --agent, --name, --session, --session-id, --conv-id, --conversation-id, --ls-address, --address, --csrf-token, --token, --project-id, --harness, --tags")
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'open'. Valid flags: --listen, -l, --listen-timeout, --force-steal, --agent, --name, --id, --agent-id, --role, --allow-role-id, --session, --session-id, --conv-id, --conversation-id, --ls-address, --address, --csrf-token, --token, --project-id, --harness, --tags")
         quit(2)
       inc i
 
@@ -8476,7 +8541,7 @@ proc main() =
     if csrfToken.len > 0: putEnv("ANTIGRAVITY_CSRF_TOKEN", csrfToken)
     if projId.len > 0: putEnv("ANTIGRAVITY_PROJECT_ID", projId)
     if sessionId.len > 0: putEnv("ANTIGRAVITY_CONVERSATION_ID", sessionId)
-    doOpen(cfg, name, tags, rearmListen, listenTimeout, forceSteal)
+    doOpen(cfg, name, tags, rearmListen, listenTimeout, forceSteal, role, allowRoleId)
 
   of "heartbeat":
     var explicitName = ""
@@ -9095,10 +9160,10 @@ proc main() =
   of "session":
     if args.len < 2:
       stderr.writeLine("Usage: rhizo session <register|set|get|resolve|remove|list> [args...]")
-      stderr.writeLine("  rhizo session register <agent_name> [--session <id>] [--harness <name>] [--force] [--json]")
-      stderr.writeLine("  rhizo session set <prefix:session_id> <agent_name>")
-      stderr.writeLine("  rhizo session get <session_key|agent_name> [--thread-id] [--json]")
-      stderr.writeLine("  rhizo session resolve <agent_name|session_key> [--json]")
+      stderr.writeLine("  rhizo session register <agent_id> [--role <role>] [--session <id>] [--harness <name>] [--allow-role-id] [--force] [--json]")
+      stderr.writeLine("  rhizo session set <prefix:session_id> <agent_id>")
+      stderr.writeLine("  rhizo session get <session_key|agent_id> [--thread-id] [--json]")
+      stderr.writeLine("  rhizo session resolve <agent_id|session_key> [--json]")
       stderr.writeLine("  rhizo session remove <prefix:session_id>")
       stderr.writeLine("  rhizo session list [--json]")
       quit(1)
@@ -9110,6 +9175,8 @@ proc main() =
       var sessionId = ""
       var harness = ""
       var force = false
+      var role = ""
+      var allowRoleId = false
       var asJson = ("--json" in rawArgs) or ("-j" in rawArgs)
       for idx, a in rawArgs:
         if a == "--format" and idx + 1 < rawArgs.len and rawArgs[idx+1].toLowerAscii == "json":
@@ -9134,8 +9201,13 @@ proc main() =
         elif a in ["--force", "-f"]: force = true
         elif a in ["--json", "-j"]: asJson = true
         elif a.startsWith("--agent="): agent = a[8..^1]
-        elif (a == "--agent" or a == "--name") and i + 1 < args.len: agent = args[i+1]; inc i
+        elif (a in ["--agent", "--name", "--id", "--agent-id"]) and i + 1 < args.len: agent = args[i+1]; inc i
         elif a.startsWith("--name="): agent = a[7..^1]
+        elif a.startsWith("--id="): agent = a[5..^1]
+        elif a.startsWith("--agent-id="): agent = a[11..^1]
+        elif a.startsWith("--role="): role = a[7..^1]
+        elif a == "--role" and i + 1 < args.len: role = args[i+1]; inc i
+        elif a == "--allow-role-id": allowRoleId = true
         elif a.startsWith("--ls-address="): lsAddr = a[13..^1]
         elif a in ["--ls-address", "--address"] and i + 1 < args.len: lsAddr = args[i+1]; inc i
         elif a.startsWith("--address="): lsAddr = a[10..^1]
@@ -9147,14 +9219,25 @@ proc main() =
         elif not a.startsWith("-") and agent.len == 0:
           agent = a
         else:
-          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo session register'. Valid flags: --session, --session-id, --conv-id, --conversation-id, --harness, -H, --force, -f, --json, -j, --agent, --name, --ls-address, --address, --csrf-token, --token, --project-id")
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo session register'. Valid flags: --session, --session-id, --conv-id, --conversation-id, --harness, -H, --force, -f, --json, -j, --agent, --name, --id, --agent-id, --role, --allow-role-id, --ls-address, --address, --csrf-token, --token, --project-id")
           quit(2)
         inc i
+
+      let effectiveAllowRole = allowRoleId or (getEnv("RHIZO_ALLOW_ROLE_IDS", "") in ["1", "true", "yes"])
+      if not effectiveAllowRole:
+        let checkCandidate = if agent.len > 0: agent else: getActiveAgentName(cfg, fallbackDefault = false)
+        if isRoleNameNotUniqueId(checkCandidate):
+          stderr.writeLine("Error: ERR_ROLE_AS_ID: '" & checkCandidate & "' is a role name, not a unique agent_id! Allocate a unique listener ID via 'rhizo name <project>' (e.g. '<project>-sequoia') and pass the role via --role <role> or --tags.")
+          quit(1)
 
       if agent.len == 0:
         agent = getActiveAgentName(cfg, fallbackDefault = false)
       if agent.len == 0 or agent == "agent" or agent == cfg.project & "-agent":
-        stderr.writeLine("Error: 'rhizo session register' requires <agent_name> or active session. Pass '<agent>' or --agent <name>.")
+        stderr.writeLine("Error: 'rhizo session register' requires <agent_id> or active session. Pass '<agent_id>' or --id <id>.")
+        quit(1)
+
+      if not effectiveAllowRole and isRoleNameNotUniqueId(agent):
+        stderr.writeLine("Error: ERR_ROLE_AS_ID: '" & agent & "' is a role name, not a unique agent_id! Allocate a unique listener ID via 'rhizo name <project>' (e.g. '<project>-sequoia') and pass the role via --role <role> or --tags.")
         quit(1)
 
       if lsAddr.len > 0: putEnv("ANTIGRAVITY_LS_ADDRESS", lsAddr)
@@ -9180,11 +9263,32 @@ proc main() =
         quit(1)
 
       agent = ensureProjectScopedName(cfg, agent)
+      if not effectiveAllowRole and isRoleNameNotUniqueId(agent):
+        stderr.writeLine("Error: ERR_ROLE_AS_ID: '" & agent & "' is a role name, not a unique agent_id! Allocate a unique listener ID via 'rhizo name <project>' (e.g. '<project>-sequoia') and pass the role via --role <role> or --tags.")
+        quit(1)
+
       let ok = syncSessionRegistry(nil, cfg, agent, sessionId, harness, explicitBind = true)
+      if role.len > 0:
+        try:
+          var rClient = connectRedis(cfg.redisUrl)
+          defer: (try: rClient.close() except CatchableError: discard)
+          discard rClient.hSet(cfg.prefix & "agent:" & agent, "role", role)
+          let currentTags = rClient.hGet(cfg.prefix & "agent:" & agent, "tags")
+          var tagList = if currentTags != redisNil and currentTags.len > 0: currentTags.split(',') else: @[]
+          var found = false
+          for t in tagList:
+            if t.strip.toLowerAscii == role.toLowerAscii: found = true; break
+          if not found:
+            tagList.add(role)
+            discard rClient.hSet(cfg.prefix & "agent:" & agent, "tags", tagList.join(","))
+        except CatchableError:
+          discard
+
       if asJson:
         var outObj = newJObject()
         outObj["status"] = %(if ok: "ok" else: "error")
         outObj["agent"] = %agent
+        if role.len > 0: outObj["role"] = %role
         if sessionId.len > 0: outObj["session_id"] = %sessionId
         if harness.len > 0: outObj["harness"] = %harness
         echo $outObj

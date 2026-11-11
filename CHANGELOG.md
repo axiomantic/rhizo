@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added intuitive CLI flag aliases for `send` and `reply`: `--recipient` / `--target` for `--to`; `--sender` / `--agent` for `--from`; `--message` / `--text` / `-m` for `--body`; `--title` / `-s` for `--subject`.
   - Enforced strict unknown flag rejection across `open`, `session`, `router`, `listen`, `send`, `reply`, `drain`, `probe`, `who`, `task`, `enqueue`, and `claim` subcommands, exiting with code 2 and displaying allowable flags.
   - Added regression test `test_41_fail_fast_identity_and_intuitive_cli_args` in `tests/test_coordination_invariants.py`.
+- **Role vs Unique Agent ID Separation & ERR_ROLE_AS_ID (`src/rhizo.nim`, `skills/rhizo/SKILL.md`)**:
+  - Implemented `isRoleNameNotUniqueId` rejecting bare role names (`agent`, `default`, `orchestrator`, `architect`, `implementer`, `implementor`, `auditor`, `worker`, `builder`, `reviewer`, `lead`, `coder`, `tester`, `verifier`, `conductor`) and role-suffixed names (`-orchestrator`, `-architect`, `-implementer`, `-implementor`, `-auditor`, `-reviewer`, `-verifier`, `-lead`, `-builder`) when passed as unique agent IDs in `rhizo open` and `rhizo session register` (`ERR_ROLE_AS_ID`, exit code 1).
+  - Added `--role <role>` flag to `rhizo open` and `rhizo session register`, storing `role` in `rhizo:agent:<agent_id>` and automatically appending `<role>` to agent capability tags.
+  - Added `--id <agent_id>` and `--agent-id <agent_id>` flags and support for `RHIZO_AGENT_ID` environment variable across identity resolution.
+  - Added `--allow-role-id` flag and `RHIZO_ALLOW_ROLE_IDS=1` environment variable for backward compatibility bypass.
+  - Updated `skills/rhizo/SKILL.md` and CLI help strings to standardize `<agent_id>` nomenclature.
+  - Added regression test `test_42_role_vs_unique_agent_id_separation` in `tests/test_coordination_invariants.py`.
 
 ## [0.2.32] - 2026-11-11
 

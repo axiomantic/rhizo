@@ -1065,14 +1065,14 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.assertEqual(res_name_arch.returncode, 0)
         self.assertTrue(res_name_arch.stdout.strip().startswith(proj + "-architect-"))
 
-        # 3. rhizo open architect automatically scopes to alpha-proj-architect
-        res_open = self.run_cmd(["open", "architect"], env_overrides={"RHIZO_PROJECT": proj})
+        # 3. rhizo open architect automatically scopes to alpha-proj-architect (with RHIZO_ALLOW_ROLE_IDS=1)
+        res_open = self.run_cmd(["open", "architect"], env_overrides={"RHIZO_PROJECT": proj, "RHIZO_ALLOW_ROLE_IDS": "1"})
         self.assertEqual(res_open.returncode, 0)
         self.assertIn("alpha-proj-architect", res_open.stdout)
         self.assertIn("automatically scoped to project", res_open.stderr)
 
         # 4. rhizo listen with bare role scopes to alpha-proj-orchestrator
-        res_listen = self.run_cmd(["listen", "orchestrator", "--timeout", "1"], env_overrides={"RHIZO_PROJECT": proj})
+        res_listen = self.run_cmd(["listen", "orchestrator", "--timeout", "1"], env_overrides={"RHIZO_PROJECT": proj, "RHIZO_ALLOW_ROLE_IDS": "1"})
         self.assertEqual(res_listen.returncode, 0)
         self.assertIn("alpha-proj-orchestrator", res_listen.stderr)
 
@@ -1350,7 +1350,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         worker = "auto-idle-worker"
         orchestrator = "auto-idle-orchestrator"
         self.run_cmd(["open", worker, "worker"])
-        self.run_cmd(["open", orchestrator, "orchestrator"])
+        self.run_cmd(["open", orchestrator, "orchestrator", "--allow-role-id"])
 
         # 1. Setup in-flight task on worker
         task_id = "task-idle-check"
@@ -1449,7 +1449,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         # 6. Bidirectional Alias Resolution
         alias_name = "alias-lead"
         target_name = "target-lead"
-        self.run_cmd(["open", target_name, "orchestrator"])
+        self.run_cmd(["open", target_name, "orchestrator", "--allow-role-id"])
         res_alias_set = self.run_cmd(["alias", "set", alias_name, target_name])
         self.assertEqual(res_alias_set.returncode, 0)
 
@@ -1720,7 +1720,7 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         self.run_cmd(["open", worker, "worker"])
         self.run_cmd(["open", alien, "alien"])
-        self.run_cmd(["open", orch, "orchestrator"])
+        self.run_cmd(["open", orch, "orchestrator", "--allow-role-id"])
 
         # Start listener with --roster-guard in background
         proc = subprocess.Popen(
@@ -2723,6 +2723,102 @@ exit 0
         finally:
             self.run_cmd(["close", ag_rec])
             self.run_cmd(["close", ag_snd])
+
+    def test_42_role_vs_unique_agent_id_separation(self):
+        """Verify ERR_ROLE_AS_ID enforcement, --allow-role-id bypass, --role, --id, and RHIZO_AGENT_ID env var."""
+        # 1. Bare role names in open fail fast with ERR_ROLE_AS_ID (exit code 1)
+        res_bare_arch = self.run_cmd(["open", "architect"])
+        self.assertEqual(res_bare_arch.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_bare_arch.stderr)
+        self.assertIn("'architect' is a role name, not a unique agent_id!", res_bare_arch.stderr)
+
+        res_bare_orch = self.run_cmd(["open", "orchestrator"])
+        self.assertEqual(res_bare_orch.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_bare_orch.stderr)
+
+        # 2. Role-suffixed names in open fail fast with ERR_ROLE_AS_ID (exit code 1)
+        res_suf_arch = self.run_cmd(["open", "anynng-architect"])
+        self.assertEqual(res_suf_arch.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_suf_arch.stderr)
+        self.assertIn("'anynng-architect' is a role name, not a unique agent_id!", res_suf_arch.stderr)
+
+        res_suf_orch = self.run_cmd(["open", "myproj-orchestrator"])
+        self.assertEqual(res_suf_orch.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_suf_orch.stderr)
+        self.assertIn("'myproj-orchestrator' is a role name, not a unique agent_id!", res_suf_orch.stderr)
+
+        res_suf_audit = self.run_cmd(["open", "extrudel-auditor"])
+        self.assertEqual(res_suf_audit.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_suf_audit.stderr)
+        self.assertIn("'extrudel-auditor' is a role name, not a unique agent_id!", res_suf_audit.stderr)
+
+        # 3. session register with bare or suffixed role names fails fast with ERR_ROLE_AS_ID
+        res_ses_role = self.run_cmd(["session", "register", "orchestrator", "--session", "agy:test_sid"])
+        self.assertEqual(res_ses_role.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_ses_role.stderr)
+
+        res_ses_suf = self.run_cmd(["session", "register", "alpha-architect", "--session", "agy:test_sid"])
+        self.assertEqual(res_ses_suf.returncode, 1)
+        self.assertIn("ERR_ROLE_AS_ID", res_ses_suf.stderr)
+
+        # 4. Bypass via --allow-role-id flag
+        res_bypass_flag = self.run_cmd(["open", "architect", "--allow-role-id"])
+        self.assertEqual(res_bypass_flag.returncode, 0)
+        self.run_cmd(["close", "coord_test-architect"])
+
+        # 5. Bypass via RHIZO_ALLOW_ROLE_IDS=1 environment variable
+        res_bypass_env = self.run_cmd(["open", "anynng-architect"], env_overrides={"RHIZO_ALLOW_ROLE_IDS": "1"})
+        self.assertEqual(res_bypass_env.returncode, 0)
+        self.run_cmd(["close", "anynng-architect"])
+
+        # 6. Assign role via --role <role> on rhizo open
+        unique_id_1 = f"test-worker-{int(time.time() * 1000)}"
+        res_role_open = self.run_cmd(["open", unique_id_1, "--role", "architect"])
+        self.assertEqual(res_role_open.returncode, 0)
+        self.assertIn(f"Agent Name : {unique_id_1}", res_role_open.stdout)
+        self.assertIn("Role       : architect", res_role_open.stdout)
+        self.assertIn("architect", res_role_open.stdout)
+
+        # Verify in Redis
+        import redis
+        r = redis.from_url(self.env["RHIZO_REDIS_URL"], decode_responses=True)
+        prefix = self.env["RHIZO_REDIS_PREFIX"]
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_id_1}", "role"), "architect")
+        tags_1 = r.hget(f"{prefix}agent:{unique_id_1}", "tags") or ""
+        self.assertIn("architect", tags_1.split(","))
+
+        # 7. Assign role via --role <role> on rhizo session register
+        unique_id_2 = f"test-worker-ses-{int(time.time() * 1000)}"
+        res_ses_role_ok = self.run_cmd([
+            "session", "register", unique_id_2,
+            "--role", "worker",
+            "--session", "agy:test_unique_ses",
+            "--json"
+        ])
+        self.assertEqual(res_ses_role_ok.returncode, 0)
+        ses_data = json.loads(res_ses_role_ok.stdout.strip())
+        self.assertEqual(ses_data.get("role"), "worker")
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_id_2}", "role"), "worker")
+        tags_2 = r.hget(f"{prefix}agent:{unique_id_2}", "tags") or ""
+        self.assertIn("worker", tags_2.split(","))
+
+        # 8. Support --id and --agent-id flags
+        unique_id_3 = f"test-worker-id-{int(time.time() * 1000)}"
+        res_id_flag = self.run_cmd(["open", "--id", unique_id_3, "--role", "verifier"])
+        self.assertEqual(res_id_flag.returncode, 0)
+        self.assertIn(f"Agent Name : {unique_id_3}", res_id_flag.stdout)
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_id_3}", "role"), "verifier")
+
+        # 9. Support RHIZO_AGENT_ID env var
+        res_hb = self.run_cmd(["heartbeat", "--json"], env_overrides={"RHIZO_AGENT_ID": unique_id_1})
+        self.assertEqual(res_hb.returncode, 0)
+        hb_data = json.loads(res_hb.stdout.strip())
+        self.assertEqual(hb_data.get("agent"), unique_id_1)
+
+        # Clean up
+        self.run_cmd(["close", unique_id_1])
+        self.run_cmd(["close", unique_id_2])
+        self.run_cmd(["close", unique_id_3])
 
 
 if __name__ == "__main__":
