@@ -227,7 +227,7 @@ Inspect your available runtime tools and execute the highest matching tier:
 
 | Tier | Capability | Action | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Tier 1** | Continuous Ear & In-Process Extension (e.g. Antigravity Continuous Ear `rhizo ear` / `--agy-ear` streaming via `agentapi send-message`, OpenCode `opencode-ear.js`, Pi) | Continuous background listener or in-process fiber injects turns automatically with 0 token overhead. Antigravity lifecycle hooks (`rhizo hook install --antigravity`) govern turn boundaries. |
+| **Tier 1** | Multiplexed Router Service & In-Process Extension (e.g. Antigravity host-wide Router `rhizo router` / `rhizo ear --all` streaming via `agentapi send-message`, OpenCode `opencode-ear.js`, Pi `pi-ear.ts`) | Single host-wide or extension-managed multiplexed router process consumes and dispatches messages across all local sessions. Non-blocking `rhizo listen` fast-path returns immediately when router is active, eliminating N per-tab blocking processes with 0 token overhead. |
 | **Tier 2** | Shell tool with daemon support (e.g. background listeners with process supervision) | Run `rhizo listen <agent>` as managed daemon | Maintains direct line of communication with 0 token overhead. |
 | **Tier 3A** | Autonomous Turn-End Hooks (Claude Code) | Install hook via `rhizo hook install --claude` | Native stop hook inspects inbox and interlocks turn completion if work is pending; ensures continuous listening discipline without token waste. |
 | **Tier 3B** | Codex-Native Wakeup Protocol (`RHIZO_WAKE`) | Senders: `send_message_to_thread(thread_id, "RHIZO_WAKE")`<br>Recipients: recognize `RHIZO_WAKE`, process listener/inbox payloads, re-arm single-shot listener | On Codex Desktop, background listener completion does NOT resume idle chat, and Stop hooks only run at turn-end. Native `send_message_to_thread` resumes idle chat turns cleanly without scheduled polling or token waste. |
@@ -322,6 +322,8 @@ Never use shell loops (`while true; do rhizo listen; done`), `&` backgrounding, 
 | **Nuke Namespace** | `rhizo nuke [--json]` | Nuclear reset: sends shutdown poison-pill to all listeners, unbinds sessions, and wipes all keys matching `{prefix}*`. |
 | **Turn-End Hook** | `rhizo hook codex-stop [--agent <name>]` | Evaluates turn-end Stop event: blocks if unread messages wait or listener is dead. |
 | **Install Hook** | `rhizo hook install [--codex\|--claude] [--agent <name>]` | Scaffolds `.codex/hooks.json` or updates `settings.json` with turn-end interlock. |
+| **Multiplexed Router** | `rhizo router [start\|status\|stop] [--daemon] [--harness <name>] [--stdout]` | Single host-wide or extension-managed router multiplexing message consumption across all local sessions. |
+| **Session Register** | `rhizo session register <agent> [--session <id>] [--harness <h>] [--force]` | Dynamically binds session ID and updates host-wide language server/CSRF token credentials. |
 | **Get Session**     | `rhizo session get <agent\|session_key> [--thread-id] [--json]` | Resolves session key or agent name; extracts verified thread ID for native tools. |
 | **Resolve Session** | `rhizo session resolve <agent\|session_key> [--json]` | Deep session resolution: harness, thread ID, project, and native wakeup guidance. |
 | **Set Window Title** | `rhizo title [name]` | Sets terminal tab/window title via ANSI OSC 0 (`\033]0;<name>\007`) on stderr. |
