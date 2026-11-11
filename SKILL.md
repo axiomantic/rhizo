@@ -92,12 +92,12 @@ Ad-Hoc Subagents & No Double-Daemons: Subagents are tools for sessions to run ad
 </INVARIANT>
 
 <INVARIANT>
-Identity Allocation: Agent identity must be unique and collision-free across projects. Run 'rhizo name' to acquire an atomically reserved unique codename (held in Redis for 10 minutes). Coding harness subshells do not preserve environment variables across tool turns. Record the literal name output from 'rhizo name' (e.g. 'rhizo-sequoia') in your reasoning context and pass it explicitly in all subsequent commands: 'rhizo open <name>', 'rhizo listen <name>'.
+Identity Allocation: Agent identity must be unique and collision-free across projects. Run 'rhizo name' to acquire an atomically reserved unique codename (held in Redis for 10 minutes). Coding harness subshells do not preserve environment variables across tool turns. Record the literal name output from 'rhizo name' (e.g. 'rhizo-sequoia') in your reasoning context and pass it explicitly in all subsequent commands: 'rhizo open <agent_id>', 'rhizo listen <agent_id>'.
 </INVARIANT>
 
 <INVARIANT>
-Unbootstrapped Session Identity Invariant: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or static role files. If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
-1. Run 'rhizo name' to allocate a fresh unique identity, followed by 'rhizo open <name>', OR
+Unbootstrapped Session Identity Invariant: If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden prompt card, an explicit operator assignment, or prior 'rhizo open <agent_id>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or static role files. If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either:
+1. Run 'rhizo name' to allocate a fresh unique identity, followed by 'rhizo open <agent_id>', OR
 2. Ask the operator via 'ask_question' which persona or role this window represents.
 Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.
 </INVARIANT>
@@ -261,12 +261,12 @@ For substantive messages to a Codex session:
 On `RHIZO_WAKE`, at turn start, and before ending any turn:
 
 1. **Retrieve completed supervised listener output**: The listener may already have consumed a message, leaving the inbox empty.
-2. **Process every delivered message, then drain and process the remaining inbox**: Run `rhizo drain 50 <agent> --json` and process all pending work within authorized scope.
-3. **Refresh the agent registration if its heartbeat expired**: Ensure session lease and mapping are valid (`rhizo open <agent>`).
+2. **Process every delivered message, then drain and process the remaining inbox**: Run `rhizo drain 50 <agent_id> --json` and process all pending work within authorized scope.
+3. **Refresh the agent registration if its heartbeat expired**: Ensure session lease and mapping are valid (`rhizo open <agent_id>`).
 4. **Probe the listener**: Preserve an existing live listener; never create a duplicate.
 5. **Start single-shot listener if none is running**:
    ```bash
-   rhizo --project <project> listen <agent> --quiet
+   rhizo --project <project> listen <agent_id> --quiet
    ```
 6. **Handle immediate message delivery**: If it immediately delivers a message, process it and repeat through separate tool calls.
 7. **End turn when blocked**: End the turn only after a listener remains blocked waiting for messages, with no unprocessed output or inbox backlog. If arming fails, report the failure explicitly.
@@ -284,11 +284,11 @@ Never use shell loops (`while true; do rhizo listen; done`), `&` backgrounding, 
 | Intent | Command | Invariant / Anti-Pattern |
 | :--- | :--- | :--- |
 | **Reserve Identity** | `rhizo name [prefix] [--ttl 600] [--json]` | Atomically reserve a unique codename from the 1,000-word lexicon (held in Redis for 10 min). |
-| **Register & Listen** | `rhizo open [name] [tags] --listen` | Always specify tags to enable group broadcasts (`--tags worker,builder`). |
-| **Continuous Ear** | `rhizo listen [name] [--quiet]` | Do not set `--timeout`. Let command block indefinitely until work arrives. |
-| **Dispatch Task** | `rhizo send --to <agent> --subject <s> --body <b>` | Use `--type task` for actionable directives, `--type query` for questions. |
-| **Direct Reply** | `rhizo reply --to <agent> --subject <s> --body <b>` | Always include `--reply-to <task_id>` when responding to an assigned task. |
-| **Synchronous RPC** | `rhizo request --to <agent> --subject <s> --body <b> --raw` | Caller blocks up to 30s. Specialist must respond using `rhizo reply`. |
+| **Register & Listen** | `rhizo open <agent_id> [tags] [--role <role>] --listen` | Always specify tags to enable group broadcasts (`--tags worker,builder`). Pass role via `--role`. |
+| **Continuous Ear** | `rhizo listen <agent_id> [--quiet]` | Do not set `--timeout`. Let command block indefinitely until work arrives. |
+| **Dispatch Task** | `rhizo send --to <agent_id> --subject <s> --body <b>` | Use `--type task` for actionable directives, `--type query` for questions. |
+| **Direct Reply** | `rhizo reply --to <agent_id> --subject <s> --body <b>` | Always include `--reply-to <task_id>` when responding to an assigned task. |
+| **Synchronous RPC** | `rhizo request --to <agent_id> --subject <s> --body <b> --raw` | Caller blocks up to 30s. Specialist must respond using `rhizo reply`. |
 | **Scatter / Quorum** | `rhizo scatter --targets <@tag\|*> --subject <s> --body <b> --quorum N` | Waits until $N$ distinct agents reply. Exits 1 if timeout expires before quorum. |
 | **Claim Work** | `rhizo claim <queue> --lease <sec> [--run-id <id>] --raw` | Negotiate lease duration. If task exceeds lease, renew before writeback. |
 | **Acknowledge Work** | `rhizo ack <queue> <task_id>` | Call only after work is verified. Failure to ack returns task to queue (or DLQ). |
@@ -298,12 +298,12 @@ Never use shell loops (`while true; do rhizo listen; done`), `&` backgrounding, 
 | **Inspect Routing** | `rhizo route "<directive>" [--routes-file <f>]` | Dry-run System 1 evaluation. Outputs matched rule, probabilities, target queue. |
 | **Route & Enqueue** | `rhizo enqueue --route "<directive>" [--routes-file <f>]` | Evaluates task via System 1 and atomically enqueues to target queue in Redis. |
 | **Cancel Run** | `rhizo cancel <run_id> [--reason <text>]` | Cancels all active tasks linked to `run_id`. Workers check via `--run-id`. |
-| **Check Inbox** | `rhizo check-inbox [name]` | Non-blocking. Use only under Tier 4 synchronous shells. |
+| **Check Inbox** | `rhizo check-inbox <agent_id>` | Non-blocking. Use only under Tier 4 synchronous shells. |
 | **Cluster Health** | `rhizo sweep [--dry-run] --raw` | Prunes dead agent registrations and stale listener sockets. |
 | **Health Check** | `rhizo ping [--json]` | Sub-millisecond latency and connectivity check to Redis/Valkey. |
 | **Sticky Advisory** | `rhizo remind add <text> [--priority <prio>] [--cadence <sec>] [--ttl <sec>]` | Enqueues sticky invariant with smart piggyback cadence and standalone fallback. |
-| **Inspect Advisories** | `rhizo remind list [--for <agent>] [--scope <scope>] [--json]` | Non-destructively inspects active advisories and per-worker delivery/ack status. |
-| **Acknowledge Advisory**| `rhizo remind ack <id> [--agent <name>]` | Confirms worker internalized directive. With `--once`, suppresses future banners. |
+| **Inspect Advisories** | `rhizo remind list [--for <agent_id>] [--scope <scope>] [--json]` | Non-destructively inspects active advisories and per-worker delivery/ack status. |
+| **Acknowledge Advisory**| `rhizo remind ack <id> [--agent <agent_id>]` | Confirms worker internalized directive. With `--once`, suppresses future banners. |
 | **Dismiss Advisory** | `rhizo remind dismiss <id>` | Immediately revokes advisory across entire cluster. |
 | **Trigger Fallback** | `rhizo remind tick [--json]` | Evaluates idle workers and dispatches standalone reminders if cadence elapsed. |
 | **Add Pulse (Cron)** | `rhizo pulse add <id> <cron> --queue <q> --body <b> [--title <t>]` | Registers distributed cron rhythm in Redis sorted set (`rhizo:pulses`). |
@@ -320,14 +320,14 @@ Never use shell loops (`while true; do rhizo listen; done`), `&` backgrounding, 
 | **Virtual Mock Time** | `rhizo time advance <seconds> / rhizo time reset` | Manipulates Redis virtual time offset for deterministic, instantaneous TTL testing. |
 | **Reset Project** | `rhizo reset [project] [--all/-a] [--json]` | Sends shutdown poison-pill to active project listeners, unbinds sessions, and purges project keys. Pass `--all` to nuke entire namespace. |
 | **Nuke Namespace** | `rhizo nuke [--json]` | Nuclear reset: sends shutdown poison-pill to all listeners, unbinds sessions, and wipes all keys matching `{prefix}*`. |
-| **Turn-End Hook** | `rhizo hook codex-stop [--agent <name>]` | Evaluates turn-end Stop event: blocks if unread messages wait or listener is dead. |
-| **Install Hook** | `rhizo hook install [--codex\|--claude] [--agent <name>]` | Scaffolds `.codex/hooks.json` or updates `settings.json` with turn-end interlock. |
+| **Turn-End Hook** | `rhizo hook codex-stop [--agent <agent_id>]` | Evaluates turn-end Stop event: blocks if unread messages wait or listener is dead. |
+| **Install Hook** | `rhizo hook install [--codex\|--claude] [--agent <agent_id>]` | Scaffolds `.codex/hooks.json` or updates `settings.json` with turn-end interlock. |
 | **Multiplexed Router** | `rhizo router [start\|status\|stop] [--daemon] [--harness <name>] [--stdout]` | Single host-wide or extension-managed router multiplexing message consumption across all local sessions. |
-| **Session Register** | `rhizo session register <agent> [--session <id>] [--harness <h>] [--force]` | Dynamically binds session ID and updates host-wide language server/CSRF token credentials. |
-| **Get Session**     | `rhizo session get <agent\|session_key> [--thread-id] [--json]` | Resolves session key or agent name; extracts verified thread ID for native tools. |
-| **Resolve Session** | `rhizo session resolve <agent\|session_key> [--json]` | Deep session resolution: harness, thread ID, project, and native wakeup guidance. |
-| **Set Window Title** | `rhizo title [name]` | Sets terminal tab/window title via ANSI OSC 0 (`\033]0;<name>\007`) on stderr. |
-| **Doorbell Wakeup**  | `rhizo poke <agent> [--cmd <cmd>] [--force] [--dry-run] [--json] [-- <cmd...>]` | Injects wakeup keystroke into worker's window (Ghostty, tmux, Terminal, iTerm2, GUI). Supports `-- <cmd...>`. |
+| **Session Register** | `rhizo session register <agent_id> [--role <role>] [--session <id>] [--harness <h>] [--force]` | Dynamically binds session ID and updates host-wide language server/CSRF token credentials. |
+| **Get Session**     | `rhizo session get <agent_id\|session_key> [--thread-id] [--json]` | Resolves session key or agent name; extracts verified thread ID for native tools. |
+| **Resolve Session** | `rhizo session resolve <agent_id\|session_key> [--json]` | Deep session resolution: harness, thread ID, project, and native wakeup guidance. |
+| **Set Window Title** | `rhizo title [agent_id]` | Sets terminal tab/window title via ANSI OSC 0 (`\033]0;<agent_id>\007`) on stderr. |
+| **Doorbell Wakeup**  | `rhizo poke <agent_id> [--cmd <cmd>] [--force] [--dry-run] [--json] [-- <cmd...>]` | Injects wakeup keystroke into worker's window (Ghostty, tmux, Terminal, iTerm2, GUI). Supports `-- <cmd...>`. |
 | **Reassign Worker** | `rhizo reassign <worker> --project <p> --role <r> [--tags <t>] [--queue <q>]` | Dynamically reassigns an active cluster worker session to a new project/role without reopening terminal tabs. |
 
 ---
@@ -660,10 +660,10 @@ Exit Codes & Verdicts:
 ### L. Hybrid Window Targeting & The Doorbell Protocol (`rhizo title`, `rhizo poke`)
 
 1. **Dynamic ANSI Terminal Tab & Window Titling (`rhizo title`)**:
-   - `rhizo open <agent>` automatically stamps the active terminal tab and window name to `@<agent>` using standard ANSI OSC 0 escape sequences (`\033]0;<agent>\007`).
-   - `rhizo listen <agent>` dynamically stamps `@<agent> (listening)` while awaiting messages, and restores `@<agent>` upon exit.
+   - `rhizo open <agent_id>` automatically stamps the active terminal tab and window name to `@<agent_id>` using standard ANSI OSC 0 escape sequences (`\033]0;<agent_id>\007`).
+   - `rhizo listen <agent_id>` dynamically stamps `@<agent_id> (listening)` while awaiting messages, and restores `@<agent_id>` upon exit.
    - All escape sequences are emitted to `stderr`, keeping `stdout` completely clean for JSON parsing and shell piping (`rhizo listen | jq .`).
-   - Run `rhizo title [name]` to manually or programmatically set the window title of the current pane or tab.
+   - Run `rhizo title [agent_id]` to manually or programmatically set the window title of the current pane or tab.
 
 2. **Window-Targeted Doorbell Wakeup (`rhizo poke`)**:
    When an agent has stalled, gone deaf, or when external tools (ChatGPT, macOS Accessibility, AppleScript) need to reach an agent window directly by name:
