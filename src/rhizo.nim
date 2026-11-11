@@ -1034,13 +1034,13 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
   except CatchableError:
     return (false, 0, "", "")
 
-proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = ""): bool
+proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = "", explicitBind: bool = false): bool
 
 proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bool =
   let normName = sanitizeIdentifier(name)
   if normName.len == 0: return false
   if getEnv("RHIZO_EAR_DISABLED", "") in ["1", "true", "yes"]: return false
-  if getEnv("PYTEST_CURRENT_TEST", "").len > 0: return false
+  if getEnv("PYTEST_CURRENT_TEST", "").len > 0 or getEnv("RHIZO_TEST", "").len > 0: return false
 
   discard syncSessionRegistry(client, cfg, normName)
 
@@ -1335,7 +1335,7 @@ proc resolveSenderSessionPubkey*(cfg: RhizoConfig, client: Redis, fromAgent: str
     discard
   return ""
 
-proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = ""): bool =
+proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = "", explicitBind: bool = false): bool =
   var rClient = client
   var closeClient = false
   if rClient == nil:
@@ -1400,19 +1400,43 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
     else:
       convId = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "").strip()
 
-  # 4. Resolve Agent Name
-  var agentName = sanitizeIdentifier(agentNameParam)
+  # 4. Resolve Existing Owner in Redis for convId (with JSON parsing)
+  var mappedOwner = ""
+  if convId.len > 0:
+    try:
+      let keysToTry = if harness == "antigravity": @["agy:" & convId, "antigravity:" & convId]
+                      else: @[harness & ":" & convId]
+      for k in keysToTry:
+        let mapped = rClient.hGet(cfg.prefix & "sessions", k)
+        if mapped != redisNil and mapped.len > 0:
+          try:
+            let mNode = parseJson(mapped)
+            if mNode.kind == JObject and mNode.hasKey("agent"):
+              mappedOwner = sanitizeIdentifier(mNode["agent"].getStr(""))
+            elif mNode.kind == JString:
+              mappedOwner = sanitizeIdentifier(mNode.getStr(""))
+          except CatchableError:
+            mappedOwner = sanitizeIdentifier(mapped)
+          if mappedOwner.len > 0: break
+    except CatchableError: discard
+
+  # Anti-Hijacking Guard:
+  # When explicitBind is false and convId is already bound to mappedOwner,
+  # if agentNameParam is specified for a different agent, DO NOT bind convId to agentNameParam!
+  let requestedAgent = sanitizeIdentifier(agentNameParam)
+  var canBindConv = true
+  if not explicitBind and mappedOwner.len > 0 and requestedAgent.len > 0 and requestedAgent != mappedOwner:
+    canBindConv = false
+
+  var agentName = if requestedAgent.len > 0: requestedAgent
+                  elif mappedOwner.len > 0: mappedOwner
+                  else: ""
+
   if agentName.len == 0:
     let envAgent = getEnv("RHIZO_AGENT_NAME", "").strip()
     if envAgent.len > 0:
       agentName = sanitizeIdentifier(envAgent)
-  if agentName.len == 0 and convId.len > 0:
-    try:
-      let mapped = rClient.hGet(cfg.prefix & "sessions", harness & ":" & convId)
-      if mapped != redisNil and mapped.len > 0:
-        agentName = sanitizeIdentifier(mapped)
-    except CatchableError:
-      discard
+
   if agentName.len == 0:
     agentName = sanitizeIdentifier(getActiveAgentName(cfg, "", fallbackDefault = false))
 
@@ -1423,12 +1447,20 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
 
   # 5. Update agent fields & bidirectional session maps
   try:
-    if convId.len > 0:
+    if convId.len > 0 and canBindConv:
+      let sessionKey = if harness == "antigravity": "agy:" & convId else: harness & ":" & convId
       if harness == "antigravity":
         discard rClient.hSet(agentKey, "agy_conversation_id", convId)
       discard rClient.hSet(agentKey, "session_id", convId)
-      let sessionKey = harness & ":" & convId
-      discard rClient.hSet(cfg.prefix & "sessions", sessionKey, agentName)
+
+      var entry = newJObject()
+      entry["agent"] = %agentName
+      entry["session_id"] = %sessionKey
+      if cfg.project.len > 0: entry["project"] = %cfg.project
+      let curDir = getCurrentDir()
+      if curDir.len > 0: entry["cwd"] = %curDir
+      entry["updated_at"] = %nowIso
+      discard rClient.hSet(cfg.prefix & "sessions", sessionKey, $entry)
       discard rClient.hSet(cfg.prefix & "agent_sessions", agentName, sessionKey)
 
     if lsAddr.len > 0: discard rClient.hSet(agentKey, "agy_ls_address", lsAddr)
@@ -1441,6 +1473,10 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
     discard rClient.hSet(agentKey, "host", myHost)
     discard rClient.hSet(agentKey, "machine_id", myMid)
     discard rClient.hSet(agentKey, "updated_at", $nowEpoch)
+    let curVerNotified = rClient.hGet(agentKey, "last_version_notified:rhizo")
+    if curVerNotified == redisNil or curVerNotified.len == 0:
+      discard rClient.hSet(agentKey, "last_version_notified:rhizo", RhizoVersion)
+      discard rClient.hSet(agentKey, "last_version_notified_at:rhizo", nowIso)
     discard rClient.sAdd(cfg.prefix & "active_agents", agentName)
   except CatchableError:
     return false
@@ -2179,7 +2215,7 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     echo backlog
 
   let harness = detectHarness(cfg)
-  discard syncSessionRegistry(client, cfg, name, sid, harness)
+  discard syncSessionRegistry(client, cfg, name, sid, harness, explicitBind = true)
   if harness == "antigravity" and not rearmListen and getEnv("RHIZO_EAR_DISABLED", "") notin ["1", "true", "yes"] and getEnv("PYTEST_CURRENT_TEST", "").len == 0:
     discard ensureAgyEarAlive(cfg, name, client)
 
@@ -3081,18 +3117,18 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
 
       if routerActive and routerMode in ["router", "agy-ear", "opencode-ear", "pi-ear"]:
         let inboxLen = try: client.lLen(inboxKey) except CatchableError: 0
-        if inboxLen == 0:
-          let sid = if agyConv != redisNil and agyConv.len > 0: agyConv
-                    else: client.hGet(cfg.prefix & "agent:" & name, "session_id")
-          var outNode = newJObject()
-          outNode["status"] = %"router_active"
-          outNode["agent"] = %name
-          outNode["router_pid"] = %routerPid
-          if sid != redisNil and sid.len > 0:
-            outNode["conversation_id"] = %sid
-          outNode["message"] = %"Session is registered with the active Multiplexed Router Service. No blocking listen needed."
-          echo $outNode
-          return
+        let sid = if agyConv != redisNil and agyConv.len > 0: agyConv
+                  else: client.hGet(cfg.prefix & "agent:" & name, "session_id")
+        var outNode = newJObject()
+        outNode["status"] = %"router_active"
+        outNode["agent"] = %name
+        outNode["router_pid"] = %routerPid
+        outNode["inbox_depth"] = %inboxLen
+        if sid != redisNil and sid.len > 0:
+          outNode["conversation_id"] = %sid
+        outNode["message"] = %"Session is registered with the active Multiplexed Router Service. No blocking listen needed."
+        echo $outNode
+        return
 
   setTerminalTitle(name & " (listening)")
   checkSupervisionAttached(name, force or continuous)
@@ -8967,7 +9003,7 @@ proc main() =
         quit(1)
 
       agent = ensureProjectScopedName(cfg, agent)
-      let ok = syncSessionRegistry(nil, cfg, agent, sessionId, harness)
+      let ok = syncSessionRegistry(nil, cfg, agent, sessionId, harness, explicitBind = true)
       if asJson:
         var outObj = newJObject()
         outObj["status"] = %(if ok: "ok" else: "error")

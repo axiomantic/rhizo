@@ -53,7 +53,7 @@ proc isMachineOutputContext*(rawArgs: seq[string]): bool =
   ## or completion context where prompt riders and version state advancement MUST NOT occur.
   for a in rawArgs:
     let low = a.toLowerAscii
-    if low in ["--json", "-j", "--version", "-v", "--help", "-h", "help", "version", "ping"]:
+    if low in ["--json", "-j", "--version", "-v", "--help", "-h", "help", "version", "ping", "router", "session"]:
       return true
     if low.startsWith("--json=") or low.startsWith("--format=json") or low == "--format=json":
       return true
@@ -102,10 +102,20 @@ proc notifyClusterOfUpgrade*(
   let nowSec = getTime().toUnix()
   let secret = getSecret(cfg)
   let normExclude = excludeAgent.toLowerAscii.strip()
+  let projPfx = if cfg.project.len > 0: cfg.project.toLowerAscii.strip() else: ""
 
   for agent in activeAgents:
     let agentName = agent.toLowerAscii.strip()
-    if agentName.len == 0 or (normExclude.len > 0 and agentName == normExclude): continue
+    if agentName.len == 0: continue
+    if normExclude.len > 0:
+      if agentName == normExclude: continue
+      let cleanAgent = if projPfx.len > 0 and agentName.startsWith(projPfx & ":"): agentName[projPfx.len + 1 .. ^1]
+                       elif projPfx.len > 0 and agentName.startsWith(projPfx & "-"): agentName[projPfx.len + 1 .. ^1]
+                       else: agentName
+      let cleanExclude = if projPfx.len > 0 and normExclude.startsWith(projPfx & ":"): normExclude[projPfx.len + 1 .. ^1]
+                         elif projPfx.len > 0 and normExclude.startsWith(projPfx & "-"): normExclude[projPfx.len + 1 .. ^1]
+                         else: normExclude
+      if cleanAgent == cleanExclude: continue
 
     let agentKey = cfg.prefix & "agent:" & agentName
     let lastNotifiedVer = try:

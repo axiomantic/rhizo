@@ -31,6 +31,7 @@ class TestCoordinationInvariants(unittest.TestCase):
         self.env["RHIZO_REDIS_URL"] = REDIS_URL
         self.env["RHIZO_REDIS_PREFIX"] = TEST_PREFIX
         self.env["RHIZO_PROJECT"] = "coord_test"
+        self.env["RHIZO_EAR_DISABLED"] = "1"
         # Reset virtual time and clear test prefix
         subprocess.run(["redis-cli", "-u", REDIS_URL, "EVAL",
                         f"local keys = redis.call('KEYS', '{TEST_PREFIX}*'); if #keys > 0 then redis.call('DEL', unpack(keys)) end", "0"],
@@ -2365,18 +2366,46 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertEqual(data_reg["session_id"], conv1)
             self.assertEqual(data_reg["harness"], "antigravity")
 
-            # Check Redis session mapping
+            # Check Redis session mapping: stored as valid JSON under canonical agy: prefix
             res_sess = subprocess.run(
-                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}sessions", f"antigravity:{conv1}"],
+                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}sessions", f"agy:{conv1}"],
                 capture_output=True, text=True
             ).stdout.strip()
-            self.assertEqual(res_sess, ag1)
+            sess_json = json.loads(res_sess)
+            self.assertEqual(sess_json["agent"], ag1)
+            self.assertEqual(sess_json["session_id"], f"agy:{conv1}")
+
+            # Verify rhizo session get reads it back accurately
+            res_get = self.run_cmd(["session", "get", ag1, "--json"])
+            self.assertEqual(res_get.returncode, 0)
+            data_get = json.loads(res_get.stdout.strip())
+            self.assertEqual(data_get["agent"], ag1)
+            self.assertEqual(data_get["session_key"], f"agy:{conv1}")
 
             res_agy_conv = subprocess.run(
                 ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{ag1}", "agy_conversation_id"],
                 capture_output=True, text=True
             ).stdout.strip()
             self.assertEqual(res_agy_conv, conv1)
+
+            # Anti-Hijacking Negative Control:
+            # Session with conv1 bound to ag1 executes a command inspecting another agent (ag2)
+            ag2 = f"router_target_{int(time.time() * 1000)}"
+            self.run_cmd(["open", ag2, "worker"])
+            # Run non-register probe with conv1 in environment
+            res_probe = self.run_cmd(
+                ["probe", ag2, "--json"],
+                env_overrides={"ANTIGRAVITY_CONVERSATION_ID": conv1}
+            )
+            self.assertEqual(res_probe.returncode, 0)
+
+            # ag2 must NOT be hijacked with ag1's conv1!
+            res_ag2_conv = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{ag2}", "agy_conversation_id"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertNotEqual(res_ag2_conv, conv1)
+            self.run_cmd(["close", ag2])
 
             # 2. Host-wide language server token rotation
             ls_addr = "127.0.0.1:49999"
@@ -2410,22 +2439,43 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertIn("machine_id", data_stat)
 
             # 4. Non-blocking rhizo listen fast-path
-            # Simulate router active lock for this agent
+            # Simulate router active lock for this machine and agent
             my_pid = os.getpid()
+            mid = data_stat.get("machine_id", "")
+            router_node = {
+                "pid": my_pid,
+                "host": socket.gethostname(),
+                "machine_id": mid,
+                "started": int(time.time()),
+                "heartbeat": int(time.time()),
+            }
+            subprocess.run([
+                "redis-cli", "-u", REDIS_URL, "SETEX",
+                f"{TEST_PREFIX}router:{mid}", "120", json.dumps(router_node)
+            ], check=True)
+
+            scoped_ag1 = f"coord_test:{ag1}"
             listener_node = {
                 "pid": my_pid,
                 "host": socket.gethostname(),
-                "machine_id": data_stat.get("machine_id", ""),
+                "machine_id": mid,
                 "started": int(time.time()),
                 "mode": "router"
             }
             subprocess.run([
                 "redis-cli", "-u", REDIS_URL, "SETEX",
+                f"{TEST_PREFIX}listener:{scoped_ag1}", "120", json.dumps(listener_node)
+            ], check=True)
+            subprocess.run([
+                "redis-cli", "-u", REDIS_URL, "SETEX",
                 f"{TEST_PREFIX}listener:{ag1}", "120", json.dumps(listener_node)
             ], check=True)
 
+            # Drain any protocol upgrade or system notices before testing empty inbox fast-path
+            self.run_cmd(["drain", "10", ag1])
+
             # With empty inbox, rhizo listen returns immediately with router_active
-            res_fast = self.run_cmd(["listen", ag1])
+            res_fast = self.run_cmd(["listen", ag1, "--timeout", "1"])
             self.assertEqual(res_fast.returncode, 0)
             data_fast = json.loads(res_fast.stdout.strip())
             self.assertEqual(data_fast["status"], "router_active")
@@ -2440,9 +2490,18 @@ class TestCoordinationInvariants(unittest.TestCase):
             self.assertGreaterEqual(elapsed, 0.8)
             self.assertNotIn("router_active", res_block.stdout)
 
-            # 6. Negative Control: Pending message in inbox is immediately consumed despite router lock
-            self.run_cmd(["send", "--to", ag1, "--subject", "PendingMsg", "--body", "Should be consumed immediately"])
-            res_consume = self.run_cmd(["listen", ag1, "1"])
+            # 6. With pending message in inbox, non-blocking listen still fast-paths with router_active,
+            # indicating message handling is delegated to the multiplexed router
+            res_send = self.run_cmd(["send", "--to", ag1, "--from", ag1, "--subject", "PendingMsg", "--body", "Should be consumed immediately"])
+            self.assertEqual(res_send.returncode, 0)
+            res_fast2 = self.run_cmd(["listen", ag1, "1"])
+            self.assertEqual(res_fast2.returncode, 0)
+            data_fast2 = json.loads(res_fast2.stdout.strip())
+            self.assertEqual(data_fast2["status"], "router_active")
+            self.assertGreaterEqual(data_fast2.get("inbox_depth", 0), 1)
+
+            # 7. Negative Control: With --blocking flag, pending message is directly consumed
+            res_consume = self.run_cmd(["listen", ag1, "1", "--blocking"])
             self.assertEqual(res_consume.returncode, 0)
             msg_consumed = json.loads(res_consume.stdout.strip())
             self.assertEqual(msg_consumed["subject"], "PendingMsg")

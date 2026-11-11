@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Host-Wide Multiplexed Router Service (`rhizo router [start|status|stop]`, `rhizo ear --all`)**:
   - Implemented single host-wide / extension-managed router process eliminating N per-tab blocking `rhizo listen` processes across Tier 1 harnesses (Antigravity, OpenCode, Pi).
   - Multiplexes inbound Redis `bRPop` across active agents on the local machine (`rhizo:active_agents`) and dispatches messages to language server `agentapi send-message` (Antigravity) or stdout envelope streams (OpenCode, Pi).
-  - Added non-blocking fast-path in `rhizo listen`: if an active router is managing the session and the inbox is empty, returns immediately with `{"status":"router_active"}` rather than spinning redundant blocking listeners.
+  - Added non-blocking fast-path in `rhizo listen`: if an active router is managing the session, returns immediately with `{"status":"router_active"}` (including `inbox_depth`) rather than spinning redundant blocking listeners.
   - Added `--blocking` / `--foreground` flag to `rhizo listen` for explicit blocking loop overrides when needed.
 - **Dynamic Session & Token Registry (`rhizo session register`, `rhizo open`, automatic CLI hook refresh)**:
   - Added `rhizo session register <agent> [--session <id>] [--harness <h>] [--force]` for atomic session-to-agent binding in Redis (`rhizo:sessions` and `rhizo:agent_sessions`).
   - Added dual-tier credential management in `rhizo:agy_host:<machine_id>` and `rhizo:agent:<agent>` with automatic token rotation on language server reconnects.
+  - Implemented cross-agent conversation anti-hijacking guard (`explicitBind: bool = false`) protecting pre-bound session keys against accidental re-binding by non-register commands.
+  - Excluded `session` and `router` machine commands from protocol upgrade notice trigger scans (`isMachineOutputContext`) and automatically initialized watermarks on newly registered agents.
   - Updated OpenCode (`extensions/opencode/src/supervisor.ts`, `sessions.ts`) and Pi (`skills/rhizo/pi-ear.ts`) extensions to register sessions dynamically and supervise a single shared router process.
 
 ## [0.2.32] - 2026-11-11
