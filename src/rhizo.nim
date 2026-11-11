@@ -2903,8 +2903,8 @@ proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, 
     return -1
 
 proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: JsonNode, id, fromAgent, subject, body: string, isTask: bool, effectiveTaskId: string) =
-  var convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
-  if convId.len == 0 and client != nil:
+  var convId = ""
+  if client != nil:
     try:
       let v = client.hGet(cfg.prefix & "agent:" & name, "agy_conversation_id")
       if v != redisNil and v.len > 0: convId = v.strip()
@@ -2932,6 +2932,10 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
           break
         i += 2
     except CatchableError: discard
+
+  # Only fall back to environment variable if Redis has NO conversation ID for this agent
+  if convId.len == 0:
+    convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
 
   if convId.len == 0:
     stderr.writeLine("[rhizo-agy-ear] WARNING: Could not resolve Antigravity conversation ID for @" & name & "; skipping agentapi delivery.")
@@ -3038,7 +3042,7 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
     payload.add("\n[AUDIT TICKET REQUIRED FOR RATIFICATION]\n")
     payload.add("Strand : " & tId & "\n")
     payload.add("Ticket : " & ticket & "\n")
-    payload.add("Approve: vine audit approve " & tId & " --auditor @" & name & " --ticket " & ticket & " --weave --listen\n")
+    payload.add("Approve: vine audit approve " & tId & " --auditor @" & name & " --ticket " & ticket & " --evidence \"...\" --listen\n")
     payload.add("Reject : vine audit reject " & tId & " --auditor @" & name & " --ticket " & ticket & " --reason \"...\" --listen\n\n")
 
   var cmdArgs: seq[string] = @[]
@@ -3686,6 +3690,11 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
     return
 
   # action == "start":
+  delEnv("ANTIGRAVITY_CONVERSATION_ID")
+  delEnv("OPENCODE_SESSION_ID")
+  delEnv("PI_SESSION_ID")
+  delEnv("RHIZO_AGENT_NAME")
+
   let rVal = try: client.get(cfg.prefix & "router:" & myMid) except CatchableError: redisNil
   if rVal != redisNil and rVal.len > 0:
     try:

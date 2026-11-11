@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Excluded `session` and `router` machine commands from protocol upgrade notice trigger scans (`isMachineOutputContext`) and automatically initialized watermarks on newly registered agents.
   - Updated OpenCode (`extensions/opencode/src/supervisor.ts`, `sessions.ts`) and Pi (`skills/rhizo/pi-ear.ts`) extensions to register sessions dynamically and supervise a single shared router process.
 
+### Fixed
+- **Prioritize Agent Redis Conversation ID over Spawner Environment (`src/rhizo.nim`)**:
+  - In `dispatchAgyMessage`: Resolved target agent's `agy_conversation_id` from Redis (`rhizo:agent:<name>`, `rhizo:agent_sessions`, `rhizo:sessions`) before falling back to `ANTIGRAVITY_CONVERSATION_ID`. Prevents multiplexed router daemons started from an interactive Antigravity tab from misrouting cluster agent messages into the spawning tab.
+  - In `doRouter`: Scrubbed inherited session environment variables (`ANTIGRAVITY_CONVERSATION_ID`, `OPENCODE_SESSION_ID`, `PI_SESSION_ID`, `RHIZO_AGENT_NAME`) at router startup (`action == "start"`).
+  - In `dispatchAgyMessage`: Updated audit ticket approval guidance to use `--evidence "..."` instead of deprecated `--weave` for compliance with Vine v0.2.19+.
+  - Added regression test `test_40_router_convid_precedence_and_env_scrubbing` in `tests/test_coordination_invariants.py`.
+
 ## [0.2.32] - 2026-11-11
 
 ### Added

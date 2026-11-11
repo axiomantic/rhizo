@@ -8,11 +8,13 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
 import socket
 import unittest
+from pathlib import Path
 
 if os.name == "nt":
     BIN_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "rhizo.exe"))
@@ -2509,6 +2511,122 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         finally:
             self.run_cmd(["close", ag1])
+
+    # -------------------------------------------------------------------------
+    # Problem 40: Router convId Precedence & Spawner Environment Scrubbing
+    # -------------------------------------------------------------------------
+    def test_40_router_convid_precedence_and_env_scrubbing(self):
+        """Verify multiplexed router prioritizes Redis convId over spawner ANTIGRAVITY_CONVERSATION_ID."""
+        ag_a = f"worker_a_{int(time.time() * 1000)}"
+        ag_b = f"worker_b_{int(time.time() * 1000)}"
+        conv_a = f"conv_aaa_{int(time.time() * 1000)}"
+        conv_b = f"conv_bbb_{int(time.time() * 1000)}"
+        spawner_conv = "spawner-conv-999"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_file = Path(tmp_dir) / "agentapi.log"
+            mock_agentapi = Path(tmp_dir) / "agentapi"
+            script = f"""#!/bin/sh
+echo "$@" >> "{log_file}"
+exit 0
+"""
+            mock_agentapi.write_text(script)
+            mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+            try:
+                # 1. Register agent-a and agent-b with distinct conversation IDs
+                res_a = self.run_cmd(
+                    ["session", "register", ag_a, "--session", conv_a, "--harness", "antigravity", "--json"],
+                    env_overrides={"ANTIGRAVITY_AGENTAPI_EXE": str(mock_agentapi)}
+                )
+                self.assertEqual(res_a.returncode, 0)
+
+                res_b = self.run_cmd(
+                    ["session", "register", ag_b, "--session", conv_b, "--harness", "antigravity", "--json"],
+                    env_overrides={"ANTIGRAVITY_AGENTAPI_EXE": str(mock_agentapi)}
+                )
+                self.assertEqual(res_b.returncode, 0)
+
+                # Configure mock credentials for both agents
+                for ag in [ag_a, ag_b]:
+                    subprocess.run([
+                        "redis-cli", "-u", REDIS_URL, "HSET",
+                        f"{TEST_PREFIX}agent:{ag}",
+                        "agy_agentapi_exe", str(mock_agentapi),
+                        "agy_ls_address", "127.0.0.1:49999",
+                        "agy_csrf_token", "test_csrf_token",
+                        "last_version_notified:rhizo", "0.2.32"
+                    ], check=True)
+
+                # 2. Stop any existing router on this machine
+                self.run_cmd(["router", "stop"])
+
+                # 3. Start router in a background subprocess with spawner conversation ID in environment
+                router_env = self.env.copy()
+                router_env["ANTIGRAVITY_CONVERSATION_ID"] = spawner_conv
+                router_env["ANTIGRAVITY_AGENTAPI_EXE"] = str(mock_agentapi)
+                router_env["ANTIGRAVITY_LS_ADDRESS"] = "127.0.0.1:49999"
+                router_env["ANTIGRAVITY_CSRF_TOKEN"] = "test_csrf_token"
+                router_env["RHIZO_EAR_DISABLED"] = "0"
+                router_env["RHIZO_QUIET"] = "1"
+
+                proc = subprocess.Popen(
+                    [str(BIN_PATH), f"--redis-url={REDIS_URL}", f"--prefix={TEST_PREFIX}", "router", "start"],
+                    env=router_env,
+                    cwd=self.test_home,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                try:
+                    # Wait briefly for router to start up and discover agents
+                    time.sleep(1.5)
+
+                    # Verify router is active
+                    res_stat = self.run_cmd(["router", "status", "--json"])
+                    self.assertEqual(res_stat.returncode, 0)
+                    stat_data = json.loads(res_stat.stdout.strip())
+                    self.assertEqual(stat_data.get("status"), "active")
+
+                    # 4. Enqueue messages to agent-a and agent-b
+                    self.run_cmd(["send", "--to", ag_a, "--from", "orchestrator", "--subject", "MsgForA", "--body", "BodyForA"])
+                    self.run_cmd(["send", "--to", ag_b, "--from", "orchestrator", "--subject", "MsgForB", "--body", "BodyForB"])
+
+                    # Wait for router to multiplex and dispatch to mock agentapi
+                    deadline = time.time() + 5.0
+                    calls = []
+                    while time.time() < deadline:
+                        if log_file.exists():
+                            content = log_file.read_text().strip()
+                            if content:
+                                calls = [line for line in content.splitlines() if line.strip()]
+                                if len(calls) >= 2:
+                                    break
+                        time.sleep(0.2)
+
+                    self.assertGreaterEqual(len(calls), 2, f"Expected at least 2 agentapi invocations, got: {calls}")
+
+                    all_log_text = log_file.read_text() if log_file.exists() else ""
+
+                    # CRITICAL INVARIANT: The spawner's inherited conversation ID must NEVER appear in agentapi invocations!
+                    self.assertNotIn(spawner_conv, all_log_text, f"Spawner conversation ID {spawner_conv} leaked into agentapi dispatch! Calls: {all_log_text}")
+
+                    # Verify agent-a got conv_a and agent-b got conv_b
+                    self.assertIn(conv_a, all_log_text, f"Expected {conv_a} in agentapi calls")
+                    self.assertIn(conv_b, all_log_text, f"Expected {conv_b} in agentapi calls")
+
+                finally:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    self.run_cmd(["router", "stop"])
+
+            finally:
+                self.run_cmd(["close", ag_a])
+                self.run_cmd(["close", ag_b])
 
 
 if __name__ == "__main__":
