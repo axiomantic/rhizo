@@ -1084,13 +1084,9 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
 
 proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = "", explicitBind: bool = false): bool
 
-proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bool =
-  let normName = sanitizeIdentifier(name)
-  if normName.len == 0: return false
+proc ensureRouterDaemonAlive*(cfg: RhizoConfig, client: Redis = nil): bool =
   if getEnv("RHIZO_EAR_DISABLED", "") in ["1", "true", "yes"]: return false
   if getEnv("PYTEST_CURRENT_TEST", "").len > 0 or getEnv("RHIZO_TEST", "").len > 0: return false
-
-  discard syncSessionRegistry(client, cfg, normName)
 
   let myMid = getMachineId()
   let myHost = getHostNameStr()
@@ -1130,6 +1126,12 @@ proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bo
   let cmd = "nohup " & quoteShell(rhizoExe) & " router start --daemon --quiet < /dev/null >> " & quoteShell(logPath) & " 2>&1 &"
   discard execCmd(cmd)
   return true
+
+proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bool =
+  let normName = sanitizeIdentifier(name)
+  if normName.len == 0: return false
+  discard syncSessionRegistry(client, cfg, normName)
+  return ensureRouterDaemonAlive(cfg, client)
 
 proc parseIsoOrUnix*(tsStr: string): int64 =
   if tsStr.len == 0: return 0
@@ -1404,7 +1406,13 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
   # 1. Resolve Harness
   var harness = harnessParam.toLowerAscii.strip()
   if harness.len == 0:
-    if getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0:
+    if convIdParam.startsWith("agy:") or convIdParam.startsWith("antigravity:"):
+      harness = "antigravity"
+    elif convIdParam.startsWith("opencode:"):
+      harness = "opencode"
+    elif convIdParam.startsWith("pi:"):
+      harness = "pi"
+    elif getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0:
       harness = "antigravity"
     elif getEnv("OPENCODE_SESSION_ID", "").len > 0:
       harness = "opencode"
@@ -1438,13 +1446,21 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
 
   # 3. Resolve Session / Conversation ID
   var convId = convIdParam.strip()
+  if convId.startsWith("agy:"): convId = convId.substr(4)
+  elif convId.startsWith("antigravity:"): convId = convId.substr(12)
+  elif convId.startsWith("opencode:"): convId = convId.substr(9)
+  elif convId.startsWith("pi:"): convId = convId.substr(3)
   if convId.len == 0:
     if harness == "antigravity":
       convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+      if convId.startsWith("agy:"): convId = convId.substr(4)
+      elif convId.startsWith("antigravity:"): convId = convId.substr(12)
     elif harness == "opencode":
       convId = getEnv("OPENCODE_SESSION_ID", "").strip()
+      if convId.startsWith("opencode:"): convId = convId.substr(9)
     elif harness == "pi":
       convId = getEnv("PI_SESSION_ID", "").strip()
+      if convId.startsWith("pi:"): convId = convId.substr(3)
     else:
       convId = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "").strip()
 
@@ -1537,6 +1553,9 @@ proc checkAutoSyncSessionRegistry*(cfg: RhizoConfig, client: Redis = nil, agentN
      getEnv("OPENCODE_SESSION_ID", "").len > 0 or
      getEnv("PI_SESSION_ID", "").len > 0:
     discard syncSessionRegistry(client, cfg, agentName)
+  if getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0 or
+     getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0:
+    discard ensureRouterDaemonAlive(cfg, client)
 
 proc resolveProjectLeader*(cfg: RhizoConfig, targetRole: string, fromAgent: string): string =
   ## Resolves @orchestrator or @lead to the active leader of the sender's project.
@@ -6904,14 +6923,7 @@ proc readStdinJson*(): JsonNode =
     discard
   return newJObject()
 
-proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: JsonNode = nil): string =
-  var normName = sanitizeIdentifier(agentNameParam)
-  if normName.len > 0:
-    return normName
-  let envAgent = getEnv("RHIZO_AGENT_ID", getEnv("RHIZO_AGENT_NAME", "")).strip()
-  if envAgent.len > 0:
-    return sanitizeIdentifier(envAgent)
-
+proc extractAgyConvId*(stdinNode: JsonNode = nil): string =
   var convId = ""
   if stdinNode != nil and stdinNode.kind == JObject:
     convId = stdinNode.getOrDefault("conversationId").getStr(stdinNode.getOrDefault("conversation_id").getStr("")).strip()
@@ -6922,6 +6934,24 @@ proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: 
 
   if convId.len == 0:
     convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+  return convId
+
+proc syncAgyHookContext*(cfg: RhizoConfig, agentName: string = "", stdinNode: JsonNode = nil) =
+  let convId = extractAgyConvId(stdinNode)
+  if convId.len > 0:
+    putEnv("ANTIGRAVITY_CONVERSATION_ID", convId)
+  discard syncSessionRegistry(nil, cfg, agentName, convId, "antigravity")
+  discard ensureRouterDaemonAlive(cfg)
+
+proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: JsonNode = nil): string =
+  var normName = sanitizeIdentifier(agentNameParam)
+  if normName.len > 0:
+    return normName
+  let envAgent = getEnv("RHIZO_AGENT_ID", getEnv("RHIZO_AGENT_NAME", "")).strip()
+  if envAgent.len > 0:
+    return sanitizeIdentifier(envAgent)
+
+  let convId = extractAgyConvId(stdinNode)
 
   if convId.len > 0:
     try:
@@ -6947,6 +6977,7 @@ proc resolveAgyAgent*(cfg: RhizoConfig, agentNameParam: string = "", stdinNode: 
 proc doHookAgyPreInvocation*(cfg: RhizoConfig, agentNameParam: string = ""): string =
   let stdinNode = readStdinJson()
   var normName = resolveAgyAgent(cfg, agentNameParam, stdinNode)
+  syncAgyHookContext(cfg, normName, stdinNode)
   if normName.len == 0:
     return "{}"
 
@@ -6987,6 +7018,7 @@ proc doHookAgyPreInvocation*(cfg: RhizoConfig, agentNameParam: string = ""): str
 proc doHookAgyPostTool*(cfg: RhizoConfig, agentNameParam: string = ""): string =
   let stdinNode = readStdinJson()
   var normName = resolveAgyAgent(cfg, agentNameParam, stdinNode)
+  syncAgyHookContext(cfg, normName, stdinNode)
   if normName.len == 0:
     return "{}"
 
@@ -7033,6 +7065,7 @@ proc doHookAgyPostTool*(cfg: RhizoConfig, agentNameParam: string = ""): string =
 proc doHookAgyStop*(cfg: RhizoConfig, agentNameParam: string = ""): string =
   let stdinNode = readStdinJson()
   var normName = resolveAgyAgent(cfg, agentNameParam, stdinNode)
+  syncAgyHookContext(cfg, normName, stdinNode)
   if normName.len == 0:
     return "{}"
 
@@ -9267,7 +9300,12 @@ proc main() =
         stderr.writeLine("Error: ERR_ROLE_AS_ID: '" & agent & "' is a role name, not a unique agent_id! Allocate a unique listener ID via 'rhizo name <project>' (e.g. '<project>-sequoia') and pass the role via --role <role> or --tags.")
         quit(1)
 
+      if harness == "antigravity" and sessionId.len > 0:
+        putEnv("ANTIGRAVITY_CONVERSATION_ID", sessionId)
+
       let ok = syncSessionRegistry(nil, cfg, agent, sessionId, harness, explicitBind = true)
+      if ok and (harness == "antigravity" or getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0):
+        discard ensureAgyEarAlive(cfg, agent)
       if role.len > 0:
         try:
           var rClient = connectRedis(cfg.redisUrl)

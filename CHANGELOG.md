@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Auto-Start Multiplexed Router Daemon & Dynamic Turn Context Sync (`src/rhizo.nim`)**:
+  - Extracted `ensureRouterDaemonAlive*(cfg, client)` from `ensureAgyEarAlive` enabling autonomous router daemon bootstrap without requiring an active agent name.
+  - Automatically launches the singleton background router (`rhizo router start --daemon --quiet`) on Antigravity lifecycle hooks (`doHookAgyPreInvocation`, `doHookAgyPostTool`, `doHookAgyStop`), `rhizo session register`, and CLI turn auto-sync (`checkAutoSyncSessionRegistry`) whenever Antigravity credentials (`ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CONVERSATION_ID`) are present.
+  - Implemented `extractAgyConvId(stdinNode)` and `syncAgyHookContext(cfg, agentName, stdinNode)` synchronizing `rhizo:agy_host:<machine_id>` and conversation-to-agent session bindings on the very first turn of a resumed conversation tab.
+  - Added regression test `test_43_router_autostart_and_hook_sync` in `tests/test_coordination_invariants.py`.
 - **Host-Wide Multiplexed Router Service (`rhizo router [start|status|stop]`, `rhizo ear --all`)**:
   - Implemented single host-wide / extension-managed router process eliminating N per-tab blocking `rhizo listen` processes across Tier 1 harnesses (Antigravity, OpenCode, Pi).
   - Multiplexes inbound Redis `bRPop` across active agents on the local machine (`rhizo:active_agents`) and dispatches messages to language server `agentapi send-message` (Antigravity) or stdout envelope streams (OpenCode, Pi).

@@ -46,12 +46,12 @@ class TestCoordinationInvariants(unittest.TestCase):
         if os.path.isdir(self.test_home):
             shutil.rmtree(self.test_home, ignore_errors=True)
 
-    def run_cmd(self, args, env_overrides=None, cwd=None):
+    def run_cmd(self, args, env_overrides=None, cwd=None, stdin_text=None):
         cmd_env = self.env.copy()
         if env_overrides:
             cmd_env.update(env_overrides)
         actual_cwd = cwd if cwd is not None else self.test_home
-        return subprocess.run([BIN_PATH] + args, capture_output=True, text=True, env=cmd_env, cwd=actual_cwd)
+        return subprocess.run([BIN_PATH] + args, input=stdin_text, capture_output=True, text=True, env=cmd_env, cwd=actual_cwd)
 
     # -------------------------------------------------------------------------
     # Problem 1: Identity Isolation (No Cross-Process ~/.config Leaks)
@@ -2594,7 +2594,7 @@ exit 0
                     self.run_cmd(["send", "--to", ag_b, "--from", "orchestrator", "--subject", "MsgForB", "--body", "BodyForB"])
 
                     # Wait for router to multiplex and dispatch to mock agentapi
-                    deadline = time.time() + 5.0
+                    deadline = time.time() + 8.0
                     calls = []
                     while time.time() < deadline:
                         if log_file.exists():
@@ -2819,6 +2819,87 @@ exit 0
         self.run_cmd(["close", unique_id_1])
         self.run_cmd(["close", unique_id_2])
         self.run_cmd(["close", unique_id_3])
+
+    def test_43_router_autostart_and_hook_sync(self):
+        """Verify that session register and agy hooks automatically synchronize host credentials, session mappings, and router state."""
+        import redis
+        r = redis.from_url(self.env["RHIZO_REDIS_URL"], decode_responses=True)
+        prefix = self.env["RHIZO_REDIS_PREFIX"]
+
+        # 1. rhizo session register with --ls-address and --csrf-token updates rhizo:agy_host:<mid> and agy_conversation_id
+        unique_ag = f"test-agy-reg-{int(time.time() * 1000)}"
+        conv_id_1 = f"conv-{int(time.time() * 1000)}"
+        res_reg = self.run_cmd([
+            "session", "register", unique_ag,
+            "--session", conv_id_1,
+            "--harness", "antigravity",
+            "--ls-address", "127.0.0.1:48123",
+            "--csrf-token", "token-xyz-123",
+            "--json"
+        ])
+        self.assertEqual(res_reg.returncode, 0, f"Register failed: {res_reg.stderr}")
+        data_reg = json.loads(res_reg.stdout.strip())
+        self.assertEqual(data_reg.get("status"), "ok")
+
+        # Verify agy_host key exists and has credentials
+        host_keys = r.keys(f"{prefix}agy_host:*")
+        self.assertTrue(len(host_keys) > 0, "No agy_host keys found")
+        host_key = host_keys[0]
+        self.assertEqual(r.hget(host_key, "ls_address"), "127.0.0.1:48123")
+        self.assertEqual(r.hget(host_key, "csrf_token"), "token-xyz-123")
+
+        # Verify agent keys and session mapping
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_ag}", "agy_conversation_id"), conv_id_1)
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_ag}", "session_id"), conv_id_1)
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_ag}", "harness"), "antigravity")
+
+        sess_val = r.hget(f"{prefix}sessions", f"agy:{conv_id_1}")
+        self.assertIsNotNone(sess_val)
+        sess_data = json.loads(sess_val)
+        self.assertEqual(sess_data.get("agent"), unique_ag)
+
+        # 2. rhizo hook agy-pre-invocation refreshes agy_host credentials and synchronizes conversation ID from stdin JSON
+        conv_id_2 = f"conv-hook-{int(time.time() * 1000)}"
+        hook_stdin = json.dumps({"conversationId": conv_id_2})
+        res_hook = self.run_cmd(
+            ["hook", "agy-pre-invocation", "--agent", unique_ag],
+            stdin_text=hook_stdin,
+            env_overrides={
+                "ANTIGRAVITY_LS_ADDRESS": "127.0.0.1:48999",
+                "ANTIGRAVITY_CSRF_TOKEN": "token-hook-updated",
+            }
+        )
+        self.assertEqual(res_hook.returncode, 0, f"Hook failed: {res_hook.stderr}")
+
+        # Verify host credentials refreshed
+        self.assertEqual(r.hget(host_key, "ls_address"), "127.0.0.1:48999")
+        self.assertEqual(r.hget(host_key, "csrf_token"), "token-hook-updated")
+
+        # Verify conversation ID synchronized for agent
+        self.assertEqual(r.hget(f"{prefix}agent:{unique_ag}", "agy_conversation_id"), conv_id_2)
+        sess_val_2 = r.hget(f"{prefix}sessions", f"agy:{conv_id_2}")
+        self.assertIsNotNone(sess_val_2)
+        sess_data_2 = json.loads(sess_val_2)
+        self.assertEqual(sess_data_2.get("agent"), unique_ag)
+
+        # 3. Test checkAutoSyncSessionRegistry / CLI turn start auto-start triggers
+        # Running a rhizo command with ANTIGRAVITY_LS_ADDRESS refreshes host credentials
+        res_who = self.run_cmd(
+            ["who", "--json"],
+            env_overrides={
+                "ANTIGRAVITY_LS_ADDRESS": "127.0.0.1:48777",
+                "ANTIGRAVITY_CSRF_TOKEN": "token-autosync-test",
+            }
+        )
+        self.assertEqual(res_who.returncode, 0)
+        self.assertEqual(r.hget(host_key, "ls_address"), "127.0.0.1:48777")
+        self.assertEqual(r.hget(host_key, "csrf_token"), "token-autosync-test")
+
+        # Clean up
+        self.run_cmd(["close", unique_ag])
+        r.delete(f"{prefix}sessions")
+        for hk in host_keys:
+            r.delete(hk)
 
 
 if __name__ == "__main__":

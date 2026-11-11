@@ -32,6 +32,10 @@ class TestAgyEarAndHooks(unittest.TestCase):
         cls.env["RHIZO_SECRET"] = "test-secret-key-32-chars-long!!"
         cls.env["RHIZO_EAR_DISABLED"] = "0"  # Enable ear for unit tests specifically
         cls.env["RHIZO_QUIET"] = "1"
+        cls.env.pop("ANTIGRAVITY_CONVERSATION_ID", None)
+        cls.env.pop("ANTIGRAVITY_LS_ADDRESS", None)
+        cls.env.pop("ANTIGRAVITY_CSRF_TOKEN", None)
+        cls.env.pop("ANTIGRAVITY_PROJECT_ID", None)
 
     def run_rhizo(self, args: list, stdin_text: str = None, env_overrides: dict = None, cwd: str = None) -> subprocess.CompletedProcess:
         env = self.env.copy()
