@@ -2091,7 +2091,7 @@ secret = "my_inline_secret_test_555"
                 self.assertIn("tags", a_entry)
                 self.assertIn("state", a_entry)
                 self.assertIn("activity", a_entry)
-                self.assertIn(a_entry["status"], ["ACTIVE", "EXPIRED"])
+                self.assertIn(a_entry["status"], ["ACTIVE", "EXPIRED", "STALE"])
                 self.assertIsInstance(a_entry["tags"], list)
                 self.assertIsInstance(a_entry["state"], str)
                 self.assertIsInstance(a_entry["activity"], str)

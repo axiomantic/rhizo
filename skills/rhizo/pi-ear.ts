@@ -206,6 +206,14 @@ export function saveLocalSessionMapping(sessionKey: string, agentName: string): 
   } catch (err: any) {
     console.error(`[rhizo-pi-ear] could not save session mapping: ${err?.message}`)
   }
+
+  try {
+    const bin = getRhizoBin()
+    const sessionId = sessionKey.startsWith("pi:") ? sessionKey.slice("pi:".length) : sessionKey
+    spawnSync(bin, ["session", "register", agentName, "--session", sessionId, "--harness", "pi"], {
+      stdio: "ignore",
+    })
+  } catch {}
 }
 
 export function removeLocalSessionMapping(sessionKey: string): void {
@@ -233,7 +241,16 @@ export function resolveSessionAgent(sessionId: string, fallbackTitle?: string): 
   const map = loadLocalSessionMap()
   if (map[sessionKey]) {
     const val = map[sessionKey]
-    return typeof val === "string" ? val : val.agent || val.agent_name || ""
+    const name = typeof val === "string" ? val : val.agent || val.agent_name || ""
+    if (name) {
+      try {
+        const bin = getRhizoBin()
+        spawnSync(bin, ["session", "register", name, "--session", sessionId, "--harness", "pi"], {
+          stdio: "ignore",
+        })
+      } catch {}
+      return name
+    }
   }
   const cleanTitle = sanitizeAgentName(fallbackTitle || "")
   const autoName = cleanTitle && cleanTitle.length >= 3 ? cleanTitle : `pi-${sessionId.slice(-8)}`

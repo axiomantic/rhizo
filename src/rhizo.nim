@@ -1034,18 +1034,18 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
   except CatchableError:
     return (false, 0, "", "")
 
+proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = ""): bool
+
 proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bool =
   let normName = sanitizeIdentifier(name)
   if normName.len == 0: return false
   if getEnv("RHIZO_EAR_DISABLED", "") in ["1", "true", "yes"]: return false
   if getEnv("PYTEST_CURRENT_TEST", "").len > 0: return false
 
-  let (alreadyListening, existingPid, existingHost, existingMode) = getActiveListenerInfo(cfg, normName)
-  if alreadyListening:
-    return true
+  discard syncSessionRegistry(client, cfg, normName)
 
-  var lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
-  var convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+  let myMid = getMachineId()
+  let myHost = getHostNameStr()
   var rClient = client
   var closeClient = false
   if rClient == nil:
@@ -1058,28 +1058,30 @@ proc ensureAgyEarAlive*(cfg: RhizoConfig, name: string, client: Redis = nil): bo
     if closeClient and rClient != nil:
       try: rClient.close() except CatchableError: discard
 
-  if lsAddr.len == 0 and rClient != nil:
+  var routerAlive = false
+  if rClient != nil:
     try:
-      let v = rClient.hGet(cfg.prefix & "agent:" & normName, "agy_ls_address")
-      if v != redisNil and v.len > 0: lsAddr = v.strip()
-    except CatchableError: discard
+      let rVal = rClient.get(cfg.prefix & "router:" & myMid)
+      if rVal != redisNil and rVal.len > 0:
+        let rNode = parseJson(rVal)
+        let rPid = rNode.getOrDefault("pid").getInt(0)
+        let rHost = rNode.getOrDefault("host").getStr("")
+        let rMid = rNode.getOrDefault("machine_id").getStr("")
+        if rPid > 0 and isPidAlive(rPid, rMid, rHost):
+          routerAlive = true
+    except CatchableError:
+      discard
 
-  if convId.len == 0 and rClient != nil:
-    try:
-      let v = rClient.hGet(cfg.prefix & "agent:" & normName, "agy_conversation_id")
-      if v != redisNil and v.len > 0: convId = v.strip()
-    except CatchableError: discard
-
-  if lsAddr.len > 0 and convId.len > 0:
-    let logDir = getHomeDir() / ".config" / "rhizo" / "logs"
-    try: createDir(logDir) except CatchableError: discard
-    let logPath = logDir / ("agy-ear-" & normName & ".log")
-    let rhizoExe = getAppFilename()
-    let cmd = "nohup " & quoteShell(rhizoExe) & " listen " & quoteShell(normName) & " --agy-ear --quiet < /dev/null > " & quoteShell(logPath) & " 2>&1 &"
-    discard execCmd(cmd)
+  if routerAlive:
     return true
 
-  return false
+  let logDir = getHomeDir() / ".config" / "rhizo" / "logs"
+  try: createDir(logDir) except CatchableError: discard
+  let logPath = logDir / "router.log"
+  let rhizoExe = getAppFilename()
+  let cmd = "nohup " & quoteShell(rhizoExe) & " router start --daemon --quiet < /dev/null >> " & quoteShell(logPath) & " 2>&1 &"
+  discard execCmd(cmd)
+  return true
 
 proc parseIsoOrUnix*(tsStr: string): int64 =
   if tsStr.len == 0: return 0
@@ -1332,6 +1334,125 @@ proc resolveSenderSessionPubkey*(cfg: RhizoConfig, client: Redis, fromAgent: str
   except CatchableError:
     discard
   return ""
+
+proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = ""): bool =
+  var rClient = client
+  var closeClient = false
+  if rClient == nil:
+    try:
+      rClient = openRedisClient(cfg.redisUrl)
+      closeClient = true
+    except CatchableError:
+      return false
+  defer:
+    if closeClient and rClient != nil:
+      try: rClient.close() except CatchableError: discard
+
+  let myMid = getMachineId()
+  let myHost = getHostNameStr()
+  let nowEpoch = getTime().toUnix()
+  let nowIso = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+
+  # 1. Resolve Harness
+  var harness = harnessParam.toLowerAscii.strip()
+  if harness.len == 0:
+    if getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0:
+      harness = "antigravity"
+    elif getEnv("OPENCODE_SESSION_ID", "").len > 0:
+      harness = "opencode"
+    elif getEnv("PI_SESSION_ID", "").len > 0:
+      harness = "pi"
+    else:
+      harness = detectHarness(cfg)
+
+  # 2. Host-wide Antigravity Cache (rhizo:agy_host:<machine_id>)
+  let lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
+  let csrfToken = getEnv("ANTIGRAVITY_CSRF_TOKEN", "").strip()
+  let projId = getEnv("ANTIGRAVITY_PROJECT_ID", "").strip()
+  var agyExe = getEnv("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
+  if agyExe.len == 0:
+    let defaultAgy = getHomeDir() / ".gemini" / "antigravity" / "bin" / (when defined(windows): "agentapi.exe" else: "agentapi")
+    if fileExists(defaultAgy): agyExe = defaultAgy
+    else: agyExe = findExe("agentapi")
+
+  if lsAddr.len > 0 and csrfToken.len > 0:
+    try:
+      let hostKey = cfg.prefix & "agy_host:" & myMid
+      discard rClient.hSet(hostKey, "ls_address", lsAddr)
+      discard rClient.hSet(hostKey, "csrf_token", csrfToken)
+      if projId.len > 0: discard rClient.hSet(hostKey, "project_id", projId)
+      if agyExe.len > 0: discard rClient.hSet(hostKey, "agy_exe", agyExe)
+      discard rClient.hSet(hostKey, "updated_at", $nowEpoch)
+      discard rClient.hSet(hostKey, "updated_at_iso", nowIso)
+      discard rClient.hSet(hostKey, "host", myHost)
+    except CatchableError:
+      discard
+
+  # 3. Resolve Session / Conversation ID
+  var convId = convIdParam.strip()
+  if convId.len == 0:
+    if harness == "antigravity":
+      convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+    elif harness == "opencode":
+      convId = getEnv("OPENCODE_SESSION_ID", "").strip()
+    elif harness == "pi":
+      convId = getEnv("PI_SESSION_ID", "").strip()
+    else:
+      convId = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "").strip()
+
+  # 4. Resolve Agent Name
+  var agentName = sanitizeIdentifier(agentNameParam)
+  if agentName.len == 0:
+    let envAgent = getEnv("RHIZO_AGENT_NAME", "").strip()
+    if envAgent.len > 0:
+      agentName = sanitizeIdentifier(envAgent)
+  if agentName.len == 0 and convId.len > 0:
+    try:
+      let mapped = rClient.hGet(cfg.prefix & "sessions", harness & ":" & convId)
+      if mapped != redisNil and mapped.len > 0:
+        agentName = sanitizeIdentifier(mapped)
+    except CatchableError:
+      discard
+  if agentName.len == 0:
+    agentName = sanitizeIdentifier(getActiveAgentName(cfg, "", fallbackDefault = false))
+
+  if agentName.len == 0:
+    return true # Host credentials already updated
+
+  let agentKey = cfg.prefix & "agent:" & agentName
+
+  # 5. Update agent fields & bidirectional session maps
+  try:
+    if convId.len > 0:
+      if harness == "antigravity":
+        discard rClient.hSet(agentKey, "agy_conversation_id", convId)
+      discard rClient.hSet(agentKey, "session_id", convId)
+      let sessionKey = harness & ":" & convId
+      discard rClient.hSet(cfg.prefix & "sessions", sessionKey, agentName)
+      discard rClient.hSet(cfg.prefix & "agent_sessions", agentName, sessionKey)
+
+    if lsAddr.len > 0: discard rClient.hSet(agentKey, "agy_ls_address", lsAddr)
+    if csrfToken.len > 0: discard rClient.hSet(agentKey, "agy_csrf_token", csrfToken)
+    if projId.len > 0: discard rClient.hSet(agentKey, "agy_project_id", projId)
+    if agyExe.len > 0: discard rClient.hSet(agentKey, "agy_agentapi_exe", agyExe)
+
+    if harness.len > 0: discard rClient.hSet(agentKey, "harness", harness)
+    discard rClient.hSet(agentKey, "cwd", getCurrentDir())
+    discard rClient.hSet(agentKey, "host", myHost)
+    discard rClient.hSet(agentKey, "machine_id", myMid)
+    discard rClient.hSet(agentKey, "updated_at", $nowEpoch)
+    discard rClient.sAdd(cfg.prefix & "active_agents", agentName)
+  except CatchableError:
+    return false
+
+  return true
+
+proc checkAutoSyncSessionRegistry*(cfg: RhizoConfig, client: Redis = nil, agentName: string = "") =
+  if getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0 or
+     getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or
+     getEnv("OPENCODE_SESSION_ID", "").len > 0 or
+     getEnv("PI_SESSION_ID", "").len > 0:
+    discard syncSessionRegistry(client, cfg, agentName)
 
 proc resolveProjectLeader*(cfg: RhizoConfig, targetRole: string, fromAgent: string): string =
   ## Resolves @orchestrator or @lead to the active leader of the sender's project.
@@ -1858,7 +1979,8 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
     return formatDirectoryJson(raw)
   return formatDirectory(raw)
 
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false)
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false, forceBlocking: bool = false)
+proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false, harnessParam: string = "", stdoutMode: bool = false, isJson: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
 proc extractTaskId*(subject: string, body: string = ""): string
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string
@@ -2057,30 +2179,9 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     echo backlog
 
   let harness = detectHarness(cfg)
-  if harness == "antigravity":
-    let lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
-    let csrfToken = getEnv("ANTIGRAVITY_CSRF_TOKEN", "").strip()
-    let projId = getEnv("ANTIGRAVITY_PROJECT_ID", "").strip()
-    let convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
-    var agyExe = getEnv("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
-    if agyExe.len == 0:
-      let defaultAgy = getHomeDir() / ".gemini" / "antigravity" / "bin" / (when defined(windows): "agentapi.exe" else: "agentapi")
-      if fileExists(defaultAgy): agyExe = defaultAgy
-      else: agyExe = findExe("agentapi")
-
-    try:
-      if lsAddr.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_ls_address", lsAddr)
-      if csrfToken.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_csrf_token", csrfToken)
-      if projId.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_project_id", projId)
-      if convId.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_conversation_id", convId)
-      if agyExe.len > 0: discard client.hSet(cfg.prefix & "agent:" & name, "agy_agentapi_exe", agyExe)
-      if convId.len > 0:
-        discard client.hSet(cfg.prefix & "sessions", "agy:" & convId, name)
-        discard client.hSet(cfg.prefix & "agent_sessions", name, "agy:" & convId)
-    except CatchableError: discard
-
-    if not rearmListen and getEnv("RHIZO_EAR_DISABLED", "") notin ["1", "true", "yes"] and getEnv("PYTEST_CURRENT_TEST", "").len == 0:
-      discard ensureAgyEarAlive(cfg, name, client)
+  discard syncSessionRegistry(client, cfg, name, sid, harness)
+  if harness == "antigravity" and not rearmListen and getEnv("RHIZO_EAR_DISABLED", "") notin ["1", "true", "yes"] and getEnv("PYTEST_CURRENT_TEST", "").len == 0:
+    discard ensureAgyEarAlive(cfg, name, client)
 
   if rearmListen:
     let (alreadyListening, existingPid, existingHost, _) = getActiveListenerInfo(cfg, name)
@@ -2742,6 +2843,29 @@ proc isRoutineAck*(rawMsgType, subject, body: string): bool =
       return true
   return false
 
+proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, projId: string): int =
+  var callEnv = newStringTable(modeCaseSensitive)
+  for k, v in envPairs():
+    callEnv[k] = v
+  if lsAddr.len > 0: callEnv["ANTIGRAVITY_LS_ADDRESS"] = lsAddr
+  if csrfToken.len > 0: callEnv["ANTIGRAVITY_CSRF_TOKEN"] = csrfToken
+  if projId.len > 0: callEnv["ANTIGRAVITY_PROJECT_ID"] = projId
+
+  try:
+    when defined(windows):
+      let p = if agyExe.toLowerAscii.endsWith(".bat") or agyExe.toLowerAscii.endsWith(".cmd"):
+                startProcess(command = "cmd.exe", args = @["/c", agyExe] & cmdArgs, env = callEnv, options = {poUsePath})
+              else:
+                startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
+    else:
+      let p = startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
+    let code = p.waitForExit()
+    p.close()
+    return code
+  except CatchableError as e:
+    stderr.writeLine("[rhizo-agy-ear] Error invoking agentapi send-message: " & e.msg)
+    return -1
+
 proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: JsonNode, id, fromAgent, subject, body: string, isTask: bool, effectiveTaskId: string) =
   var convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
   if convId.len == 0 and client != nil:
@@ -2794,21 +2918,66 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
     stderr.writeLine("[rhizo-agy-ear] WARNING: agentapi executable not found; skipping agentapi delivery.")
     return
 
-  var lsAddr = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
-  var csrfToken = getEnv("ANTIGRAVITY_CSRF_TOKEN", "").strip()
-  var projId = getEnv("ANTIGRAVITY_PROJECT_ID", "").strip()
-  if (lsAddr.len == 0 or csrfToken.len == 0 or projId.len == 0) and client != nil:
+  # 1. Read per-agent credentials
+  var aLsAddr = ""
+  var aCsrfToken = ""
+  var aProjId = ""
+  var aUp: int64 = 0
+  if client != nil:
     try:
-      if lsAddr.len == 0:
-        let v = client.hGet(cfg.prefix & "agent:" & name, "agy_ls_address")
-        if v != redisNil and v.len > 0: lsAddr = v.strip()
-      if csrfToken.len == 0:
-        let v = client.hGet(cfg.prefix & "agent:" & name, "agy_csrf_token")
-        if v != redisNil and v.len > 0: csrfToken = v.strip()
-      if projId.len == 0:
-        let v = client.hGet(cfg.prefix & "agent:" & name, "agy_project_id")
-        if v != redisNil and v.len > 0: projId = v.strip()
+      let v = client.hGet(cfg.prefix & "agent:" & name, "agy_ls_address")
+      if v != redisNil and v.len > 0: aLsAddr = v.strip()
+      let c = client.hGet(cfg.prefix & "agent:" & name, "agy_csrf_token")
+      if c != redisNil and c.len > 0: aCsrfToken = c.strip()
+      let p = client.hGet(cfg.prefix & "agent:" & name, "agy_project_id")
+      if p != redisNil and p.len > 0: aProjId = p.strip()
+      let u = client.hGet(cfg.prefix & "agent:" & name, "updated_at")
+      if u != redisNil and u.len > 0: aUp = parseIsoOrUnix(u)
     except CatchableError: discard
+
+  # 2. Read host-wide credentials (rhizo:agy_host:<machine_id>)
+  let myMid = getMachineId()
+  var hLsAddr = ""
+  var hCsrfToken = ""
+  var hProjId = ""
+  var hUp: int64 = 0
+  if client != nil:
+    try:
+      let v = client.hGet(cfg.prefix & "agy_host:" & myMid, "ls_address")
+      if v != redisNil and v.len > 0: hLsAddr = v.strip()
+      let c = client.hGet(cfg.prefix & "agy_host:" & myMid, "csrf_token")
+      if c != redisNil and c.len > 0: hCsrfToken = c.strip()
+      let p = client.hGet(cfg.prefix & "agy_host:" & myMid, "project_id")
+      if p != redisNil and p.len > 0: hProjId = p.strip()
+      let u = client.hGet(cfg.prefix & "agy_host:" & myMid, "updated_at")
+      if u != redisNil and u.len > 0: hUp = parseIsoOrUnix(u)
+    except CatchableError: discard
+
+  # 3. Environment overrides if present
+  let envLs = getEnv("ANTIGRAVITY_LS_ADDRESS", "").strip()
+  let envCsrf = getEnv("ANTIGRAVITY_CSRF_TOKEN", "").strip()
+  let envProj = getEnv("ANTIGRAVITY_PROJECT_ID", "").strip()
+  if envLs.len > 0 and envCsrf.len > 0:
+    hLsAddr = envLs
+    hCsrfToken = envCsrf
+    if envProj.len > 0: hProjId = envProj
+    hUp = getTime().toUnix()
+
+  # Determine primary and secondary credentials based on newer timestamp
+  var primaryLs = aLsAddr
+  var primaryCsrf = aCsrfToken
+  var primaryProj = aProjId
+  var secondaryLs = hLsAddr
+  var secondaryCsrf = hCsrfToken
+  var secondaryProj = hProjId
+
+  if hUp > aUp or primaryLs.len == 0 or primaryCsrf.len == 0:
+    primaryLs = hLsAddr
+    primaryCsrf = hCsrfToken
+    primaryProj = hProjId
+    secondaryLs = aLsAddr
+    secondaryCsrf = aCsrfToken
+    secondaryProj = aProjId
 
   let title = "[RHIZO] @" & fromAgent & " -> @" & name & ": " & subject
   var payload = ""
@@ -2845,27 +3014,21 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
   cmdArgs.add(convId)
   cmdArgs.add(payload)
 
-  var callEnv = newStringTable(modeCaseSensitive)
-  for k, v in envPairs():
-    callEnv[k] = v
-  if lsAddr.len > 0: callEnv["ANTIGRAVITY_LS_ADDRESS"] = lsAddr
-  if csrfToken.len > 0: callEnv["ANTIGRAVITY_CSRF_TOKEN"] = csrfToken
-  if projId.len > 0: callEnv["ANTIGRAVITY_PROJECT_ID"] = projId
+  let code1 = invokeAgyAgentApi(agyExe, cmdArgs, primaryLs, primaryCsrf, primaryProj)
+  if code1 != 0:
+    if secondaryLs.len > 0 and secondaryCsrf.len > 0 and (secondaryLs != primaryLs or secondaryCsrf != primaryCsrf):
+      stderr.writeLine("[rhizo-agy-ear] Primary language server dispatch failed (code " & $code1 & "); retrying with fallback credentials...")
+      let code2 = invokeAgyAgentApi(agyExe, cmdArgs, secondaryLs, secondaryCsrf, secondaryProj)
+      if code2 == 0 and client != nil:
+        try:
+          discard client.hSet(cfg.prefix & "agent:" & name, "agy_ls_address", secondaryLs)
+          discard client.hSet(cfg.prefix & "agent:" & name, "agy_csrf_token", secondaryCsrf)
+          if secondaryProj.len > 0:
+            discard client.hSet(cfg.prefix & "agent:" & name, "agy_project_id", secondaryProj)
+          discard client.hSet(cfg.prefix & "agent:" & name, "updated_at", $(getTime().toUnix()))
+        except CatchableError: discard
 
-  try:
-    when defined(windows):
-      let p = if agyExe.toLowerAscii.endsWith(".bat") or agyExe.toLowerAscii.endsWith(".cmd"):
-                startProcess(command = "cmd.exe", args = @["/c", agyExe] & cmdArgs, env = callEnv, options = {poUsePath})
-              else:
-                startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
-    else:
-      let p = startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
-    discard p.waitForExit()
-    p.close()
-  except CatchableError as e:
-    stderr.writeLine("[rhizo-agy-ear] Error invoking agentapi send-message: " & e.msg)
-
-proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false) =
+proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false, forceBlocking: bool = false) =
   var cleanName = ensureProjectScopedName(cfg, name)
   var client = connectRedis(cfg.redisUrl)
   defer:
@@ -2880,12 +3043,62 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
   except CatchableError: discard
 
   let name = cleanName
+  checkAutoSyncSessionRegistry(cfg, client, name)
+  let inboxKey = cfg.prefix & "inbox:" & name
+
+  # Non-blocking router fast path for Tier 1 sessions
+  if not forceBlocking and not agyEar and not continuous:
+    var isTier1 = false
+    let agyConv = client.hGet(cfg.prefix & "agent:" & name, "agy_conversation_id")
+    let harnessVal = client.hGet(cfg.prefix & "agent:" & name, "harness")
+    if (agyConv != redisNil and agyConv.len > 0) or
+       (harnessVal in ["antigravity", "opencode", "pi"]) or
+       getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or
+       getEnv("OPENCODE_SESSION_ID", "").len > 0 or
+       getEnv("PI_SESSION_ID", "").len > 0:
+      isTier1 = true
+
+    if isTier1:
+      if harnessVal == "antigravity" or getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or (agyConv != redisNil and agyConv.len > 0):
+        discard ensureAgyEarAlive(cfg, name, client)
+
+      var (routerActive, routerPid, routerHost, routerMode) = getActiveListenerInfo(cfg, name)
+      if not routerActive:
+        let myMid = getMachineId()
+        let rVal = client.get(cfg.prefix & "router:" & myMid)
+        if rVal != redisNil and rVal.len > 0:
+          try:
+            let rNode = parseJson(rVal)
+            let rPid = rNode.getOrDefault("pid").getInt(0)
+            let rHost = rNode.getOrDefault("host").getStr("")
+            let rMid = rNode.getOrDefault("machine_id").getStr("")
+            if rPid > 0 and isPidAlive(rPid, rMid, rHost):
+              routerActive = true
+              routerPid = rPid
+              routerHost = rHost
+              routerMode = "router"
+          except CatchableError: discard
+
+      if routerActive and routerMode in ["router", "agy-ear", "opencode-ear", "pi-ear"]:
+        let inboxLen = try: client.lLen(inboxKey) except CatchableError: 0
+        if inboxLen == 0:
+          let sid = if agyConv != redisNil and agyConv.len > 0: agyConv
+                    else: client.hGet(cfg.prefix & "agent:" & name, "session_id")
+          var outNode = newJObject()
+          outNode["status"] = %"router_active"
+          outNode["agent"] = %name
+          outNode["router_pid"] = %routerPid
+          if sid != redisNil and sid.len > 0:
+            outNode["conversation_id"] = %sid
+          outNode["message"] = %"Session is registered with the active Multiplexed Router Service. No blocking listen needed."
+          echo $outNode
+          return
+
   setTerminalTitle(name & " (listening)")
   checkSupervisionAttached(name, force or continuous)
   resetWatchdogStreak(cfg, name)
   checkRedisPersistenceAdvisory(cfg, name, client)
   let secret = getSecret(cfg)
-  let inboxKey = cfg.prefix & "inbox:" & name
   let isForever = if timeoutSec > 0: false elif agyEar: true else: (timeoutSec == 0 or cfg.listenTimeout <= 0)
   let hbTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
   let pollChunk = min(60, max(1, hbTtl div 2))
@@ -3322,6 +3535,345 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
           discard client.del(@[listenerKey])
     except Exception:
       discard
+
+proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false, harnessParam: string = "", stdoutMode: bool = false, isJson: bool = false) =
+  var client = openRedisClient(cfg.redisUrl)
+  defer: (try: client.close() except CatchableError: discard)
+
+  let myMid = getMachineId()
+  let myHost = getHostNameStr()
+  let myPid = getCurrentProcessId()
+
+  if action == "status":
+    let rVal = try: client.get(cfg.prefix & "router:" & myMid) except CatchableError: redisNil
+    var isAlive = false
+    var pid = 0
+    var started = 0'i64
+    var heartbeat = 0'i64
+    var hStr = ""
+    var isStdOut = false
+    if rVal != redisNil and rVal.len > 0:
+      try:
+        let rNode = parseJson(rVal)
+        pid = rNode.getOrDefault("pid").getInt(0)
+        let rHost = rNode.getOrDefault("host").getStr("")
+        let rMid = rNode.getOrDefault("machine_id").getStr("")
+        started = rNode.getOrDefault("started").getInt(0).int64
+        heartbeat = rNode.getOrDefault("heartbeat").getInt(0).int64
+        hStr = rNode.getOrDefault("harness").getStr("")
+        isStdOut = rNode.getOrDefault("stdout").getBool(false)
+        if pid > 0 and isPidAlive(pid, rMid, rHost):
+          isAlive = true
+      except CatchableError: discard
+
+    var routedAgents: seq[string] = @[]
+    if isAlive:
+      try:
+        let acts = client.sMembers(cfg.prefix & "active_agents")
+        for a in acts:
+          let aKey = cfg.prefix & "agent:" & a
+          let aMid = client.hGet(aKey, "machine_id")
+          let aHost = client.hGet(aKey, "host")
+          if (aMid == myMid or (aMid == redisNil and aHost == myHost)):
+            let aConv = client.hGet(aKey, "agy_conversation_id")
+            let aHarn = client.hGet(aKey, "harness")
+            let aSid = client.hGet(aKey, "session_id")
+            if (aConv != redisNil and aConv.len > 0) or
+               (isStdOut and (aHarn in ["opencode", "pi"] or (aSid != redisNil and aSid.len > 0))) or
+               (hStr.len > 0 and aHarn == hStr):
+              routedAgents.add(a)
+      except CatchableError: discard
+
+    if isJson:
+      var res = newJObject()
+      res["status"] = %(if isAlive: "active" else: "stopped")
+      res["machine_id"] = %myMid
+      res["host"] = %myHost
+      if isAlive:
+        res["pid"] = %pid
+        res["started"] = %started
+        res["heartbeat"] = %heartbeat
+        if hStr.len > 0: res["harness"] = %hStr
+        res["stdout"] = %isStdOut
+        var rArr = newJArray()
+        for ag in routedAgents: rArr.add(%ag)
+        res["routed_agents"] = rArr
+      echo $res
+    else:
+      if isAlive:
+        echo "[rhizo router] Multiplexed Router Service is ACTIVE"
+        echo "- PID          : ", pid
+        echo "- Host         : ", myHost, " (machine_id: ", myMid, ")"
+        echo "- Harness      : ", if hStr.len > 0: hStr else: "all"
+        echo "- Output Mode  : ", if isStdOut: "stdout" else: "internal dispatch"
+        echo "- Routed Agents: ", (if routedAgents.len > 0: routedAgents.join(", ") else: "<none registered yet>")
+      else:
+        echo "[rhizo router] Multiplexed Router Service is NOT running on this host (" & myHost & ")."
+    return
+
+  elif action == "stop":
+    let rVal = try: client.get(cfg.prefix & "router:" & myMid) except CatchableError: redisNil
+    var stopped = false
+    var pid = 0
+    if rVal != redisNil and rVal.len > 0:
+      try:
+        let rNode = parseJson(rVal)
+        pid = rNode.getOrDefault("pid").getInt(0)
+        let rHost = rNode.getOrDefault("host").getStr("")
+        let rMid = rNode.getOrDefault("machine_id").getStr("")
+        if pid > 0 and isPidAlive(pid, rMid, rHost):
+          when defined(posix):
+            discard kill(Pid(pid), SIGTERM)
+            stopped = true
+          elif defined(windows):
+            discard execCmdEx("taskkill /F /PID " & $pid)
+            stopped = true
+        discard client.del(@[cfg.prefix & "router:" & myMid])
+      except CatchableError: discard
+
+    if isJson:
+      var res = newJObject()
+      res["status"] = %(if stopped: "stopped" else: "not_running")
+      res["pid"] = %pid
+      res["machine_id"] = %myMid
+      echo $res
+    else:
+      if stopped:
+        echo "[rhizo router] Stopped Multiplexed Router Service (PID " & $pid & ")."
+      else:
+        echo "[rhizo router] No active router service found on this host."
+    return
+
+  # action == "start":
+  let rVal = try: client.get(cfg.prefix & "router:" & myMid) except CatchableError: redisNil
+  if rVal != redisNil and rVal.len > 0:
+    try:
+      let rNode = parseJson(rVal)
+      let existingPid = rNode.getOrDefault("pid").getInt(0)
+      let rHost = rNode.getOrDefault("host").getStr("")
+      let rMid = rNode.getOrDefault("machine_id").getStr("")
+      if existingPid > 0 and isPidAlive(existingPid, rMid, rHost):
+        if existingPid != myPid:
+          if isJson:
+            echo $(%*{"status": "already_running", "pid": existingPid, "machine_id": rMid, "host": rHost})
+          else:
+            echo "[rhizo router] Router service is already active on this host (PID " & $existingPid & ")."
+          quit(0)
+    except CatchableError: discard
+
+  if daemon:
+    let logDir = getHomeDir() / ".config" / "rhizo" / "logs"
+    try: createDir(logDir) except CatchableError: discard
+    let logPath = logDir / "router.log"
+    let rhizoExe = getAppFilename()
+    var cmd = "nohup " & quoteShell(rhizoExe) & " router start --quiet"
+    if harnessParam.len > 0: cmd.add(" --harness " & quoteShell(harnessParam))
+    if stdoutMode: cmd.add(" --stdout")
+    cmd.add(" < /dev/null >> " & quoteShell(logPath) & " 2>&1 &")
+    discard execCmd(cmd)
+    if isJson:
+      echo $(%*{"status": "started", "daemon": true, "log": logPath})
+    else:
+      echo "[rhizo router] Started Multiplexed Router Service daemon (logging to " & logPath & ")."
+    quit(0)
+
+  let startEpoch = getTime().toUnix()
+  var routerInfo = newJObject()
+  routerInfo["pid"] = %myPid
+  routerInfo["host"] = %myHost
+  routerInfo["machine_id"] = %myMid
+  routerInfo["started"] = %startEpoch
+  routerInfo["heartbeat"] = %startEpoch
+  if harnessParam.len > 0: routerInfo["harness"] = %harnessParam
+  if stdoutMode: routerInfo["stdout"] = %true
+
+  let routerKey = cfg.prefix & "router:" & myMid
+  try:
+    discard client.setEx(routerKey, 60, $routerInfo)
+  except CatchableError as e:
+    stderr.writeLine("Redis error: " & e.msg)
+    quit(1)
+
+  registerCleanup(cfg.redisUrl, routerKey)
+  setTerminalTitle("rhizo router (PID " & $myPid & ")")
+
+  if not stdoutMode and getEnv("RHIZO_QUIET", "0") notin ["1", "true", "yes"]:
+    echo "[rhizo router] Multiplexed Router Service started on " & myHost & " (PID " & $myPid & ")"
+
+  let secret = getSecret(cfg)
+  let suppressAck = getEnv("RHIZO_SUPPRESS_ACK_WAKE", "1") in ["1", "true", "yes"]
+
+  var reconnectRemaining = 60
+  while true:
+    # 1. Heartbeat router lock
+    try:
+      routerInfo["heartbeat"] = %(getTime().toUnix())
+      discard client.setEx(routerKey, 60, $routerInfo)
+    except CatchableError:
+      reconnectRemaining = 60
+      if not reconnectRedisClient(cfg.redisUrl, client, reconnectRemaining, true):
+        continue
+
+    # 2. Discover agents on this machine
+    var routedAgents: seq[string] = @[]
+    try:
+      let acts = client.sMembers(cfg.prefix & "active_agents")
+      for a in acts:
+        let aKey = cfg.prefix & "agent:" & a
+        let aMid = client.hGet(aKey, "machine_id")
+        let aHost = client.hGet(aKey, "host")
+        if (aMid == myMid or (aMid == redisNil and aHost == myHost)):
+          let aConv = client.hGet(aKey, "agy_conversation_id")
+          let aHarn = client.hGet(aKey, "harness")
+          let aSid = client.hGet(aKey, "session_id")
+          if (aConv != redisNil and aConv.len > 0) or
+             (stdoutMode and (aHarn in ["opencode", "pi"] or (aSid != redisNil and aSid.len > 0))) or
+             (harnessParam.len > 0 and aHarn == harnessParam):
+            routedAgents.add(a)
+    except CatchableError:
+      discard
+
+    # 3. For each routed agent, maintain heartbeat & listener lock
+    for aName in routedAgents:
+      try:
+        discard client.setEx(cfg.prefix & "heartbeat:" & aName, 300, "1")
+        let currL = client.get(cfg.prefix & "listener:" & aName)
+        var canClaim = false
+        if currL == redisNil or currL.len == 0:
+          canClaim = true
+        else:
+          try:
+            let lNode = parseJson(currL)
+            let lPid = lNode.getOrDefault("pid").getInt(0)
+            let lMid = lNode.getOrDefault("machine_id").getStr("")
+            let lHost = lNode.getOrDefault("host").getStr("")
+            let lMode = lNode.getOrDefault("mode").getStr("")
+            if lMode == "router" or (lPid == myPid) or not isPidAlive(lPid, lMid, lHost):
+              canClaim = true
+          except CatchableError:
+            canClaim = true
+
+        if canClaim:
+          var lNode = newJObject()
+          lNode["pid"] = %myPid
+          lNode["host"] = %myHost
+          lNode["machine_id"] = %myMid
+          lNode["started"] = %startEpoch
+          lNode["mode"] = %"router"
+          discard client.setEx(cfg.prefix & "listener:" & aName, 120, $lNode)
+      except CatchableError:
+        discard
+
+    # 4. Collect inboxes
+    var inboxKeys: seq[string] = @[]
+    for aName in routedAgents:
+      inboxKeys.add(cfg.prefix & "inbox:" & aName)
+
+    if inboxKeys.len == 0:
+      sleep(1000)
+      continue
+
+    # 5. Multiplexed bRPop (batched in chunks <= 64)
+    var popRes: RedisList
+    let batchSize = min(64, inboxKeys.len)
+    try:
+      popRes = client.bRPop(inboxKeys[0 ..< batchSize], 2)
+    except CatchableError:
+      discard
+      continue
+
+    if popRes.len < 2:
+      continue
+
+    let poppedKey = popRes[0]
+    let payloadStr = popRes[1].strip()
+    let pfx = cfg.prefix & "inbox:"
+    let targetAgent = if poppedKey.startsWith(pfx): poppedKey.substr(pfx.len) else: poppedKey
+
+    var parsed: JsonNode
+    try:
+      parsed = parseJson(payloadStr)
+    except JsonParsingError:
+      continue
+
+    let id = parsed.getOrDefault("id").getStr("")
+    let fromAgent = parsed.getOrDefault("from").getStr("")
+    let toAgent = parsed.getOrDefault("to").getStr("")
+    let msgType = parsed.getOrDefault("type").getStr("")
+    let subject = parsed.getOrDefault("subject").getStr("")
+    let body = parsed.getOrDefault("body").getStr("")
+    let ts = parsed.getOrDefault("timestamp").getStr("")
+    let sig = parsed.getOrDefault("sig").getStr("")
+    let isEncrypted = parsed.getOrDefault("encrypted").getBool(false)
+
+    if msgType == "shutdown":
+      continue
+
+    let originalTo = parsed.getOrDefault("original_recipient").getStr(parsed.getOrDefault("rerouted_from").getStr(toAgent))
+    let canonical = id & "|" & fromAgent & "|" & originalTo & "|" & msgType & "|" & subject & "|" & body & "|" & ts
+    if not verifyHmac(secret, canonical, sig):
+      stderr.writeLine("[RHIZO SECURITY] WARNING: Router dropping unauthenticated message (ID: " & id & ")")
+      continue
+
+    let sessionSig = parsed.getOrDefault("session_sig").getStr("")
+    if sessionSig.len > 0 and isCryptoAvailable():
+      let senderPubHex = resolveSenderSessionPubkey(cfg, client, fromAgent, parsed.getOrDefault("session_pubkey").getStr(""))
+      if senderPubHex.len == 64:
+        if verifyPayload(senderPubHex, canonical, sessionSig):
+          parsed["session_verified"] = %true
+
+    if isEncrypted:
+      try:
+        let decryptedBody = decryptAes(body, secret, cfg)
+        parsed["body"] = %decryptedBody
+        parsed["encrypted"] = %false
+      except CatchableError:
+        continue
+
+    # Record in history
+    try:
+      discard client.lPush(cfg.prefix & "history:" & targetAgent, payloadStr)
+      client.lTrim(cfg.prefix & "history:" & targetAgent, 0, 99)
+    except CatchableError: discard
+
+    let rawMsgType = parsed.getOrDefault("type").getStr("message").toLowerAscii()
+    let toField = parsed.getOrDefault("to").getStr("").strip().toLowerAscii()
+    let isBroadcastMsg = (toField == "*" or toField == "all" or toField == "" or toField.startsWith("@"))
+    let isCompleteFlag = parsed.getOrDefault("complete").getBool(false) or (rawMsgType == "complete")
+    let isTask = (rawMsgType in ["task", "work"]) and not isBroadcastMsg and not isCompleteFlag
+
+    let (isSubmitted, submittedTaskId, ticketHex) = checkAndMintAuditTicket(cfg, client, targetAgent, parsed)
+    if isSubmitted:
+      printAuditTicketBanner(targetAgent, submittedTaskId, ticketHex)
+
+    var effectiveTaskId = parsed.getOrDefault("task_id").getStr("")
+    if effectiveTaskId.len == 0:
+      effectiveTaskId = extractTaskId(subject, body)
+    if effectiveTaskId.len == 0:
+      effectiveTaskId = id
+
+    if isTask:
+      try:
+        discard doTask(cfg, "deliver", [effectiveTaskId, targetAgent, "900", subject, body])
+      except CatchableError: discard
+
+    # Route 1: Antigravity Dispatch
+    var targetConvId = client.hGet(cfg.prefix & "agent:" & targetAgent, "agy_conversation_id")
+    if (targetConvId != redisNil and targetConvId.len > 0):
+      let isRoutine = isRoutineAck(rawMsgType, subject, body)
+      if not (isRoutine and suppressAck):
+        dispatchAgyMessage(cfg, client, targetAgent, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
+
+    # Route 2: Stdout Envelope Dispatch (for OpenCode / Pi)
+    if stdoutMode:
+      let sid = client.hGet(cfg.prefix & "agent:" & targetAgent, "session_id")
+      var envObj = newJObject()
+      envObj["agent"] = %targetAgent
+      if sid != redisNil and sid.len > 0:
+        envObj["session_id"] = %sid
+      envObj["message"] = parsed
+      echo $envObj
+      flushFile(stdout)
 
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string =
   let effectiveTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
@@ -6865,17 +7417,32 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
     echo "  --json, -j            Output heartbeat status as JSON"
     return true
 
+  of "router":
+    echo "Usage: rhizo router [start|status|stop] [--daemon] [--harness <name>] [--stdout] [--json]"
+    echo ""
+    echo "Options:"
+    echo "  start                 Start multiplexed routing service (default action)"
+    echo "  status                Check status of host-wide router"
+    echo "  stop                  Stop running router instance on this host"
+    echo "  --daemon, -d          Run router in background daemon mode"
+    echo "  --harness <name>      Target harness filter (antigravity, opencode, pi, all)"
+    echo "  --stdout              Stream dispatched message payloads to stdout"
+    echo "  --json, -j            Format router status as JSON"
+    return true
+
   of "listen", "ear":
-    echo "Usage: rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--agy-ear|--ear] [--roster-guard/-R]"
-    echo "       rhizo ear [name] [--quiet/-q]"
+    echo "Usage: rhizo listen [name] [--timeout <sec>] [--blocking] [--force/-f] [--notify/-n] [--quiet/-q] [--continuous/-c] [--agy-ear|--ear] [--roster-guard/-R]"
+    echo "       rhizo ear [name] [--all/-a] [--quiet/-q]"
     echo ""
     echo "Options:"
     echo "  --timeout <sec>       Seconds to wait before exiting (default: 0 / infinite)"
+    echo "  --blocking, --foreground Force blocking listener loop even if router service active"
     echo "  --force, -f           Force acquire listener even if existing PID recorded"
     echo "  --notify, -n          Emit desktop notification on message receipt"
     echo "  --quiet, -q           Silence lifecycle postamble and diagnostic banners"
     echo "  --continuous, -c      Run continuously as daemon instead of single-shot"
     echo "  --agy-ear, --ear      Run Antigravity continuous background ear (streams to agentapi send-message)"
+    echo "  --all, -a             (With 'rhizo ear') Start multiplexed router across all local sessions"
     echo "  --roster-guard, -R    Reject unbootstrapped/alien agent messages"
     return true
 
@@ -7263,12 +7830,13 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
 
   of "session":
     case subAction
+    of "register": echo "Usage: rhizo session register <agent> [--session <id>] [--harness <name>] [--force] [--json]"
     of "set": echo "Usage: rhizo session set <agent> [--thread-id <id>] [--harness <name>] [--model <model>] [--cwd <path>] [--strand <strand>] [--account <acc>]"
     of "get", "resolve": echo "Usage: rhizo session get <agent> [--thread-id] [--harness] [--model] [--json]"
     of "remove", "rm", "del", "clear": echo "Usage: rhizo session remove <agent>"
     of "list", "ls": echo "Usage: rhizo session list [--json]"
     else:
-      echo "Usage: rhizo session <set|get|resolve|remove|list> [args...]"
+      echo "Usage: rhizo session <register|set|get|resolve|remove|list> [args...]"
     return true
 
   of "alias":
@@ -7504,7 +8072,8 @@ proc main() =
     echo "  rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
     echo "  rhizo guide <install|uninstall|check> [path]"
     echo "  rhizo hook <codex-stop|install|agy-pre-invocation|agy-post-tool|agy-stop> [--codex|--claude|--opencode|--pi|--antigravity] [--global] [--local]"
-    echo "  rhizo session <set|get|resolve|remove|list> [args...]"
+    echo "  rhizo router [start|status|stop] [--daemon] [--harness <name>] [--stdout] [--json]"
+    echo "  rhizo session <register|set|get|resolve|remove|list> [args...]"
     echo "  rhizo alias <set|get|list|del> [args...] (DEPRECATED: use capability tags)"
     echo ""
     echo "Global Options:"
@@ -7529,6 +8098,8 @@ proc main() =
   if hasHelpFlag(args[1..^1]):
     if printSubcommandHelp(subcmd, args[1..^1]):
       return
+
+  checkAutoSyncSessionRegistry(cfg)
 
   # Protocol Upgrade Notifications (Proactive Push & Interactive Pull Fallback)
   if not isMachineOutputContext(rawArgs):
@@ -7815,9 +8386,17 @@ proc main() =
       echo "Heartbeat renewed: " & res
 
   of "listen", "ear":
+    if subcmd == "ear" and (("-a" in args) or ("--all" in args)):
+      var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
+      var daemon = ("--daemon" in rawArgs) or ("-d" in rawArgs) or ("-c" in rawArgs) or ("--continuous" in rawArgs)
+      var stdoutMode = ("--stdout" in rawArgs)
+      doRouter(cfg, "start", daemon, "antigravity", stdoutMode, isJson)
+      quit(0)
+
     var explicitName = ""
     var timeout = cfg.listenTimeout
     var forceListen = false
+    var forceBlocking = false
     var notify = false
     var quiet = false
     var continuous = false
@@ -7828,6 +8407,8 @@ proc main() =
       let a = args[i]
       if a in ["--force", "-f"]:
         forceListen = true
+      elif a in ["--blocking", "--foreground"]:
+        forceBlocking = true
       elif a in ["--notify", "-n"]:
         notify = true
       elif a in ["--quiet", "-q", "--no-postamble"]:
@@ -7863,15 +8444,49 @@ proc main() =
     if not forceListen:
       let (alreadyListening, existingPid, existingHost, existingMode) = getActiveListenerInfo(cfg, name)
       if alreadyListening:
-        if existingMode == "agy-ear" and not agyEar:
+        if existingMode == "agy-ear" and not agyEar and not forceBlocking:
           echo "[rhizo-agy-ear] Continuous Antigravity Ear is already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Skipping manual re-arm."
           quit(0)
+        elif existingMode in ["router", "agy-ear", "opencode-ear", "pi-ear"]:
+          # Pass-through to doListen: if inbox is empty and router active, non-blocking fast-path will return.
+          # If forceBlocking or message is pending, it claims or drains accordingly.
+          discard
         else:
           stderr.writeLine("Error: Listener already active for agent '" & name & "' (PID " & $existingPid & " on " & existingHost & "). Refusing to start duplicate listener.")
           stderr.writeLine("CRITICAL GUARD FOR AI ASSISTANTS: If you are an AI assistant in a separate session/window, DO NOT kill PID " & $existingPid & " and DO NOT assume it is an orphaned process! That process is actively listening for messages for agent '" & name & "' in another session. You must allocate your own identity via 'rhizo name' + 'rhizo open <name>' or ask the operator which persona this window represents.")
           quit(1)
 
-    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous, rosterGuard, agyEar)
+    doListen(cfg, name, timeout, notify, quiet, forceListen, continuous, rosterGuard, agyEar, forceBlocking)
+
+  of "router":
+    var action = "start"
+    var daemon = false
+    var harness = ""
+    var stdoutMode = false
+    var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
+    for idx, a in rawArgs:
+      if a == "--format" and idx + 1 < rawArgs.len and rawArgs[idx+1].toLowerAscii == "json":
+        isJson = true
+      elif a.toLowerAscii.startsWith("--format=json"):
+        isJson = true
+
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a in ["start", "status", "stop"]:
+        action = a.toLowerAscii
+      elif a in ["--daemon", "-d", "-c", "--continuous"]:
+        daemon = true
+      elif a in ["--stdout"]:
+        stdoutMode = true
+      elif a.startsWith("--harness="):
+        harness = a[10..^1]
+      elif a in ["--harness", "-H"] and i + 1 < args.len:
+        harness = args[i+1]
+        inc i
+      inc i
+
+    doRouter(cfg, action, daemon, harness, stdoutMode, isJson)
 
   of "send", "broadcast", "reply":
     let isBroadcast = (subcmd == "broadcast")
@@ -8310,7 +8925,8 @@ proc main() =
 
   of "session":
     if args.len < 2:
-      stderr.writeLine("Usage: rhizo session <set|get|resolve|remove|list> [args...]")
+      stderr.writeLine("Usage: rhizo session <register|set|get|resolve|remove|list> [args...]")
+      stderr.writeLine("  rhizo session register <agent_name> [--session <id>] [--harness <name>] [--force] [--json]")
       stderr.writeLine("  rhizo session set <prefix:session_id> <agent_name>")
       stderr.writeLine("  rhizo session get <session_key|agent_name> [--thread-id] [--json]")
       stderr.writeLine("  rhizo session resolve <agent_name|session_key> [--json]")
@@ -8320,6 +8936,52 @@ proc main() =
 
     let action = args[1].toLowerAscii
     case action
+    of "register":
+      var agent = ""
+      var sessionId = ""
+      var harness = ""
+      var force = false
+      var asJson = ("--json" in rawArgs) or ("-j" in rawArgs)
+      for idx, a in rawArgs:
+        if a == "--format" and idx + 1 < rawArgs.len and rawArgs[idx+1].toLowerAscii == "json":
+          asJson = true
+        elif a.toLowerAscii.startsWith("--format=json"):
+          asJson = true
+
+      var i = 2
+      while i < args.len:
+        let a = args[i]
+        if a.startsWith("--session="): sessionId = a[10..^1]
+        elif a in ["--session", "-s"] and i + 1 < args.len: sessionId = args[i+1]; inc i
+        elif a.startsWith("--harness="): harness = a[10..^1]
+        elif a in ["--harness", "-H"] and i + 1 < args.len: harness = args[i+1]; inc i
+        elif a in ["--force", "-f"]: force = true
+        elif not a.startsWith("-") and agent.len == 0:
+          agent = a
+        inc i
+
+      if agent.len == 0:
+        agent = getActiveAgentName(cfg, fallbackDefault = false)
+      if agent.len == 0:
+        stderr.writeLine("Error: 'rhizo session register' requires <agent_name> or active session.")
+        quit(1)
+
+      agent = ensureProjectScopedName(cfg, agent)
+      let ok = syncSessionRegistry(nil, cfg, agent, sessionId, harness)
+      if asJson:
+        var outObj = newJObject()
+        outObj["status"] = %(if ok: "ok" else: "error")
+        outObj["agent"] = %agent
+        if sessionId.len > 0: outObj["session_id"] = %sessionId
+        if harness.len > 0: outObj["harness"] = %harness
+        echo $outObj
+      else:
+        if ok:
+          echo "OK [session] registered agent '" & agent & "'"
+        else:
+          stderr.writeLine("Error: Failed to register session for agent '" & agent & "'")
+          quit(1)
+
     of "set":
       if args.len < 4:
         stderr.writeLine("Error: 'rhizo session set' requires <session_key> and <agent_name>")

@@ -4,28 +4,28 @@ This document maps runtime tool capabilities to their exact invocation patterns.
 
 ---
 
-## Archetype 1: Ambient In-Process Ear Plugin
-- **Profile**: Harness has an active in-process listener extension (e.g. OpenCode with `opencode-ear.js`, Pi with `pi-ear.ts`).
-- **Mechanism**: The plugin supervises `rhizo listen` internally as a child process and injects turns directly into the assistant's context via the harness SDK.
+## Archetype 1: Multiplexed Router & Ambient In-Process Ear Plugin (Tier 1)
+- **Profile**: Harness has an active in-process listener extension or router integration (e.g. OpenCode with `opencode-ear.js`, Pi with `pi-ear.ts`, Antigravity with host-wide Multiplexed Router `rhizo router` / `rhizo ear --all`).
+- **Mechanism**: A single host-wide or harness-wide multiplexed router process (`rhizo router`) manages Redis subscriptions and message dispatch across all local sessions. For OpenCode/Pi, the extension runs a single `rhizo router --stdout` process and dispatches JSON envelopes to matching session IDs. For Antigravity, the router delivers directly via language server `agentapi send-message`.
 - **Rule**:
-  <FORBIDDEN>
-  Do NOT execute 'rhizo listen' with ANY tool. Continuous listening is handled automatically in-process. Calling listen causes duplicate inbox consumption and locks the bash process.
-  </FORBIDDEN>
+  <INVARIANT>
+  Tier 1 sessions register automatically via 'rhizo session register <name> --session <id> --harness <name>' or 'rhizo open <name>'. When 'rhizo listen' is invoked in a registered Tier 1 session with an active router, it returns immediately with 'status: router_active' (non-blocking fast path). You do NOT need N blocking listener processes per tab.
+  </INVARIANT>
 - **Tool Action**:
   Register your session once at startup using a standard shell tool:
   ```bash
   rhizo open <name> "worker,tier1"
   ```
-  *(For OpenCode: ensure `opencode-ear.js` is registered in `~/.config/opencode/opencode.json` under `"plugin"`).*
+  *(For OpenCode: ensure `opencode-ear.js` is registered in `~/.config/opencode/opencode.json` under `"plugin"`; for Antigravity: `rhizo ear --all` or `rhizo router start --daemon`).*
 
 ---
 
 ## Archetype 2: Main-Chat Background Daemon Process
 - **Profile**: The harness provides a shell command tool with a native background/daemon parameter (e.g. Antigravity `run_command(IsDaemon=true, WaitMsBeforeAsync=500)`).
-- **Mechanism**: Runs the infinite listener in the background of the primary conversation turn. Standard output from the listener reactively resumes the assistant's turn when a message arrives.
+- **Mechanism**: Runs the listener as a managed daemon process when the host-wide multiplexed router is not running. Standard output from the listener reactively resumes the assistant's turn when a message arrives.
 - **Rule**:
   <INVARIANT>
-  Prefer Archetype 2 in native daemon harnesses (e.g. Antigravity). It maintains direct, immediate execution in the primary session with 0 overhead.
+  Prefer Archetype 1 (Multiplexed Router) across Tier 1 harnesses. Use Archetype 2 as a standalone single-session daemon when operating outside the multiplexed router service.
   </INVARIANT>
 - **Tool Action**:
   ```json

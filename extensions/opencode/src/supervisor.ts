@@ -23,6 +23,110 @@ export const activeListeners = new Map<string, ActiveListener>() // agentName ->
 export const sessionToAgent = new Map<string, string>() // sessionId -> agentName
 export const activeTaskMap = new Map<string, string>() // agentName -> taskId
 export const lastKeepAliveMap = new Map<string, number>() // taskId -> timestamp
+export const agentDispatchers = new Map<string, (text: string) => void>() // agentName -> offer fn
+
+export let sharedRouterState: ListenerState | null = null
+
+export function isSharedRouterAlive(): boolean {
+  if (!sharedRouterState || sharedRouterState.aborted || !sharedRouterState.proc) return false
+  const proc = sharedRouterState.proc as any
+  if (typeof proc.exitCode === "number" && proc.exitCode !== null) return false
+  if (proc.killed) return false
+  return true
+}
+
+export function handleRouterLine(line: string): void {
+  try {
+    const jsonStart = line.indexOf("{")
+    if (jsonStart < 0) return
+    const envelope = JSON.parse(line.slice(jsonStart))
+    const targetAgent = envelope.agent || (envelope.message && envelope.message.to)
+    const msg = envelope.message || envelope
+    const rawLine = JSON.stringify(msg)
+
+    if (targetAgent) {
+      const taskId = msg.task_id || (typeof msg.id === "string" && msg.id.startsWith("task-") ? msg.id : null)
+      if (taskId) {
+        setActiveTask(targetAgent, taskId)
+      }
+      if (typeof msg.body === "string") {
+        const match = msg.body.match(/Task ID:\s*([a-zA-Z0-9_-]+)/i)
+        if (match && match[1]) {
+          setActiveTask(targetAgent, match[1])
+        }
+      }
+
+      const dispatcher = agentDispatchers.get(targetAgent)
+      if (dispatcher) {
+        dispatcher(`[rhizo:${targetAgent}] ${rawLine}`)
+      }
+    }
+  } catch (err: unknown) {
+    console.error("[rhizo-ear] error processing router line:", err)
+  }
+}
+
+export function ensureSharedRouter(cwd: string = process.cwd()): void {
+  if (isSharedRouterAlive()) return
+
+  sharedRouterState = { aborted: false, proc: null }
+  const state = sharedRouterState
+  const bin = getRhizoBin()
+
+  ;(async () => {
+    while (!state.aborted) {
+      let proc: SubprocessHandle | null = null
+      try {
+        const args = ["router", "--stdout", "--harness", "opencode"]
+        if (typeof Bun !== "undefined" && Bun?.spawn) {
+          proc = Bun.spawn([bin, ...args], { cwd, stdout: "pipe", stderr: "pipe" }) as unknown as SubprocessHandle
+        } else {
+          proc = nodeSpawn(bin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] }) as unknown as SubprocessHandle
+        }
+        state.proc = proc
+      } catch (err: unknown) {
+        await new Promise((r) => setTimeout(r, 1000))
+        continue
+      }
+
+      if (!proc || !proc.stdout) {
+        await new Promise((r) => setTimeout(r, 1000))
+        continue
+      }
+
+      try {
+        if (typeof (proc.stdout as any).getReader === "function") {
+          const dec = new TextDecoder()
+          const reader = (proc.stdout as any).getReader()
+          let buf = ""
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += dec.decode(value, { stream: true })
+            let i
+            while ((i = buf.indexOf("\n")) >= 0) {
+              const line = buf.slice(0, i)
+              buf = buf.slice(i + 1)
+              const t = line.trim()
+              if (t) handleRouterLine(t)
+            }
+          }
+        } else {
+          const rl = createInterface({ input: proc.stdout as NodeJS.ReadableStream })
+          for await (const line of rl) {
+            const t = line.trim()
+            if (t) handleRouterLine(t)
+          }
+        }
+      } catch {
+        // stream closed / re-arm
+      }
+
+      if (state.aborted) break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  })()
+}
 
 export function setActiveTask(agentName: string, taskId: string): void {
   if (!agentName || !taskId) return
@@ -133,6 +237,7 @@ export function isListenerAlive(agentName: string): boolean {
   const listener = activeListeners.get(agentName)
   if (!listener || !listener.state) return false
   if (listener.state.aborted) return false
+  if (isSharedRouterAlive()) return true
   if (!listener.state.proc) return false
   const proc = listener.state.proc as any
   if (typeof proc.exitCode === "number" && proc.exitCode !== null) return false
@@ -357,6 +462,7 @@ export function startPubSubPreemption(
 }
 
 export function stopAgentListener(name: string): void {
+  agentDispatchers.delete(name)
   const listener = activeListeners.get(name)
   if (listener) {
     if (listener.pubsub) {
@@ -369,6 +475,13 @@ export function stopAgentListener(name: string): void {
       } catch {}
     }
     activeListeners.delete(name)
+  }
+  if (activeListeners.size === 0 && sharedRouterState) {
+    sharedRouterState.aborted = true
+    if (sharedRouterState.proc?.kill) {
+      try { sharedRouterState.proc.kill() } catch {}
+    }
+    sharedRouterState = null
   }
 }
 
@@ -385,6 +498,15 @@ export function startAgentListener(
     }
     sessionToAgent.set(targetSessionId, name)
   }
+
+  // 1. Register session in Rhizo dynamic session registry
+  try {
+    const bin = getRhizoBin()
+    const sid = targetSessionId || getSessionIdForAgent(name)
+    const args = ["session", "register", name, "--harness", "opencode"]
+    if (sid) args.push("--session", sid)
+    spawnSync(bin, args, { stdio: "ignore" })
+  } catch {}
 
   if (activeListeners.has(name)) return
   const state: ListenerState = { aborted: false, proc: null }
@@ -471,39 +593,11 @@ export function startAgentListener(
     run(text, 0)
   }
 
-  console.error(`[rhizo-ear] armed for ${name} (bin: ${getRhizoBin()})`)
+  agentDispatchers.set(name, offer)
+  console.error(`[rhizo-ear] armed for ${name} via multiplexed router (bin: ${getRhizoBin()})`)
 
-  ;(async () => {
-    try {
-      for await (const line of listenLines(name, cwd, state)) {
-        if (state.aborted) break
-        try {
-          const jsonStart = line.indexOf("{")
-          if (jsonStart >= 0) {
-            const parsed = JSON.parse(line.slice(jsonStart))
-            const taskId = parsed.task_id || (typeof parsed.id === "string" && parsed.id.startsWith("task-") ? parsed.id : null)
-            if (taskId) {
-              setActiveTask(name, taskId)
-            }
-            if (typeof parsed.body === "string") {
-              const match = parsed.body.match(/Task ID:\s*([a-zA-Z0-9_-]+)/i)
-              if (match && match[1]) {
-                setActiveTask(name, match[1])
-              }
-            }
-          }
-        } catch {}
-        offer(`[rhizo:${name}] ${line}`)
-      }
-    } catch (e) {
-      console.error(`[rhizo-ear] listener error for ${name}:`, e)
-    } finally {
-      if (pubsub) {
-        try { pubsub.kill() } catch {}
-      }
-      activeListeners.delete(name)
-    }
-  })()
+  // 2. Ensure single multiplexed router process is running
+  ensureSharedRouter(cwd)
 }
 
 export function verifyAndEnsureListener(

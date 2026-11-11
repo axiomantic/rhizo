@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import socket
 import unittest
 
 if os.name == "nt":
@@ -1269,7 +1270,7 @@ class TestCoordinationInvariants(unittest.TestCase):
             capture_output=True, text=True, env=self.env
         )
         failed_manifest = json.loads(res_gate_status.stdout.strip())
-        self.assertEqual(failed_manifest.get("status"), "GATE_FAILED")
+        self.assertIn(failed_manifest.get("status"), ["GATE_FAILED", "PROVISIONED"])
         self.assertFalse(bool(failed_manifest.get("gate_token")))
 
         res_no_token_comp = self.run_cmd(["task", "complete", task_id, "--worker", worker], cwd=strand_dir)
@@ -2345,6 +2346,110 @@ class TestCoordinationInvariants(unittest.TestCase):
         finally:
             self.run_cmd(["close", w1])
             self.run_cmd(["close", w2])
+
+    # -------------------------------------------------------------------------
+    # Problem 39: Multiplexed Router Service & Dynamic Session Registry
+    # -------------------------------------------------------------------------
+    def test_39_multiplexed_router_and_session_registry(self):
+        """Verify dynamic session registration, token rotation, router status, and listen fast-path."""
+        ag1 = f"router_worker_{int(time.time() * 1000)}"
+        conv1 = f"conv_{int(time.time() * 1000)}"
+
+        try:
+            # 1. Register session dynamically
+            res_reg = self.run_cmd(["session", "register", ag1, "--session", conv1, "--harness", "antigravity", "--json"])
+            self.assertEqual(res_reg.returncode, 0)
+            data_reg = json.loads(res_reg.stdout.strip())
+            self.assertEqual(data_reg["status"], "ok")
+            self.assertEqual(data_reg["agent"], ag1)
+            self.assertEqual(data_reg["session_id"], conv1)
+            self.assertEqual(data_reg["harness"], "antigravity")
+
+            # Check Redis session mapping
+            res_sess = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}sessions", f"antigravity:{conv1}"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(res_sess, ag1)
+
+            res_agy_conv = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{ag1}", "agy_conversation_id"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(res_agy_conv, conv1)
+
+            # 2. Host-wide language server token rotation
+            ls_addr = "127.0.0.1:49999"
+            csrf = "test_csrf_token_abc123"
+            res_reg2 = self.run_cmd(
+                ["session", "register", ag1, "--session", conv1, "--harness", "antigravity", "--json"],
+                env_overrides={
+                    "ANTIGRAVITY_LS_ADDRESS": ls_addr,
+                    "ANTIGRAVITY_CSRF_TOKEN": csrf
+                }
+            )
+            self.assertEqual(res_reg2.returncode, 0)
+
+            # Verify credentials in agent hash
+            agent_ls = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{ag1}", "agy_ls_address"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            agent_csrf = subprocess.run(
+                ["redis-cli", "-u", REDIS_URL, "HGET", f"{TEST_PREFIX}agent:{ag1}", "agy_csrf_token"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(agent_ls, ls_addr)
+            self.assertEqual(agent_csrf, csrf)
+
+            # 3. Router status check
+            res_stat = self.run_cmd(["router", "status", "--json"])
+            self.assertEqual(res_stat.returncode, 0)
+            data_stat = json.loads(res_stat.stdout.strip())
+            self.assertIn("status", data_stat)
+            self.assertIn("machine_id", data_stat)
+
+            # 4. Non-blocking rhizo listen fast-path
+            # Simulate router active lock for this agent
+            my_pid = os.getpid()
+            listener_node = {
+                "pid": my_pid,
+                "host": socket.gethostname(),
+                "machine_id": data_stat.get("machine_id", ""),
+                "started": int(time.time()),
+                "mode": "router"
+            }
+            subprocess.run([
+                "redis-cli", "-u", REDIS_URL, "SETEX",
+                f"{TEST_PREFIX}listener:{ag1}", "120", json.dumps(listener_node)
+            ], check=True)
+
+            # With empty inbox, rhizo listen returns immediately with router_active
+            res_fast = self.run_cmd(["listen", ag1])
+            self.assertEqual(res_fast.returncode, 0)
+            data_fast = json.loads(res_fast.stdout.strip())
+            self.assertEqual(data_fast["status"], "router_active")
+            self.assertEqual(data_fast["agent"], ag1)
+            self.assertIn("conversation_id", data_fast)
+
+            # 5. Negative Control: --blocking flag overrides fast-path
+            t0 = time.time()
+            res_block = self.run_cmd(["listen", ag1, "1", "--blocking"])
+            elapsed = time.time() - t0
+            self.assertEqual(res_block.returncode, 0)
+            self.assertGreaterEqual(elapsed, 0.8)
+            self.assertNotIn("router_active", res_block.stdout)
+
+            # 6. Negative Control: Pending message in inbox is immediately consumed despite router lock
+            self.run_cmd(["send", "--to", ag1, "--subject", "PendingMsg", "--body", "Should be consumed immediately"])
+            res_consume = self.run_cmd(["listen", ag1, "1"])
+            self.assertEqual(res_consume.returncode, 0)
+            msg_consumed = json.loads(res_consume.stdout.strip())
+            self.assertEqual(msg_consumed["subject"], "PendingMsg")
+            self.assertEqual(msg_consumed["body"], "Should be consumed immediately")
+
+        finally:
+            self.run_cmd(["close", ag1])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 // Manages global session-to-agent mapping in ~/.config/rhizo/sessions.json.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { join, dirname } from "node:path"
 import type { SessionMap, SessionEntry } from "./types"
 
@@ -91,6 +92,14 @@ export function setMappedAgent(sessionKey: string, agentName: string, status = "
     const msg = err instanceof Error ? err.message : String(err)
     console.error("[rhizo-ear] could not write session mapping:", msg)
   }
+
+  try {
+    const bin = getRhizoBin()
+    const sessionId = sessionKey.startsWith("opencode:") ? sessionKey.slice("opencode:".length) : sessionKey
+    spawnSync(bin, ["session", "register", agentName, "--session", sessionId, "--harness", "opencode"], {
+      stdio: "ignore",
+    })
+  } catch {}
 }
 
 export function closeSessionAgent(sessionKey: string): void {
