@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Rhizo Documentation & Package Portal Generator (`scripts/generate_docs_site.py`, `scripts/generate_apt_repo.py`)**:
+  - Implemented static documentation portal generator rendering `index.html` and `docs/*.html` from `README.md` and repository `docs/` specifications (`architecture.md`, `cli_reference.md`, `configuration.md`, `routes_schema.md`, `system_one_routing.md`, `wire_protocol.md`, `wism_state_machine.md`).
+  - Added installation instructions across 5 package managers (npm `@axiomantic/rhizo`, Homebrew `axiomantic/tap/rhizo`, APT `https://axiomantic.github.io/rhizo/apt/`, Scoop, and Universal installer).
+  - Added support for Mermaid diagram rendering and responsive dark/light mode typography.
+- **Dedicated GitHub Pages Workflow (`.github/workflows/pages.yml`)**:
+  - Created automated workflow triggered on `workflow_dispatch` and `push` to `main` for `docs/**` or `scripts/generate_apt_repo.py`.
+  - Deploys directly via `actions/upload-pages-artifact` and `actions/deploy-pages` (using `pages: write`, `id-token: write`) while synchronizing `gh-pages` branch for legacy fallback.
+- **Unit Test for Zero Locutus Invariant (`tests/test_nim_binary.py`)**:
+  - Added `test_75_generate_apt_repo_and_docs_portal_purges_locutus` verifying zero `locutus` or `axiomantic/locu` occurrences in generated APT repo or documentation site.
+
+### Fixed
+- **Purge Stale Locutus References from APT Repository & GitHub Pages (`scripts/generate_apt_repo.py`, `gh-pages`)**:
+  - Fixed typo in universal installer URL (`https://raw.githubusercontent.com/axiomantic/locu/main/scripts/install.sh` -> `https://raw.githubusercontent.com/axiomantic/rhizo/main/scripts/install.sh`).
+  - Filtered out legacy `locutus_*.deb` packages from Debian package indexing in `scripts/generate_apt_repo.py`.
+  - Purged legacy `locutus_*.deb` binaries from `origin/gh-pages` and regenerated `Packages`, `Packages.gz`, `Release`, and `index.html`.
+  - Updated `.github/workflows/release.yml` to deploy GitHub Pages via `actions/upload-pages-artifact` and `actions/deploy-pages`.
+
 ## [0.2.31] - 2026-11-09
 
 ### Added

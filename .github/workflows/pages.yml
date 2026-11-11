@@ -1,0 +1,74 @@
+name: Deploy GitHub Pages & Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'scripts/generate_apt_repo.py'
+      - 'scripts/generate_docs_site.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy-pages:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch existing APT packages from gh-pages branch
+        run: |
+          mkdir -p /tmp/gh-pages-debs
+          git fetch origin gh-pages
+          git --work-tree=/tmp/gh-pages-debs checkout origin/gh-pages -- apt || true
+          mkdir -p debs-input
+          if [ -d "/tmp/gh-pages-debs/apt" ]; then
+            find /tmp/gh-pages-debs/apt -name "*.deb" ! -name "locutus_*" -exec cp {} debs-input/ \;
+          fi
+          echo "Indexed $(ls -1 debs-input | wc -l) Debian packages."
+
+      - name: Generate Documentation Portal & APT Repository
+        run: |
+          mkdir -p site-output/apt
+          python3 scripts/generate_apt_repo.py debs-input site-output/apt --site-dir site-output
+          touch site-output/.nojekyll
+
+      - name: Sync updated site to gh-pages branch (git storage & fallback)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout gh-pages || git checkout -b gh-pages
+          git pull origin gh-pages || true
+          cp -r site-output/* .
+          cp site-output/.nojekyll .
+          git add -A
+          git commit -m "docs(pages): synchronize documentation portal and APT repo [skip ci]" || echo "No changes to commit"
+          git push origin gh-pages || true
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site-output
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -6048,6 +6048,84 @@ secret = "my_inline_secret_test_555"
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}inbox:{codex_agent}"], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}listener:{codex_agent}"], capture_output=True)
 
+    def test_75_generate_apt_repo_and_docs_portal_purges_locutus(self):
+        """Test scripts/generate_apt_repo.py and generate_docs_site.py produce zero locutus/locu references and render docs."""
+        import sys
+        import tempfile
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
+        script_path = repo_root / "scripts" / "generate_apt_repo.py"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            debs_in = tmp / "debs_in"
+            debs_in.mkdir()
+            apt_out = tmp / "site" / "apt"
+            site_out = tmp / "site"
+
+            # Create dummy .deb files: one legacy locutus, one valid rhizo
+            (debs_in / "locutus_0.1.0_amd64.deb").write_bytes(b"!<arch>\ndebian-binary   1000        0     0     100644  4         `\n2.0\n")
+            (debs_in / "rhizo_0.2.31_amd64.deb").write_bytes(b"!<arch>\ndebian-binary   1000        0     0     100644  4         `\n2.0\n")
+
+            res = subprocess.run(
+                [sys.executable, str(script_path), str(debs_in), str(apt_out), "--site-dir", str(site_out)],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True
+            )
+            self.assertEqual(res.returncode, 0, f"generate_apt_repo.py failed: {res.stderr}\n{res.stdout}")
+
+            # Verify locutus deb was NOT copied to apt_out
+            self.assertFalse((apt_out / "locutus_0.1.0_amd64.deb").exists(), "Legacy locutus deb was erroneously copied to APT repo")
+            self.assertTrue((apt_out / "rhizo_0.2.31_amd64.deb").exists(), "Valid rhizo deb was not copied to APT repo")
+
+            # Verify Packages and Packages.gz contain rhizo and zero locutus
+            packages_txt = (apt_out / "Packages").read_text(encoding="utf-8")
+            self.assertIn("Package: rhizo", packages_txt)
+            self.assertNotIn("locutus", packages_txt.lower())
+
+            # Verify portal index.html exists and renders documentation links
+            portal_html = (site_out / "index.html").read_text(encoding="utf-8")
+            self.assertIn("The Inter-Assistant Redis Bus", portal_html)
+            self.assertIn("docs/architecture.html", portal_html)
+            self.assertIn("docs/cli_reference.html", portal_html)
+            self.assertIn("docs/configuration.html", portal_html)
+            self.assertIn("docs/routes_schema.html", portal_html)
+            self.assertIn("docs/system_one_routing.html", portal_html)
+            self.assertIn("docs/wire_protocol.html", portal_html)
+            self.assertIn("docs/wism_state_machine.html", portal_html)
+
+            # Verify APT index.html exists
+            apt_html = (apt_out / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Axiomantic Rhizo APT Repository", apt_html)
+
+            # Verify universal installer URL is correct in both portal and apt pages
+            expected_installer = "https://raw.githubusercontent.com/axiomantic/rhizo/main/scripts/install.sh"
+            self.assertIn(expected_installer, portal_html)
+            self.assertIn(expected_installer, apt_html)
+
+            # Verify all rendered doc files exist
+            docs_dir = site_out / "docs"
+            for doc_name in [
+                "architecture.html", "cli_reference.html", "configuration.html",
+                "routes_schema.html", "system_one_routing.html", "wire_protocol.html",
+                "wism_state_machine.html"
+            ]:
+                doc_file = docs_dir / doc_name
+                self.assertTrue(doc_file.exists(), f"Rendered doc {doc_name} is missing")
+
+            # Rigorous check: Search ALL generated files in site_out for forbidden strings
+            forbidden_tokens = ["locutus", "axiomantic/locu"]
+            for gen_file in site_out.rglob("*"):
+                if gen_file.is_file() and not gen_file.name.endswith(".gz") and not gen_file.name.endswith(".deb"):
+                    content = gen_file.read_text(encoding="utf-8", errors="replace")
+                    for token in forbidden_tokens:
+                        self.assertNotIn(
+                            token,
+                            content.lower(),
+                            f"Forbidden token '{token}' found in generated site file: {gen_file.relative_to(site_out)}"
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()

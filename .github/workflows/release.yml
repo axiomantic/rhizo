@@ -349,6 +349,10 @@ jobs:
     name: Publish GitHub Release
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v7
 
@@ -394,22 +398,41 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Deploy APT repository to GitHub Pages
+      - name: Deploy APT repository and Documentation Portal to GitHub Pages
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          mkdir -p apt-output
-          python3 scripts/generate_apt_repo.py release-assets apt-output
-          git clone --branch gh-pages https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git gh-pages-branch
-          mkdir -p gh-pages-branch/apt
-          cp -r apt-output/* gh-pages-branch/apt/
-          cp apt-output/index.html gh-pages-branch/index.html
-          touch gh-pages-branch/.nojekyll
+          mkdir -p site-output/apt
+          # Clone gh-pages to retain past deb packages and update git branch
+          git clone --branch gh-pages https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git gh-pages-branch || git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git gh-pages-branch
+          mkdir -p all-debs
+          find gh-pages-branch/apt -name "*.deb" ! -name "locutus_*" -exec cp {} all-debs/ \; 2>/dev/null || true
+          find release-assets -name "*.deb" ! -name "locutus_*" -exec cp {} all-debs/ \; 2>/dev/null || true
+          python3 scripts/generate_apt_repo.py all-debs site-output/apt --site-dir site-output
+          touch site-output/.nojekyll
+
+          # Sync to gh-pages branch for git storage and legacy fallback
+          cp -r site-output/* gh-pages-branch/
           cd gh-pages-branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "chore(release): update APT repo with ${GITHUB_REF#refs/tags/} packages" || true
-          git push origin gh-pages
+          git add -A
+          git commit -m "chore(release): update APT repo and documentation for ${GITHUB_REF#refs/tags/} [skip ci]" || true
+          git push origin gh-pages || true
+
+      - name: Setup Pages
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site-output
+
+      - name: Deploy to GitHub Pages
+        if: startsWith(github.ref, 'refs/tags/')
+        id: deployment
+        uses: actions/deploy-pages@v4
 
       - name: Update Homebrew Tap Formula
         if: startsWith(github.ref, 'refs/tags/')
