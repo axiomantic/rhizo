@@ -43,26 +43,34 @@ def md5_file(filepath):
 def extract_control_info(deb_path):
     """Extracts control fields from .deb package via dpkg-deb or ar."""
     if shutil.which("dpkg-deb"):
-        out = subprocess.check_output(["dpkg-deb", "-f", deb_path], text=True).strip()
-        return out
+        try:
+            out = subprocess.check_output(["dpkg-deb", "-f", deb_path], text=True, stderr=subprocess.DEVNULL).strip()
+            if out:
+                return out
+        except Exception:
+            pass
 
-    # Fallback using ar and tar if dpkg-deb is not available
+    # Fallback using ar and tar if dpkg-deb is not available or fails
     import tempfile
     import tarfile
 
-    with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(["ar", "x", deb_path], cwd=tmp, check=True)
-        control_tar = None
-        for cand in ["control.tar.gz", "control.tar.xz", "control.tar.zst"]:
-            p = os.path.join(tmp, cand)
-            if os.path.isfile(p):
-                control_tar = p
-                break
-        if control_tar and not control_tar.endswith(".zst"):
-            with tarfile.open(control_tar, "r:*") as tar:
-                member = tar.extractfile("./control") or tar.extractfile("control")
-                if member:
-                    return member.read().decode("utf-8").strip()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            res = subprocess.run(["ar", "x", deb_path], cwd=tmp, capture_output=True)
+            if res.returncode == 0:
+                control_tar = None
+                for cand in ["control.tar.gz", "control.tar.xz", "control.tar.zst"]:
+                    p = os.path.join(tmp, cand)
+                    if os.path.isfile(p):
+                        control_tar = p
+                        break
+                if control_tar and not control_tar.endswith(".zst"):
+                    with tarfile.open(control_tar, "r:*") as tar:
+                        member = tar.extractfile("./control") or tar.extractfile("control")
+                        if member:
+                            return member.read().decode("utf-8").strip()
+    except Exception:
+        pass
 
     # Fallback to minimal control based on filename
     basename = os.path.basename(deb_path)
