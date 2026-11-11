@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - In `doRouter`: Scrubbed inherited session environment variables (`ANTIGRAVITY_CONVERSATION_ID`, `OPENCODE_SESSION_ID`, `PI_SESSION_ID`, `RHIZO_AGENT_NAME`) at router startup (`action == "start"`).
   - In `dispatchAgyMessage`: Updated audit ticket approval guidance to use `--evidence "..."` instead of deprecated `--weave` for compliance with Vine v0.2.19+.
   - Added regression test `test_40_router_convid_precedence_and_env_scrubbing` in `tests/test_coordination_invariants.py`.
+- **Strict Identity Fail-Fast & Intuitive CLI Flag Validation (`src/rhizo.nim`)**:
+  - Eliminated silent fallback to literal `"agent"` when agent identity cannot be resolved from arguments, flags, or harness environment across `open`, `listen`, `drain`, `inbox`, `close`, `send`, `reply`, and `session register`. Commands now fail fast with exit code 1.
+  - Mandated explicit session ID on `rhizo session register <agent>` via `--session` (or aliases `--session-id`, `--conv-id`, `--conversation-id`) or harness environment variables (`ANTIGRAVITY_CONVERSATION_ID`, `OPENCODE_SESSION_ID`, etc.), exiting 1 if unresolvable.
+  - Added support for optional configuration flags on `open` and `session register`: `--ls-address` / `--address`, `--csrf-token` / `--token`, `--project-id`, `--agent` / `--name`.
+  - Added intuitive CLI flag aliases for `send` and `reply`: `--recipient` / `--target` for `--to`; `--sender` / `--agent` for `--from`; `--message` / `--text` / `-m` for `--body`; `--title` / `-s` for `--subject`.
+  - Enforced strict unknown flag rejection across `open`, `session`, `router`, `listen`, `send`, `reply`, `drain`, `probe`, `who`, `task`, `enqueue`, and `claim` subcommands, exiting with code 2 and displaying allowable flags.
+  - Added regression test `test_41_fail_fast_identity_and_intuitive_cli_args` in `tests/test_coordination_invariants.py`.
 
 ## [0.2.32] - 2026-11-11
 

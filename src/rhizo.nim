@@ -958,11 +958,15 @@ proc ensureProjectScopedName*(cfg: RhizoConfig, rawName: string): string =
 
 proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDefault: bool = false, sessionId: string = "", allowGlobalFallback: bool = false): string =
   if explicitName.len > 0:
-    return ensureProjectScopedName(cfg, explicitName)
+    let norm = sanitizeIdentifier(explicitName)
+    if norm != "agent":
+      return ensureProjectScopedName(cfg, explicitName)
+    return ""
 
   # 1. Explicit CLI --agent-name takes highest precedence
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source == srcCli:
-    return ensureProjectScopedName(cfg, cfg.agentName)
+    if cfg.agentName.len > 0 and cfg.agentName != "agent":
+      return ensureProjectScopedName(cfg, cfg.agentName)
 
   # 2. Explicit CLI --session-id takes precedence over ambient RHIZO_AGENT_NAME
   let cliSid = if sessionId.len > 0: sessionId
@@ -971,34 +975,60 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
   if cliSid.len > 0:
     try:
       let redisAgent = getRedisSessionMapping(cfg, cliSid)
-      if redisAgent.len > 0:
+      if redisAgent.len > 0 and redisAgent != "agent":
         return ensureProjectScopedName(cfg, redisAgent)
     except CatchableError:
       discard
 
   # 3. Explicit agent name via Env or Config takes precedence over ambient session mappings
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
-    return ensureProjectScopedName(cfg, cfg.agentName)
-  let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", "")))
-  if envName.len > 0:
+    if cfg.agentName.len > 0 and cfg.agentName != "agent":
+      return ensureProjectScopedName(cfg, cfg.agentName)
+  let envName = getEnv("RHIZO_AGENT_NAME", getEnv("A2A_NAME", getEnv("MY_NAME", ""))).strip()
+  if envName.len > 0 and envName != "agent":
     return ensureProjectScopedName(cfg, envName)
 
-  # 4. Ambient Session ID resolution (RHIZO_SESSION_ID or config session_id)
-  let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
-  if sid.len > 0:
-    try:
-      let redisAgent = getRedisSessionMapping(cfg, sid)
-      if redisAgent.len > 0:
-        return ensureProjectScopedName(cfg, redisAgent)
-    except CatchableError:
-      discard
+  # 4. Ambient & Harness Session ID resolution (verified rhizo:sessions binding)
+  var sessionIdsToTry: seq[string] = @[]
+  if sessionId.len > 0: sessionIdsToTry.add(sessionId)
+  if cfg.sessionId.len > 0: sessionIdsToTry.add(cfg.sessionId)
+  let rhizoSid = getEnv("RHIZO_SESSION_ID", "").strip()
+  if rhizoSid.len > 0: sessionIdsToTry.add(rhizoSid)
 
-  # Note: Global file fallback (loadCurrentAgent) permanently removed to satisfy GVR-008.
+  let agyConv = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+  if agyConv.len > 0:
+    sessionIdsToTry.add("agy:" & agyConv)
+    sessionIdsToTry.add("antigravity:" & agyConv)
+    sessionIdsToTry.add(agyConv)
 
-  # Note: Directory-scoped identity files (.rhizo/session.json, .garden/session.json)
-  # and silent dirname-worker fallbacks are strictly purged to satisfy sovereign multi-agent isolation.
-  if cfg.agentName.len > 0:
+  let ocSid = getEnv("OPENCODE_SESSION_ID", "").strip()
+  if ocSid.len > 0:
+    sessionIdsToTry.add("opencode:" & ocSid)
+    sessionIdsToTry.add(ocSid)
+
+  let piSid = getEnv("PI_SESSION_ID", "").strip()
+  if piSid.len > 0:
+    sessionIdsToTry.add("pi:" & piSid)
+    sessionIdsToTry.add(piSid)
+
+  let codexSid = getEnv("CODEX_SESSION_ID", "").strip()
+  if codexSid.len > 0:
+    sessionIdsToTry.add("codex:" & codexSid)
+    sessionIdsToTry.add(codexSid)
+
+  for sidCandidate in sessionIdsToTry:
+    if sidCandidate.len > 0:
+      try:
+        let redisAgent = getRedisSessionMapping(cfg, sidCandidate)
+        if redisAgent.len > 0 and redisAgent != "agent":
+          return ensureProjectScopedName(cfg, redisAgent)
+      except CatchableError:
+        discard
+
+  # Fallback to cfg.agentName only if non-empty and not bare "agent"
+  if cfg.agentName.len > 0 and cfg.agentName != "agent":
     return ensureProjectScopedName(cfg, cfg.agentName)
+
   return ""
 
 proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool, pid: int, host: string, mode: string] =
@@ -2132,14 +2162,13 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
   defer:
     try: client.close() except CatchableError: discard
 
-  var name = ensureProjectScopedName(cfg, optName)
+  var name = if optName.len > 0: ensureProjectScopedName(cfg, optName)
+             else: getActiveAgentName(cfg)
   let effectiveForceSteal = forceSteal or cfg.forceSteal
-  if name.len == 0:
-    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
-               else: getCurrentDir().splitPath.tail
-    let reserved = reserveUniqueName(cfg, proj, 600)
-    name = sanitizeIdentifier(reserved.name)
-    stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
+  if name.len == 0 or name == "agent" or name == cfg.project & "-agent":
+    stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name, or export RHIZO_AGENT_NAME=<name>.")
+    stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <name>'. Do NOT guess an existing identity from 'rhizo who' or static role files.")
+    quit(1)
   else:
     try:
       let existingProj = client.hGet(cfg.prefix & "agent:" & name, "project")
@@ -8383,6 +8412,12 @@ proc main() =
     var rearmListen = false
     var listenTimeout = -1
     var forceSteal = false
+    var sessionId = ""
+    var lsAddr = ""
+    var csrfToken = ""
+    var projId = ""
+    var harness = ""
+
     var i = 1
     while i < args.len:
       let a = args[i]
@@ -8402,17 +8437,45 @@ proc main() =
         except ValueError:
           stderr.writeLine("Error: Invalid integer for --listen-timeout: '" & a[17..^1] & "'")
           quit(1)
-      elif a == "--listen-timeout" and i + 1 < args.len:
+      elif (a == "--listen-timeout" or a == "-t") and i + 1 < args.len:
         rearmListen = true
         try: listenTimeout = parseInt(args[i+1])
         except ValueError:
           stderr.writeLine("Error: Invalid integer for --listen-timeout: '" & args[i+1] & "'")
           quit(1)
         inc i
+      elif a.startsWith("--agent="): name = a[8..^1]
+      elif (a == "--agent" or a == "--name") and i + 1 < args.len: name = args[i+1]; inc i
+      elif a.startsWith("--name="): name = a[7..^1]
+      elif a.startsWith("--tags="): tags = a[7..^1]
+      elif a == "--tags" and i + 1 < args.len: tags = args[i+1]; inc i
+      elif a.startsWith("--session="): sessionId = a[10..^1]
+      elif a in ["--session", "--session-id", "--conv-id", "--conversation-id", "-s"] and i + 1 < args.len: sessionId = args[i+1]; inc i
+      elif a.startsWith("--session-id="): sessionId = a[13..^1]
+      elif a.startsWith("--conv-id="): sessionId = a[10..^1]
+      elif a.startsWith("--conversation-id="): sessionId = a[18..^1]
+      elif a.startsWith("--ls-address="): lsAddr = a[13..^1]
+      elif a in ["--ls-address", "--address"] and i + 1 < args.len: lsAddr = args[i+1]; inc i
+      elif a.startsWith("--address="): lsAddr = a[10..^1]
+      elif a.startsWith("--csrf-token="): csrfToken = a[13..^1]
+      elif a in ["--csrf-token", "--token"] and i + 1 < args.len: csrfToken = args[i+1]; inc i
+      elif a.startsWith("--token="): csrfToken = a[8..^1]
+      elif a.startsWith("--project-id="): projId = a[13..^1]
+      elif a == "--project-id" and i + 1 < args.len: projId = args[i+1]; inc i
+      elif a.startsWith("--harness="): harness = a[10..^1]
+      elif a in ["--harness", "-H"] and i + 1 < args.len: harness = args[i+1]; inc i
       elif not a.startsWith("-"):
         if name.len == 0: name = a
         elif tags.len == 0: tags = a
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'open'. Valid flags: --listen, -l, --listen-timeout, --force-steal, --agent, --name, --session, --session-id, --conv-id, --conversation-id, --ls-address, --address, --csrf-token, --token, --project-id, --harness, --tags")
+        quit(2)
       inc i
+
+    if lsAddr.len > 0: putEnv("ANTIGRAVITY_LS_ADDRESS", lsAddr)
+    if csrfToken.len > 0: putEnv("ANTIGRAVITY_CSRF_TOKEN", csrfToken)
+    if projId.len > 0: putEnv("ANTIGRAVITY_PROJECT_ID", projId)
+    if sessionId.len > 0: putEnv("ANTIGRAVITY_CONVERSATION_ID", sessionId)
     doOpen(cfg, name, tags, rearmListen, listenTimeout, forceSteal)
 
   of "heartbeat":
@@ -8476,11 +8539,20 @@ proc main() =
         agyEar = true
       elif a in ["--roster-guard", "-R"]:
         rosterGuard = true
+      elif a.startsWith("--agent="): explicitName = a[8..^1]
+      elif (a == "--agent" or a == "--name") and i + 1 < args.len: explicitName = args[i+1]; inc i
+      elif a.startsWith("--name="): explicitName = a[7..^1]
+      elif a in ["--all", "-a"]: discard
+      elif a in ["--json", "-j"]: discard
+      elif a == "--stdout": discard
       elif not a.startsWith("-"):
         try:
           timeout = parseInt(a)
         except ValueError:
           if explicitName == "": explicitName = sanitizeIdentifier(a)
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand '" & subcmd & "'. Valid flags: --timeout, -t, --force, -f, --blocking, --foreground, --notify, -n, --quiet, -q, --continuous, -c, --once, --agy-ear, --roster-guard, -R, --agent, --name")
+        quit(2)
       inc i
 
     var name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
@@ -8534,6 +8606,16 @@ proc main() =
       elif a in ["--harness", "-H"] and i + 1 < args.len:
         harness = args[i+1]
         inc i
+      elif a in ["--json", "-j"]:
+        isJson = true
+      elif a in ["--quiet", "-q"]:
+        discard
+      elif not a.startsWith("-"):
+        if a.toLowerAscii in ["start", "status", "stop"]:
+          action = a.toLowerAscii
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'router'. Valid flags: --daemon, -d, --stdout, --harness, -H, --json, -j, --quiet, -q")
+        quit(2)
       inc i
 
     doRouter(cfg, action, daemon, harness, stdoutMode, isJson)
@@ -8564,15 +8646,24 @@ proc main() =
     while i < args.len:
       let a = args[i]
       if a.startsWith("--to="): toAgent = a[5..^1]
-      elif a == "--to" and i + 1 < args.len: toAgent = args[i+1]; inc i
+      elif a.startsWith("--recipient="): toAgent = a[12..^1]
+      elif a.startsWith("--target="): toAgent = a[9..^1]
+      elif (a in ["--to", "--recipient", "--target"]) and i + 1 < args.len: toAgent = args[i+1]; inc i
       elif a.startsWith("--type="): msgType = a[7..^1]
       elif a == "--type" and i + 1 < args.len: msgType = args[i+1]; inc i
       elif a.startsWith("--from="): fromAgent = a[7..^1]
-      elif a == "--from" and i + 1 < args.len: fromAgent = args[i+1]; inc i
+      elif a.startsWith("--sender="): fromAgent = a[9..^1]
+      elif a.startsWith("--agent="): fromAgent = a[8..^1]
+      elif (a in ["--from", "--sender", "--agent"]) and i + 1 < args.len: fromAgent = args[i+1]; inc i
       elif a.startsWith("--subject="): subject = a[10..^1]
-      elif a == "--subject" and i + 1 < args.len: subject = args[i+1]; inc i
+      elif a.startsWith("--title="): subject = a[8..^1]
+      elif a.startsWith("-s="): subject = a[3..^1]
+      elif (a in ["--subject", "--title", "-s"]) and i + 1 < args.len: subject = args[i+1]; inc i
       elif a.startsWith("--body="): body = resolveVal(a[7..^1])
-      elif a == "--body" and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
+      elif a.startsWith("--message="): body = resolveVal(a[10..^1])
+      elif a.startsWith("--text="): body = resolveVal(a[7..^1])
+      elif a.startsWith("-m="): body = resolveVal(a[3..^1])
+      elif (a in ["--body", "--message", "--text", "-m"]) and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
       elif a in ["--idle", "-d"]: setIdle = true
       elif a in ["--complete", "-c"]: isComplete = true
       elif a.startsWith("--status="):
@@ -8648,6 +8739,9 @@ proc main() =
         if toAgent == "": toAgent = a
         elif subject == "": subject = a
         elif body == "": body = a
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand '" & subcmd & "'. Valid flags: --to, --recipient, --target, --from, --sender, --agent, --subject, --title, -s, --body, --message, --text, -m, --type, --listen, -l, --listen-timeout, --idle, -d, --complete, -c, --immediate, -i, --soon, --json, --raw, --tags, --reply-to, --task-id")
+        quit(2)
       inc i
 
     # Identity resolution for sender: strictly process-bound, no silent cross-agent current_agent leakage (GVR-008)
@@ -8719,6 +8813,9 @@ proc main() =
         jsonOutput = true
       elif not a.startsWith("-"):
         filterTag = a
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'who'. Valid flags: -a, --all, --json, -j")
+        quit(2)
       inc i
 
     if showAll:
@@ -8800,6 +8897,11 @@ proc main() =
       elif (a == "--agent" or a == "-a") and i + 1 < args.len:
         explicitName = args[i+1]
         inc i
+      elif a.startsWith("--name="):
+        explicitName = a[7..^1]
+      elif a == "--name" and i + 1 < args.len:
+        explicitName = args[i+1]
+        inc i
       elif a.startsWith("--count="):
         count = parseRequiredInt(a[8..^1], "--count")
       elif (a == "--count" or a == "-c") and i + 1 < args.len:
@@ -8843,6 +8945,9 @@ proc main() =
               stderr.writeLine("Error: Invalid count '" & a & "' for " & subcmd & " command. Expected an integer.")
               stderr.writeLine("Usage: rhizo " & subcmd & " [name] [count]")
               quit(1)
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand '" & subcmd & "'. Valid flags: --limit, -l, --count, -c, --agent, -a, --name, --json, -j, --raw, --hook, -H, --peek, --no-drain, --drain, --force-steal")
+        quit(2)
       inc i
 
     let name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
@@ -8856,16 +8961,30 @@ proc main() =
       echo output
 
   of "close", "unregister":
-    let explicitName = if args.len > 1: args[1] else: ""
+    var explicitName = ""
+    var i = 1
+    while i < args.len:
+      let a = args[i]
+      if a.startsWith("--agent="): explicitName = a[8..^1]
+      elif (a == "--agent" or a == "--name") and i + 1 < args.len: explicitName = args[i+1]; inc i
+      elif a.startsWith("--name="): explicitName = a[7..^1]
+      elif not a.startsWith("-"):
+        if explicitName.len == 0: explicitName = a
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'close'. Valid flags: --agent, --name")
+        quit(2)
+      inc i
+
     let name = getActiveAgentName(cfg, explicitName, fallbackDefault = false)
+    if name.len == 0 or name == "agent" or name == cfg.project & "-agent":
+      stderr.writeLine("Error: No agent name specified. Run 'rhizo open <name>', pass the agent name ('rhizo close <name>'), or export RHIZO_AGENT_NAME=<name>.")
+      quit(1)
+
     let sid = if cfg.sessionId.len > 0: cfg.sessionId else: getEnv("RHIZO_SESSION_ID", "")
     if sid.len > 0:
       removeLocalSessionMapping(sid)
       removeRedisSessionMapping(cfg, sid, name)
-    if name.len > 0:
-      echo doUnregister(cfg, name)
-    else:
-      echo "OK"
+    echo doUnregister(cfg, name)
 
   of "nuke":
     var isJson = ("--json" in rawArgs) or ("-j" in rawArgs)
@@ -8998,22 +9117,66 @@ proc main() =
         elif a.toLowerAscii.startsWith("--format=json"):
           asJson = true
 
+      var lsAddr = ""
+      var csrfToken = ""
+      var projId = ""
+
       var i = 2
       while i < args.len:
         let a = args[i]
         if a.startsWith("--session="): sessionId = a[10..^1]
-        elif a in ["--session", "-s"] and i + 1 < args.len: sessionId = args[i+1]; inc i
+        elif a in ["--session", "--session-id", "--conv-id", "--conversation-id", "-s"] and i + 1 < args.len: sessionId = args[i+1]; inc i
+        elif a.startsWith("--session-id="): sessionId = a[13..^1]
+        elif a.startsWith("--conv-id="): sessionId = a[10..^1]
+        elif a.startsWith("--conversation-id="): sessionId = a[18..^1]
         elif a.startsWith("--harness="): harness = a[10..^1]
         elif a in ["--harness", "-H"] and i + 1 < args.len: harness = args[i+1]; inc i
         elif a in ["--force", "-f"]: force = true
+        elif a in ["--json", "-j"]: asJson = true
+        elif a.startsWith("--agent="): agent = a[8..^1]
+        elif (a == "--agent" or a == "--name") and i + 1 < args.len: agent = args[i+1]; inc i
+        elif a.startsWith("--name="): agent = a[7..^1]
+        elif a.startsWith("--ls-address="): lsAddr = a[13..^1]
+        elif a in ["--ls-address", "--address"] and i + 1 < args.len: lsAddr = args[i+1]; inc i
+        elif a.startsWith("--address="): lsAddr = a[10..^1]
+        elif a.startsWith("--csrf-token="): csrfToken = a[13..^1]
+        elif a in ["--csrf-token", "--token"] and i + 1 < args.len: csrfToken = args[i+1]; inc i
+        elif a.startsWith("--token="): csrfToken = a[8..^1]
+        elif a.startsWith("--project-id="): projId = a[13..^1]
+        elif a == "--project-id" and i + 1 < args.len: projId = args[i+1]; inc i
         elif not a.startsWith("-") and agent.len == 0:
           agent = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo session register'. Valid flags: --session, --session-id, --conv-id, --conversation-id, --harness, -H, --force, -f, --json, -j, --agent, --name, --ls-address, --address, --csrf-token, --token, --project-id")
+          quit(2)
         inc i
 
       if agent.len == 0:
         agent = getActiveAgentName(cfg, fallbackDefault = false)
-      if agent.len == 0:
-        stderr.writeLine("Error: 'rhizo session register' requires <agent_name> or active session.")
+      if agent.len == 0 or agent == "agent" or agent == cfg.project & "-agent":
+        stderr.writeLine("Error: 'rhizo session register' requires <agent_name> or active session. Pass '<agent>' or --agent <name>.")
+        quit(1)
+
+      if lsAddr.len > 0: putEnv("ANTIGRAVITY_LS_ADDRESS", lsAddr)
+      if csrfToken.len > 0: putEnv("ANTIGRAVITY_CSRF_TOKEN", csrfToken)
+      if projId.len > 0: putEnv("ANTIGRAVITY_PROJECT_ID", projId)
+
+      # Resolve session ID from environment if not passed explicitly
+      if sessionId.len == 0:
+        if getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip().len > 0:
+          sessionId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
+        elif getEnv("OPENCODE_SESSION_ID", "").strip().len > 0:
+          sessionId = getEnv("OPENCODE_SESSION_ID", "").strip()
+        elif getEnv("PI_SESSION_ID", "").strip().len > 0:
+          sessionId = getEnv("PI_SESSION_ID", "").strip()
+        elif getEnv("CODEX_SESSION_ID", "").strip().len > 0:
+          sessionId = getEnv("CODEX_SESSION_ID", "").strip()
+        elif getEnv("RHIZO_SESSION_ID", "").strip().len > 0:
+          sessionId = getEnv("RHIZO_SESSION_ID", "").strip()
+
+      if sessionId.len == 0:
+        let cleanAg = if agent.startsWith(cfg.project & "-"): agent.substr(cfg.project.len + 1) else: agent
+        stderr.writeLine("Error: Cannot register session for @" & cleanAg & ": no session/conversation ID found in environment or --session <id> flag.")
         quit(1)
 
       agent = ensureProjectScopedName(cfg, agent)
@@ -9051,9 +9214,14 @@ proc main() =
       let needThreadId = "--thread-id" in args
       var targetId = ""
       for idx in 2..<args.len:
-        if not args[idx].startsWith("-"):
-          targetId = args[idx]
-          break
+        let a = args[idx]
+        if a in ["--json", "-j", "--thread-id", "--harness", "--model", "--cwd", "--strand", "--account"]:
+          discard
+        elif not a.startsWith("-"):
+          if targetId.len == 0: targetId = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo session " & action & "'. Valid flags: --thread-id, --json, -j")
+          quit(2)
       if targetId.len == 0:
         stderr.writeLine("Error: Missing session key or agent name")
         quit(1)
@@ -9127,7 +9295,12 @@ proc main() =
       echo "OK [session] removed " & key
 
     of "list", "ls":
-      let asJson = ("--json" in args) or ("-j" in args)
+      var asJson = false
+      for a in args[2..^1]:
+        if a in ["--json", "-j"]: asJson = true
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo session list'. Valid flags: --json, -j")
+          quit(2)
       var sessions = newJObject()
 
       # Load sessions directly from Redis
@@ -9409,7 +9582,7 @@ proc main() =
         quit(1)
       let queueName = args[1]
       var msgType = "task"
-      var fromAgent = getActiveAgentName(cfg, "", fallbackDefault = true)
+      var fromAgent = getActiveAgentName(cfg, "", fallbackDefault = false)
       var subject = ""
       var body = ""
       var tags: seq[string] = @[]
@@ -9423,11 +9596,18 @@ proc main() =
         if a.startsWith("--type="): msgType = a[7..^1]
         elif a == "--type" and i + 1 < args.len: msgType = args[i+1]; inc i
         elif a.startsWith("--from="): fromAgent = a[7..^1]
-        elif a == "--from" and i + 1 < args.len: fromAgent = args[i+1]; inc i
+        elif a.startsWith("--sender="): fromAgent = a[9..^1]
+        elif a.startsWith("--agent="): fromAgent = a[8..^1]
+        elif (a in ["--from", "--sender", "--agent"]) and i + 1 < args.len: fromAgent = args[i+1]; inc i
         elif a.startsWith("--subject="): subject = a[10..^1]
-        elif a == "--subject" and i + 1 < args.len: subject = args[i+1]; inc i
+        elif a.startsWith("--title="): subject = a[8..^1]
+        elif a.startsWith("-s="): subject = a[3..^1]
+        elif (a in ["--subject", "--title", "-s"]) and i + 1 < args.len: subject = args[i+1]; inc i
         elif a.startsWith("--body="): body = resolveVal(a[7..^1])
-        elif a == "--body" and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
+        elif a.startsWith("--message="): body = resolveVal(a[10..^1])
+        elif a.startsWith("--text="): body = resolveVal(a[7..^1])
+        elif a.startsWith("-m="): body = resolveVal(a[3..^1])
+        elif (a in ["--body", "--message", "--text", "-m"]) and i + 1 < args.len: body = resolveVal(args[i+1]); inc i
         elif a.startsWith("--tags="):
           for t in a[7..^1].split(','):
             if t.strip().len > 0: tags.add(t.strip())
@@ -9444,6 +9624,9 @@ proc main() =
         elif not a.startsWith("-"):
           if subject == "": subject = a
           elif body == "": body = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'enqueue'. Valid flags: --subject, --title, -s, --body, --message, --text, -m, --from, --sender, --agent, --type, --tags, --reply-to, --id, --timestamp")
+          quit(2)
         inc i
 
       if subject.len == 0 or body.len == 0:
@@ -9717,6 +9900,9 @@ proc main() =
         elif a == "--lease" and i + 1 < args.len:
           lease = parseRequiredInt(args[i+1], "--lease")
           inc i
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo claim renew'. Valid flags: --lease")
+          quit(2)
         inc i
       doClaimRenew(cfg, queueName, taskId, lease)
     else:
@@ -9755,10 +9941,18 @@ proc main() =
         elif a == "--agent-name" and i + 1 < args.len:
           explicitWorker = args[i+1]
           inc i
-        elif a == "--raw":
+        elif a.startsWith("--agent="):
+          explicitWorker = a[8..^1]
+        elif (a == "--agent" or a == "-a") and i + 1 < args.len:
+          explicitWorker = args[i+1]
+          inc i
+        elif a in ["--raw", "-r"]:
           rawOutput = true
         elif not a.startsWith("-"):
           timeout = parseRequiredInt(a, "timeout")
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'claim'. Valid flags: --lease, --timeout, --run-id, --worker, --agent, --agent-name, --raw, -r")
+          quit(2)
         inc i
 
       doClaim(cfg, queueName, timeout, lease, rawOutput, runId, explicitWorker)
@@ -10462,11 +10656,18 @@ proc main() =
         elif a == "--depends-on" and i + 1 < args.len: dependsOn = args[i+1]; inc i
         elif a.startsWith("--target="): target = a[9..^1]
         elif a == "--target" and i + 1 < args.len: target = args[i+1]; inc i
+        elif a.startsWith("--assignee="): target = a[11..^1]
+        elif a == "--assignee" and i + 1 < args.len: target = args[i+1]; inc i
+        elif a.startsWith("--worker="): target = a[9..^1]
+        elif a == "--worker" and i + 1 < args.len: target = args[i+1]; inc i
         elif a.startsWith("--fencing-keys="): fencingKeys = a[15..^1]
         elif a == "--fencing-keys" and i + 1 < args.len: fencingKeys = args[i+1]; inc i
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
           elif title.len == 0: title = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task create'. Valid flags: --title, --deliverable, --spec, --depends-on, --target, --assignee, --worker, --fencing-keys")
+          quit(2)
         inc i
       if taskId.len == 0:
         stderr.writeLine("Error: Missing task id. Usage: rhizo task create <id> --title <title> [--deliverable <deliv>] [--spec <spec>] [--depends-on <ids>] [--target <worker|queue>]")
@@ -10494,7 +10695,8 @@ proc main() =
       while i < args.len:
         let a = args[i]
         if a.startsWith("--worker="): worker = a[9..^1]
-        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif (a == "--worker" or a == "--agent") and i + 1 < args.len: worker = args[i+1]; inc i
+        elif a.startsWith("--agent="): worker = a[8..^1]
         elif a.startsWith("--lease="): leaseSec = parseRequiredInt(a[8..^1], "--lease")
         elif a == "--lease" and i + 1 < args.len: leaseSec = parseRequiredInt(args[i+1], "--lease"); inc i
         elif a.startsWith("--strand="): strandPath = a[9..^1]
@@ -10503,12 +10705,15 @@ proc main() =
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
           elif worker.len == 0: worker = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task claim'. Valid flags: --worker, --agent, --lease, --strand, --no-vine")
+          quit(2)
         inc i
       if taskId.len == 0:
         stderr.writeLine("Error: Missing task id. Usage: rhizo task claim <id> [--worker <worker>] [--lease <sec>] [--strand <path>] [--no-vine]")
         quit(1)
       if worker.len == 0:
-        worker = getActiveAgentName(cfg, fallbackDefault = true)
+        worker = getActiveAgentName(cfg, fallbackDefault = false)
       if worker.len == 0:
         stderr.writeLine("Error: Cannot determine worker name for task claim. Pass '--worker <name>' or export RHIZO_AGENT_NAME=<name>.")
         quit(1)
@@ -10605,12 +10810,15 @@ proc main() =
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
           elif progressText.len == 0: progressText = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task progress'. Valid flags: --progress, --renew, --worker")
+          quit(2)
         inc i
       if taskId.len == 0:
         stderr.writeLine("Error: Missing task id. Usage: rhizo task progress <id> --progress <text> [--renew <sec>]")
         quit(1)
       if worker.len == 0:
-        worker = getActiveAgentName(cfg, fallbackDefault = true)
+        worker = getActiveAgentName(cfg, fallbackDefault = false)
       let res = doTask(cfg, "progress", [taskId, worker, progressText, $renewSec])
       if res.startsWith("ERR"):
         stderr.writeLine(res)
@@ -10637,12 +10845,15 @@ proc main() =
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
           elif gateToken.len == 0: gateToken = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task gate-report'. Valid flags: --worker, --token, --gate-token, --strand")
+          quit(2)
         inc i
       if taskId.len == 0 or gateToken.len == 0:
         stderr.writeLine("Error: Missing task id or gate token. Usage: rhizo task gate-report <id> --token <token> [--strand <path>]")
         quit(1)
       if worker.len == 0:
-        worker = getActiveAgentName(cfg, fallbackDefault = true)
+        worker = getActiveAgentName(cfg, fallbackDefault = false)
       let res = doTask(cfg, "gate-report", [taskId, worker, gateToken, strandPath])
       if res.startsWith("ERR"):
         stderr.writeLine(res)
@@ -10659,19 +10870,24 @@ proc main() =
       while i < args.len:
         let a = args[i]
         if a.startsWith("--worker="): worker = a[9..^1]
-        elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
+        elif (a == "--worker" or a == "--agent") and i + 1 < args.len: worker = args[i+1]; inc i
+        elif a.startsWith("--agent="): worker = a[8..^1]
         elif a.startsWith("--gate-token="): gateToken = a[13..^1]
-        elif a == "--gate-token" and i + 1 < args.len: gateToken = args[i+1]; inc i
+        elif (a == "--gate-token" or a == "--token") and i + 1 < args.len: gateToken = args[i+1]; inc i
+        elif a.startsWith("--token="): gateToken = a[8..^1]
         elif a == "--weave": weave = true
         elif a == "--skip-gate": skipGate = true
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task complete'. Valid flags: --worker, --agent, --gate-token, --token, --weave, --skip-gate")
+          quit(2)
         inc i
       if taskId.len == 0:
         stderr.writeLine("Error: Missing task id. Usage: rhizo task complete <id> [--weave] [--skip-gate]")
         quit(1)
       if worker.len == 0:
-        worker = getActiveAgentName(cfg, fallbackDefault = true)
+        worker = getActiveAgentName(cfg, fallbackDefault = false)
 
       # Check Vine Three-Key gate if strand was registered
       let taskDataStr = doTask(cfg, "get", [taskId])
@@ -10707,12 +10923,15 @@ proc main() =
         elif not a.startsWith("-"):
           if taskId.len == 0: taskId = a
           elif reason.len == 0: reason = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task yield'. Valid flags: --reason, --worker")
+          quit(2)
         inc i
       if taskId.len == 0:
         stderr.writeLine("Error: Missing task id. Usage: rhizo task yield <id> [--reason <reason>]")
         quit(1)
       if worker.len == 0:
-        worker = getActiveAgentName(cfg, fallbackDefault = true)
+        worker = getActiveAgentName(cfg, fallbackDefault = false)
       let res = doTask(cfg, "yield", [taskId, worker, reason])
       if res.startsWith("ERR"):
         stderr.writeLine(res)
@@ -10739,9 +10958,12 @@ proc main() =
         elif a == "--worker" and i + 1 < args.len: worker = args[i+1]; inc i
         elif not a.startsWith("-"):
           if worker.len == 0: worker = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task current'. Valid flags: --worker, --json")
+          quit(2)
         inc i
       if worker.len == 0:
-        worker = getActiveAgentName(cfg, fallbackDefault = true)
+        worker = getActiveAgentName(cfg, fallbackDefault = false)
       let res = doTask(cfg, "current", [worker])
       if jsonOut:
         echo res
@@ -10760,7 +10982,10 @@ proc main() =
     of "sweep":
       var jsonOut = false
       for a in args[2..^1]:
-        if a == "--json": jsonOut = true
+        if a in ["--json", "-j"]: jsonOut = true
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task sweep'. Valid flags: --json, -j")
+          quit(2)
       let res = doTask(cfg, "sweep", [])
       if jsonOut:
         echo res
@@ -10783,7 +11008,10 @@ proc main() =
       let taskId = args[2]
       var jsonOut = false
       for a in args[3..^1]:
-        if a == "--json": jsonOut = true
+        if a in ["--json", "-j"]: jsonOut = true
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task get'. Valid flags: --json, -j")
+          quit(2)
       let res = doTask(cfg, "get", [taskId])
       if jsonOut:
         echo res
@@ -10804,9 +11032,14 @@ proc main() =
       var i = 2
       while i < args.len:
         let a = args[i]
-        if a == "--json": jsonOut = true
+        if a in ["--json", "-j"]: jsonOut = true
         elif a.startsWith("--state="): stateFilter = a[8..^1]
         elif a == "--state" and i + 1 < args.len: stateFilter = args[i+1]; inc i
+        elif not a.startsWith("-"):
+          if stateFilter.len == 0: stateFilter = a
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task list'. Valid flags: --state, --json, -j")
+          quit(2)
         inc i
       let res = doTask(cfg, "list", [stateFilter])
       if jsonOut:
@@ -10939,7 +11172,10 @@ proc main() =
       let decId = args[2]
       var jsonOut = false
       for a in args[3..^1]:
-        if a == "--json": jsonOut = true
+        if a in ["--json", "-j"]: jsonOut = true
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task get'. Valid flags: --json, -j")
+          quit(2)
       let res = doDecision(cfg, "get", [decId])
       if jsonOut:
         echo res
@@ -11134,7 +11370,10 @@ proc main() =
       let remId = args[2]
       var jsonOut = false
       for a in args[3..^1]:
-        if a == "--json": jsonOut = true
+        if a in ["--json", "-j"]: jsonOut = true
+        else:
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task get'. Valid flags: --json, -j")
+          quit(2)
       let res = doRemind(cfg, "get", [remId])
       if jsonOut:
         echo res
@@ -11288,6 +11527,9 @@ proc main() =
         inc i
       elif not a.startsWith("-"):
         if targetAgent.len == 0: targetAgent = a
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'probe'. Valid flags: --json, -j")
+        quit(2)
       inc i
     echo doHistory(cfg, targetAgent, limit, jsonOut)
 
@@ -11301,6 +11543,9 @@ proc main() =
         jsonOut = true
       elif not a.startsWith("-"):
         if targetAgent.len == 0: targetAgent = a
+      else:
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'probe'. Valid flags: --json, -j")
+        quit(2)
       inc i
     if targetAgent.len == 0:
       stderr.writeLine("Usage: rhizo probe <agent> [--json]")

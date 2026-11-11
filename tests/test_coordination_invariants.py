@@ -2628,6 +2628,102 @@ exit 0
                 self.run_cmd(["close", ag_a])
                 self.run_cmd(["close", ag_b])
 
+    # -------------------------------------------------------------------------
+    # Problem 41: Fail-Fast Identity & Intuitive CLI Args
+    # -------------------------------------------------------------------------
+    def test_41_fail_fast_identity_and_intuitive_cli_args(self):
+        """Verify strict fail-fast for omitted identity, missing session ID, unknown flags (exit 2), and flag synonyms."""
+        clean_env = {
+            "RHIZO_AGENT_NAME": "",
+            "ANTIGRAVITY_CONVERSATION_ID": "",
+            "OPENCODE_SESSION_ID": "",
+            "PI_SESSION_ID": "",
+            "CODEX_SESSION_ID": "",
+            "RHIZO_SESSION_ID": "",
+        }
+
+        # (a) Omitting <agent> when no session is bound fails fast (exit 1) instead of using literal "agent"
+        res_open = self.run_cmd(["open"], env_overrides=clean_env)
+        self.assertEqual(res_open.returncode, 1)
+        self.assertIn("No agent name specified", res_open.stderr)
+
+        res_listen = self.run_cmd(["listen"], env_overrides=clean_env)
+        self.assertEqual(res_listen.returncode, 1)
+        self.assertIn("No agent name specified", res_listen.stderr)
+
+        res_close = self.run_cmd(["close"], env_overrides=clean_env)
+        self.assertEqual(res_close.returncode, 1)
+        self.assertIn("No agent name specified", res_close.stderr)
+
+        # (b) rhizo session register without session ID fails fast (exit 1)
+        res_reg = self.run_cmd(["session", "register", "dummy_agent"], env_overrides=clean_env)
+        self.assertEqual(res_reg.returncode, 1)
+        self.assertIn("no session/conversation ID found", res_reg.stderr)
+
+        # (c) Unknown --flag fails with exit code 2 across commands
+        res_flag_send = self.run_cmd(["send", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_send.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_send.stderr)
+
+        res_flag_open = self.run_cmd(["open", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_open.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_open.stderr)
+
+        res_flag_router = self.run_cmd(["router", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_router.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_router.stderr)
+
+        res_flag_listen = self.run_cmd(["listen", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_listen.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_listen.stderr)
+
+        res_flag_probe = self.run_cmd(["probe", "foo", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_probe.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_probe.stderr)
+
+        res_flag_who = self.run_cmd(["who", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_who.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_who.stderr)
+
+        res_flag_task = self.run_cmd(["task", "claim", "task-1", "--bogus-flag-xyz"])
+        self.assertEqual(res_flag_task.returncode, 2)
+        self.assertIn("Unknown flag '--bogus-flag-xyz'", res_flag_task.stderr)
+
+        # (d) Intuitive flag aliases on send / reply: --recipient, --sender, --title, --message
+        ag_rec = f"rec_{int(time.time() * 1000)}"
+        ag_snd = f"snd_{int(time.time() * 1000)}"
+        self.run_cmd(["open", ag_rec, "worker"])
+        self.run_cmd(["open", ag_snd, "worker"])
+
+        try:
+            res_alias = self.run_cmd([
+                "send",
+                "--recipient", ag_rec,
+                "--sender", ag_snd,
+                "--title", "AliasSubject",
+                "--message", "AliasBodyContent",
+                "--json"
+            ])
+            self.assertEqual(res_alias.returncode, 0)
+            data_alias = json.loads(res_alias.stdout.strip())
+            self.assertEqual(data_alias["status"], "ENQUEUED")
+
+            # Verify received message contains the right subject and body
+            res_drain = self.run_cmd(["drain", ag_rec, "--json"])
+            self.assertEqual(res_drain.returncode, 0)
+            messages = json.loads(res_drain.stdout.strip())
+            self.assertTrue(len(messages) >= 1)
+            found = False
+            for m in messages:
+                if m.get("subject") == "AliasSubject" and m.get("body") == "AliasBodyContent":
+                    found = True
+                    break
+            self.assertTrue(found, f"Message with aliased subject/body not found in {messages}")
+
+        finally:
+            self.run_cmd(["close", ag_rec])
+            self.run_cmd(["close", ag_snd])
+
 
 if __name__ == "__main__":
     unittest.main()
