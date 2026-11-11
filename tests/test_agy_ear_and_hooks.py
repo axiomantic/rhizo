@@ -186,10 +186,12 @@ class TestAgyEarAndHooks(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_file = Path(tmp_dir) / "agentapi_calls.jsonl"
-            mock_agentapi = Path(tmp_dir) / "agentapi"
-
-            # Create mock agentapi executable that records invocations
-            script_content = f"""#!/bin/sh
+            if sys.platform == "win32":
+                mock_agentapi = Path(tmp_dir) / "agentapi.bat"
+                script_content = f"@echo off\r\necho %* >> \"{log_file}\"\r\nexit /b 0\r\n"
+            else:
+                mock_agentapi = Path(tmp_dir) / "agentapi"
+                script_content = f"""#!/bin/sh
 echo "$@" >> "{log_file}"
 exit 0
 """

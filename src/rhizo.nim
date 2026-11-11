@@ -2064,7 +2064,7 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
     let convId = getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip()
     var agyExe = getEnv("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
     if agyExe.len == 0:
-      let defaultAgy = getHomeDir() / ".gemini" / "antigravity" / "bin" / "agentapi"
+      let defaultAgy = getHomeDir() / ".gemini" / "antigravity" / "bin" / (when defined(windows): "agentapi.exe" else: "agentapi")
       if fileExists(defaultAgy): agyExe = defaultAgy
       else: agyExe = findExe("agentapi")
 
@@ -2784,7 +2784,7 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
       if savedExe != redisNil and savedExe.len > 0: agyExe = savedExe.strip()
     except CatchableError: discard
   if agyExe.len == 0:
-    let defaultAgyPath = getHomeDir() / ".gemini" / "antigravity" / "bin" / "agentapi"
+    let defaultAgyPath = getHomeDir() / ".gemini" / "antigravity" / "bin" / (when defined(windows): "agentapi.exe" else: "agentapi")
     if fileExists(defaultAgyPath):
       agyExe = defaultAgyPath
     else:
@@ -2853,7 +2853,13 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
   if projId.len > 0: callEnv["ANTIGRAVITY_PROJECT_ID"] = projId
 
   try:
-    let p = startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
+    when defined(windows):
+      let p = if agyExe.toLowerAscii.endsWith(".bat") or agyExe.toLowerAscii.endsWith(".cmd"):
+                startProcess(command = "cmd.exe", args = @["/c", agyExe] & cmdArgs, env = callEnv, options = {poUsePath})
+              else:
+                startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
+    else:
+      let p = startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
     discard p.waitForExit()
     p.close()
   except CatchableError as e:
