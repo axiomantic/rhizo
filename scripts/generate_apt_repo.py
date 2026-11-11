@@ -68,7 +68,7 @@ def extract_control_info(deb_path):
     basename = os.path.basename(deb_path)
     parts = basename.replace(".deb", "").split("_")
     pkg = parts[0] if len(parts) > 0 else "rhizo"
-    ver = parts[1] if len(parts) > 1 else "0.2.31"
+    ver = parts[1] if len(parts) > 1 else "0.2.32"
     arch = parts[2] if len(parts) > 2 else "amd64"
     return f"Package: {pkg}\nVersion: {ver}\nArchitecture: {arch}\nMaintainer: Axiomantic <info@axiomantic.org>\nDescription: Rhizo Inter-Assistant Redis Bus"
 

@@ -6065,7 +6065,7 @@ secret = "my_inline_secret_test_555"
 
             # Create dummy .deb files: one legacy locutus, one valid rhizo
             (debs_in / "locutus_0.1.0_amd64.deb").write_bytes(b"!<arch>\ndebian-binary   1000        0     0     100644  4         `\n2.0\n")
-            (debs_in / "rhizo_0.2.31_amd64.deb").write_bytes(b"!<arch>\ndebian-binary   1000        0     0     100644  4         `\n2.0\n")
+            (debs_in / "rhizo_0.2.32_amd64.deb").write_bytes(b"!<arch>\ndebian-binary   1000        0     0     100644  4         `\n2.0\n")
 
             res = subprocess.run(
                 [sys.executable, str(script_path), str(debs_in), str(apt_out), "--site-dir", str(site_out)],
@@ -6077,7 +6077,7 @@ secret = "my_inline_secret_test_555"
 
             # Verify locutus deb was NOT copied to apt_out
             self.assertFalse((apt_out / "locutus_0.1.0_amd64.deb").exists(), "Legacy locutus deb was erroneously copied to APT repo")
-            self.assertTrue((apt_out / "rhizo_0.2.31_amd64.deb").exists(), "Valid rhizo deb was not copied to APT repo")
+            self.assertTrue((apt_out / "rhizo_0.2.32_amd64.deb").exists(), "Valid rhizo deb was not copied to APT repo")
 
             # Verify Packages and Packages.gz contain rhizo and zero locutus
             packages_txt = (apt_out / "Packages").read_text(encoding="utf-8")

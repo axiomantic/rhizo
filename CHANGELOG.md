@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.32] - 2026-11-11
+
 ### Added
 - **Rhizo Documentation & Package Portal Generator (`scripts/generate_docs_site.py`, `scripts/generate_apt_repo.py`)**:
   - Implemented static documentation portal generator rendering `index.html` and `docs/*.html` from `README.md` and repository `docs/` specifications (`architecture.md`, `cli_reference.md`, `configuration.md`, `routes_schema.md`, `system_one_routing.md`, `wire_protocol.md`, `wism_state_machine.md`).
