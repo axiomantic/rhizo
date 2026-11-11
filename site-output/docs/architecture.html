@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>System Architecture — Rhizo</title>
+  <meta name="description" content="Rhizo: High-performance, single-binary inter-assistant communication bus, monotonic work queues, and distributed mutexes over Redis.">
+  <style>
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eaeef2;
+  --text-primary: #1f2328;
+  --text-secondary: #656d76;
+  --text-muted: #8c959f;
+  --border-default: #d0d7de;
+  --border-muted: #e1e4e8;
+  --color-accent: #0969da;
+  --color-accent-hover: #0550ae;
+  --color-accent-subtle: #ddf4ff;
+  --color-success: #1a7f37;
+  --color-warning: #9a6700;
+  --color-danger: #cf222e;
+  --card-bg: #ffffff;
+  --card-border: #d0d7de;
+  --code-bg: #f6f8fa;
+  --sidebar-width: 280px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --border-default: #30363d;
+    --border-muted: #21262d;
+    --color-accent: #2f81f7;
+    --color-accent-hover: #58a6ff;
+    --color-accent-subtle: rgba(56, 139, 253, 0.15);
+    --card-bg: #161b22;
+    --card-border: #30363d;
+    --code-bg: #161b22;
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  margin: 0;
+  padding: 0;
+}
+
+a { color: var(--color-accent); text-decoration: none; }
+a:hover { text-decoration: underline; color: var(--color-accent-hover); }
+
+/* Navigation Header */
+header.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-default);
+  backdrop-filter: blur(10px);
+}
+.header-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+.brand .logo-badge {
+  background: linear-gradient(135deg, #2f81f7, #a371f7);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-family: var(--font-mono);
+}
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 0.95rem;
+}
+.nav-links a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+.nav-links a:hover, .nav-links a.active {
+  color: var(--color-accent);
+}
+.btn-nav-primary {
+  background: var(--color-accent);
+  color: #ffffff !important;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+.btn-nav-primary:hover {
+  background: var(--color-accent-hover);
+  text-decoration: none;
+}
+
+/* Layout Container */
+.site-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+/* Hero Section */
+.hero {
+  text-align: center;
+  padding: 48px 16px 36px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.hero h1 {
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, var(--text-primary) 30%, var(--color-accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.hero p.tagline {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0 auto 32px;
+}
+
+/* Quick Install Card / Tabs */
+.install-tabs {
+  background: var(--card-bg);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 800px;
+  margin: 0 auto 48px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+.tab-buttons {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-muted);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+.tab-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+.tab-btn.active {
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+.tab-pane {
+  display: none;
+  text-align: left;
+}
+.tab-pane.active {
+  display: block;
+}
+.install-snippet {
+  position: relative;
+  background: var(--code-bg);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  overflow-x: auto;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.install-snippet code {
+  user-select: all;
+}
+.btn-copy {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-copy:hover {
+  color: var(--text-primary);
+  border-color: var(--color-accent);
+}
+
+/* Documentation Cards Grid */
+.docs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-bottom: 60px;
+}
+.doc-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  padding: 24px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-decoration: none !important;
+}
+.doc-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  border-color: var(--color-accent);
+}
+.doc-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.doc-card-icon {
+  font-size: 1.5rem;
+}
+.doc-card h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.doc-card p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.doc-card-link {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Documentation Page Layout */
+.doc-layout {
+  display: flex;
+  gap: 48px;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+aside.doc-sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  position: sticky;
+  top: 80px;
+  height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding-right: 16px;
+  border-right: 1px solid var(--border-default);
+}
+.sidebar-section-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin: 16px 0 8px;
+}
+.sidebar-nav {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.sidebar-nav li {
+  margin-bottom: 4px;
+}
+.sidebar-nav a {
+  display: block;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  text-decoration: none;
+}
+.sidebar-nav a:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+.sidebar-nav a.active {
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+  font-weight: 600;
+}
+main.doc-content {
+  flex-grow: 1;
+  min-width: 0;
+  max-width: 880px;
+}
+
+/* Markdown Content Elements */
+.markdown-body {
+  line-height: 1.7;
+}
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  color: var(--text-primary);
+  font-weight: 700;
+  line-height: 1.25;
+  margin-top: 1.75em;
+  margin-bottom: 0.6em;
+}
+.markdown-body h1 {
+  font-size: 2.25rem;
+  border-bottom: 1px solid var(--border-default);
+  padding-bottom: 0.4em;
+  margin-top: 0;
+}
+.markdown-body h2 {
+  font-size: 1.6rem;
+  border-bottom: 1px solid var(--border-muted);
+  padding-bottom: 0.3em;
+}
+.markdown-body h3 { font-size: 1.3rem; }
+.markdown-body h4 { font-size: 1.1rem; }
+.markdown-body p { margin: 1em 0; }
+.markdown-body hr {
+  border: 0;
+  border-top: 1px solid var(--border-default);
+  margin: 2.5em 0;
+}
+.markdown-body blockquote {
+  margin: 1.2em 0;
+  padding: 8px 18px;
+  border-left: 4px solid var(--color-accent);
+  background: var(--bg-secondary);
+  border-radius: 0 6px 6px 0;
+  color: var(--text-secondary);
+}
+.markdown-body pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-muted);
+}
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5em 0;
+  font-size: 0.92rem;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border-default);
+  padding: 10px 14px;
+  text-align: left;
+}
+.markdown-body th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+.markdown-body tr:nth-child(even) {
+  background: var(--bg-secondary);
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 2em;
+  margin: 1em 0;
+}
+.markdown-body li {
+  margin: 0.35em 0;
+}
+
+/* Mermaid Diagrams */
+.mermaid-container {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 1.5em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* Footer */
+footer.site-footer {
+  border-top: 1px solid var(--border-default);
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-top: 80px;
+}
+footer.site-footer a { color: var(--text-secondary); }
+footer.site-footer a:hover { color: var(--color-accent); }
+
+/* Responsive Adjustments */
+@media (max-width: 900px) {
+  .doc-layout { flex-direction: column; }
+  aside.doc-sidebar { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border-default); padding-bottom: 24px; }
+  .hero h1 { font-size: 2.2rem; }
+}
+</style>
+  <script>
+function switchTab(evt, tabId) {
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+  evt.currentTarget.classList.add('active');
+  const target = document.getElementById(tabId);
+  if (target) target.classList.add('active');
+}
+
+function copySnippet(btn, codeId) {
+  const el = document.getElementById(codeId);
+  if (!el) return;
+  const text = el.innerText || el.textContent;
+  navigator.clipboard.writeText(text.trim()).then(() => {
+    const originalText = btn.innerText;
+    btn.innerText = 'Copied!';
+    setTimeout(() => { btn.innerText = originalText; }, 2000);
+  });
+}
+</script>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="../index.html" class="brand">
+        <span class="logo-badge">rhizo</span>
+        <span>Axiomantic Rhizo</span>
+      </a>
+      <nav class="nav-links">
+        
+      <a href="../index.html" class="">Overview</a>
+      <a href="../docs/architecture.html" class="active">Documentation</a>
+      <a href="../apt/index.html" class="">APT Repository</a>
+      <a href="https://github.com/axiomantic/rhizo" target="_blank" rel="noopener">GitHub</a>
+      <a href="../#install" class="btn-nav-primary">Get Started</a>
+    
+      </nav>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    
+        <aside class="doc-sidebar">
+          <div class="sidebar-section-title">Documentation</div>
+          <ul class="sidebar-nav">
+            <li><a href="../index.html">🏠 Home & Portal</a></li>
+            <li><a href="../apt/index.html">📦 APT Repository</a></li>
+          </ul>
+          <div class="sidebar-section-title">Specifications & Guides</div>
+          <ul class="sidebar-nav">
+            <li><a href="../docs/architecture.html" class="active">🏗️ System Architecture</a></li><li><a href="../docs/cli_reference.html">⌨️ CLI Reference</a></li><li><a href="../docs/configuration.html">⚙️ Configuration Guide</a></li><li><a href="../docs/routes_schema.html">🗺️ Routes Schema</a></li><li><a href="../docs/system_one_routing.html">⚡ System 1 Routing</a></li><li><a href="../docs/wire_protocol.html">🔒 Wire Protocol</a></li><li><a href="../docs/wism_state_machine.html">🔄 WISM State Machine</a></li>
+          </ul>
+          <div class="sidebar-section-title">External Links</div>
+          <ul class="sidebar-nav">
+            <li><a href="https://github.com/axiomantic/rhizo" target="_blank" rel="noopener">GitHub Repository ↗</a></li>
+            <li><a href="https://www.npmjs.com/package/@axiomantic/rhizo" target="_blank" rel="noopener">npm Package ↗</a></li>
+          </ul>
+        </aside>
+        
+    <main class="doc-content markdown-body">
+      <h1 id="rhizo-system-architecture-redis-internal-engine"><a href="#rhizo-system-architecture-redis-internal-engine" class="anchor-link">Rhizo System Architecture &amp; Redis Internal Engine</a></h1>
+<blockquote><p><strong>High-Performance Coordination Architecture</strong><br><em>A technical reference for engineers and autonomous agents on the Redis keyspace, atomic Lua scripting engine, connection pooling, and fail-safe crash handling.</em></p></blockquote>
+<hr>
+<h2 id="1-high-level-architecture-overview"><a href="#1-high-level-architecture-overview" class="anchor-link">1. High-Level Architecture Overview</a></h2>
+<p>Rhizo is a lightweight, zero-daemon inter-agent coordination bus implemented in native Nim with sub-millisecond execution times. Instead of relying on monolithic background servers or brittle Unix domain sockets, Rhizo coordinates multi-agent fleets entirely over Redis (or Valkey) using atomic Lua scripts and pub/sub notifications.</p>
+<div class="mermaid-container"><pre class="mermaid">flowchart TD
+    subgraph Agents[&quot;Autonomous Coding Assistants (Claude Code, OpenCode, Antigravity, Cursor)&quot;]
+        Orchestrator[&quot;Lead Orchestrator (Conductor)&quot;]
+        Worker1[&quot;Worker 1 (Strand Alpha)&quot;]
+        Worker2[&quot;Worker 2 (Strand Beta)&quot;]
+    end
+
+    subgraph Transport[&quot;Rhizo Nim Native CLI (&lt;10ms Startup)&quot;]
+        CLI[&quot;rhizo CLI&quot;]
+        EVALSHA[&quot;Lua EVALSHA Engine (27 Atomic Scripts)&quot;]
+        Crypto[&quot;HMAC-SHA256 Signer &amp; Prompt Firewall&quot;]
+    end
+
+    subgraph Redis[&quot;Redis / Valkey Storage Engine&quot;]
+        Keyspace[&quot;Hash &amp; Set Registry (`{pfx}agent:*`, `{pfx}task:*`)&quot;]
+        Inboxes[&quot;List-Based Inboxes (`{pfx}inbox:*`, `{pfx}queue:*`)&quot;]
+        Locks[&quot;Monotonic Fencing Mutexes (`{pfx}lock:*`)&quot;]
+        PubSub[&quot;Notification Channels (`{pfx}notify:*`, `{pfx}channel:*`)&quot;]
+    end
+
+    Agents --&gt; CLI
+    CLI --&gt; EVALSHA
+    CLI --&gt; Crypto
+    EVALSHA --&gt; Redis
+    PubSub -.-&gt; Agents</pre></div>
+<hr>
+<h2 id="2-redis-keyspace-architecture"><a href="#2-redis-keyspace-architecture" class="anchor-link">2. Redis Keyspace Architecture</a></h2>
+<p>All Rhizo Redis keys are scoped by a configurable namespace prefix ( CODE<em>0  by default, customized via  CODE</em>1  or  CODE<em>2 ). In Redis Cluster environments, key names utilize Redis Hash Tags (e.g.  CODE</em>3 ) ensuring that all related keys hash to the same cluster slot for atomic multi-key Lua execution.</p>
+<h3 id="key-hierarchy-schema"><a href="#key-hierarchy-schema" class="anchor-link">Key Hierarchy &amp; Schema</a></h3>
+<table>
+<thead>
+<tr>
+<th>Keyspace Pattern</th>
+<th>Redis Type</th>
+<th>TTL / Eviction</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{pfx}agent:&lt;name&gt;</code></td>
+<td>Hash</td>
+<td>300s (Refreshed by heartbeat)</td>
+<td>Registered agent metadata ( CODE<em>0 ,  CODE</em>1 ,  CODE<em>2 ,  CODE</em>3 ,  CODE<em>4 ,  CODE</em>5 ,  CODE<em>6 ,  CODE</em>7 ).</td>
+</tr>
+<tr>
+<td><code>{pfx}agents</code></td>
+<td>Set</td>
+<td>Persistent</td>
+<td>Active agent registry containing all known agent codenames.</td>
+</tr>
+<tr>
+<td><code>{pfx}inbox:&lt;name&gt;</code></td>
+<td>List</td>
+<td>Persistent</td>
+<td>FIFO queue of incoming messages for a specific agent. Popped atomically via  CODE<em>0 / CODE</em>1  or Lua drain.</td>
+</tr>
+<tr>
+<td><code>{pfx}queue:&lt;name&gt;</code></td>
+<td>List</td>
+<td>Persistent</td>
+<td>Competing-consumer work queue. Workers pop tasks with atomic lease reservation.</td>
+</tr>
+<tr>
+<td><code>{pfx}task:&lt;id&gt;</code></td>
+<td>Hash</td>
+<td>Persistent</td>
+<td>Work Item State Machine (WISM) record: state, payload, lease owner, fence token, timestamps, attempts.</td>
+</tr>
+<tr>
+<td><code>{pfx}lock:&lt;resource&gt;</code></td>
+<td>Hash</td>
+<td>Configurable lease (default 300s)</td>
+<td>Distributed mutex lock. Stores  CODE<em>0 ,  CODE</em>1  (monotonic 64-bit int),  CODE<em>2 , and  CODE</em>3 .</td>
+</tr>
+<tr>
+<td><code>{pfx}fencing:&lt;resource&gt;</code></td>
+<td>String (Int)</td>
+<td>Persistent</td>
+<td>Monotonically increasing 64-bit fencing counter incremented on every lock acquisition.</td>
+</tr>
+<tr>
+<td><code>{pfx}channel:&lt;name&gt;</code></td>
+<td>Channel (Pub/Sub)</td>
+<td>N/A (Ephemeral)</td>
+<td>High-speed multicast/broadcast pub/sub channel for swarm-wide announcements.</td>
+</tr>
+<tr>
+<td><code>{pfx}notify:&lt;name&gt;</code></td>
+<td>Channel (Pub/Sub)</td>
+<td>N/A (Ephemeral)</td>
+<td>Dedicated agent notification ping alerting blocked listeners of new inbox mail.</td>
+</tr>
+<tr>
+<td><code>{pfx}alias:&lt;alias&gt;</code></td>
+<td>String</td>
+<td>Persistent</td>
+<td>Causal bidirectional alias pointing an abstract role (e.g.  CODE<em>0 ) to an active codename ( CODE</em>1 ).</td>
+</tr>
+<tr>
+<td><code>{pfx}floor:&lt;session&gt;</code></td>
+<td>Hash</td>
+<td>Auto-expiring lease</td>
+<td>Roundtable floor control state:  CODE<em>0 ,  CODE</em>1 , <code>queue</code>.</td>
+</tr>
+<tr>
+<td><code>{pfx}ballot:&lt;id&gt;</code></td>
+<td>Hash</td>
+<td>Configurable expiry</td>
+<td>Blind consensus ballot:  CODE<em>0 ,  CODE</em>1 ,  CODE<em>2 ,  CODE</em>3 .</td>
+</tr>
+<tr>
+<td><code>{pfx}leader:&lt;group&gt;</code></td>
+<td>Hash</td>
+<td>Auto-expiring lease</td>
+<td>Mesh leader election:  CODE<em>0 ,  CODE</em>1 , <code>lease_until</code>.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="3-lua-scripting-engine-atomic-operations"><a href="#3-lua-scripting-engine-atomic-operations" class="anchor-link">3. Lua Scripting Engine &amp; Atomic Operations</a></h2>
+<p>To prevent race conditions, dirty reads, and split-brain states across parallel assistants, Rhizo executes all state transitions inside <strong>atomic Redis Lua scripts</strong>.</p>
+<h3 id="evalsha-performance-cache"><a href="#evalsha-performance-cache" class="anchor-link">EVALSHA Performance Cache</a></h3>
+<p>Upon initialization, Rhizo compiles and caches the SHA-1 digest of each Lua script:</p>
+<ol>
+<li><code>EVALSHA &lt;digest&gt; ...</code>: Executes cached byte-code in &lt;0.2ms.</li>
+<li>If  CODE<em>0  error is returned, Rhizo falls back to  CODE</em>1  and retries <code>EVALSHA</code> automatically.</li>
+</ol>
+<h3 id="key-atomic-scripts"><a href="#key-atomic-scripts" class="anchor-link">Key Atomic Scripts</a></h3>
+<table>
+<thead>
+<tr>
+<th>Script Name</th>
+<th>File Path</th>
+<th>Invariant Enforced</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>send_o2o.lua</code></td>
+<td><code>scripts/send_o2o.lua</code></td>
+<td>Atomically pushes message to recipient inbox, verifies recipient existence, resolves aliases, updates unread counters, and emits pub/sub wake notification.</td>
+</tr>
+<tr>
+<td><code>drain.lua</code></td>
+<td><code>scripts/drain.lua</code></td>
+<td>Atomically pops up to $N$ messages from an inbox, clears unread counters, and returns JSON array.</td>
+</tr>
+<tr>
+<td><code>lock_acquire.lua</code></td>
+<td><code>scripts/lock_acquire.lua</code></td>
+<td>Evaluates lease expiration, increments monotonic fencing token (<code>INCR</code>), and claims ownership atomically.</td>
+</tr>
+<tr>
+<td><code>lock_release.lua</code></td>
+<td><code>scripts/lock_release.lua</code></td>
+<td>Validates that caller still holds the active lease and matching fencing token before releasing lock.</td>
+</tr>
+<tr>
+<td><code>task_create.lua</code></td>
+<td><code>scripts/task_create.lua</code></td>
+<td>Initializes WISM task hash, checks DAG  CODE<em>0  parents, sets state to  CODE</em>1  (if zero unmet dependencies) or <code>BLOCKED</code>.</td>
+</tr>
+<tr>
+<td><code>task_claim.lua</code></td>
+<td><code>scripts/task_claim.lua</code></td>
+<td>Pops task from queue, transitions state to <code>CLAIMED</code>, stamps worker lease and monotonic fence token, increments attempt counter.</td>
+</tr>
+<tr>
+<td><code>task_complete.lua</code></td>
+<td><code>scripts/task_complete.lua</code></td>
+<td>Validates lease owner, transitions state to  CODE<em>0 , removes from active list, and auto-promotes downstream dependent child tasks from  CODE</em>1  to <code>QUEUED</code>.</td>
+</tr>
+<tr>
+<td><code>task_orphan.lua</code></td>
+<td><code>scripts/task_orphan.lua</code></td>
+<td>Sweeps expired leases; transitions tasks to  CODE<em>0  (and re-queues if  CODE</em>1 ) or moves to <code>DEAD_LETTER</code>.</td>
+</tr>
+<tr>
+<td><code>reroute.lua</code></td>
+<td><code>scripts/reroute.lua</code></td>
+<td>Atomically shifts pending task payloads between agent inboxes during failover or alias changes.</td>
+</tr>
+<tr>
+<td><code>who.lua</code></td>
+<td><code>scripts/who.lua</code></td>
+<td>Aggregates all registered agents, checks heartbeat timestamps against current Redis server time, and categorizes status ( CODE<em>0 ,  CODE</em>1 ,  CODE<em>2 ,  CODE</em>3 ).</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="4-connection-pooling-transport-resiliency"><a href="#4-connection-pooling-transport-resiliency" class="anchor-link">4. Connection Pooling &amp; Transport Resiliency</a></h2>
+<p>Rhizo maintains connection discipline across diverse operating environments:</p>
+<ol>
+<li><strong>Keepalive &amp; TCP Probing</strong>: TCP keepalive is enabled on all client connections ( CODE<em>0 ,  CODE</em>1 ) to survive NAT timeouts and cloud firewalls.</li>
+<li><strong>Backoff Jitter Floor</strong>: When waiting on Redis locks or polling retries, Rhizo uses randomized exponential backoff with a minimum jitter floor ($\pm 15\%$) to eliminate thundering herd synchronization across swarm workers.</li>
+<li><strong>Unix Domain Sockets vs TCP</strong>: Rhizo auto-detects  CODE<em>0  for zero-overhead local IPC, falling back to TCP loopback ( CODE</em>1 ).</li>
+<li><strong>Air-Gap Prompt Firewall</strong>: Inbound messages are cryptographically validated using HMAC-SHA256 signatures before entering LLM working memory. Messages with mismatched signatures or unauthenticated origins are routed to quarantine or rejected.</li>
+</ol>
+<hr>
+<h2 id="5-performance-benchmarks"><a href="#5-performance-benchmarks" class="anchor-link">5. Performance Benchmarks</a></h2>
+<p>Measured on Apple Silicon (M3 Max / M2 Pro) over local Redis 7.2:</p>
+<ul>
+<li><strong>CLI Process Cold-Start</strong>: $\le 9\text{ ms}$</li>
+<li><strong><code>rhizo ping</code> Round-Trip</strong>: $0.22\text{ ms}$</li>
+<li><strong><code>rhizo send</code> (HMAC + Lua EVALSHA + PubSub)</strong>: $0.48\text{ ms}$</li>
+<li><strong><code>rhizo claim</code> (Competing-consumer lease reservation)</strong>: $0.61\text{ ms}$</li>
+<li><strong><code>rhizo lock --fencing</code> (Atomic lock + Monotonic Counter)</strong>: $0.54\text{ ms}$</li>
+<li><strong>Throughput Capacity</strong>: $&gt; 14,000\text{ msgs/sec}$ per core</li>
+</ul>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <p>Axiomantic Rhizo — Apache-2.0 Licensed. Designed for multi-agent coding swarms.</p>
+    <p>
+      <a href="https://github.com/axiomantic/rhizo">GitHub</a> &bull;
+      <a href="https://www.npmjs.com/package/@axiomantic/rhizo">npm</a> &bull;
+      <a href="../apt/index.html">APT Repository</a> &bull;
+      <a href="../docs/cli_reference.html">CLI Reference</a> &bull;
+      <a href="../docs/architecture.html">Architecture</a>
+    </p>
+  </footer>
+</body>
+</html>
