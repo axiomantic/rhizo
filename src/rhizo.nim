@@ -3213,6 +3213,11 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
       try:
         popRes = client.bRPop(@[inboxKey], waitSec)
       except CatchableError:
+        if not isForever:
+          let elapsed = int(getTime().toUnix() - startTime)
+          remaining = max(0, effectiveTimeout - elapsed)
+          if remaining == 0:
+            return
         if not reconnectRedisClient(cfg.redisUrl, client, remaining, isForever):
           return # Timeout expired while disconnected
         # Re-register heartbeat & listener lock on new connection
