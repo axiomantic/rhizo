@@ -6,6 +6,7 @@ and Antigravity lifecycle hooks (PreInvocation, PostToolUse, Stop).
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -187,16 +188,31 @@ class TestAgyEarAndHooks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_file = Path(tmp_dir) / "agentapi_calls.jsonl"
             if sys.platform == "win32":
-                mock_agentapi = Path(tmp_dir) / "agentapi.bat"
-                script_content = f"@echo off\r\necho %* >> \"{log_file}\"\r\nexit /b 0\r\n"
+                mock_agentapi = Path(tmp_dir) / "agentapi.exe"
+                c_src = Path(tmp_dir) / "mock_agentapi.c"
+                log_path_escaped = log_file.as_posix()
+                c_src.write_text(
+                    f'#include <stdio.h>\n'
+                    f'int main(int argc, char** argv) {{\n'
+                    f'    FILE *f = fopen("{log_path_escaped}", "a");\n'
+                    f'    if (f) {{\n'
+                    f'        for (int i = 1; i < argc; i++) fprintf(f, "%s ", argv[i]);\n'
+                    f'        fprintf(f, "\\n");\n'
+                    f'        fclose(f);\n'
+                    f'    }}\n'
+                    f'    return 0;\n'
+                    f'}}\n'
+                )
+                cc = "gcc" if shutil.which("gcc") else "clang"
+                subprocess.run([cc, str(c_src), "-o", str(mock_agentapi)], check=True)
             else:
                 mock_agentapi = Path(tmp_dir) / "agentapi"
                 script_content = f"""#!/bin/sh
 echo "$@" >> "{log_file}"
 exit 0
 """
-            mock_agentapi.write_text(script_content)
-            mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                mock_agentapi.write_text(script_content)
+                mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
             # Register agent session in Redis
             agent_key = f"{TEST_PREFIX}agent:{agent}"
