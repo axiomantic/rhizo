@@ -2307,7 +2307,7 @@ proc printAuditTicketBanner*(auditorName, taskId, ticketHex: string) =
   stderr.writeLine("")
   stderr.writeLine("================================================================================")
   stderr.writeLine("[AUDIT TICKET] Strand " & taskId & " audit ticket: " & ticketHex)
-  stderr.writeLine("  Approve: vine audit approve " & taskId & " --auditor " & auditorName & " --ticket " & ticketHex & " --weave --listen")
+  stderr.writeLine("  Approve: vine audit approve " & taskId & " --auditor " & auditorName & " --ticket " & ticketHex & " --evidence \"...\" --listen")
   stderr.writeLine("  Reject : vine audit reject " & taskId & " --auditor " & auditorName & " --ticket " & ticketHex & " --reason \"...\" --listen")
   stderr.writeLine("================================================================================")
 
