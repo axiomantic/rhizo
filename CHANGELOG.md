@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Cross-Project Antigravity AgentAPI Isolation & Message Loss Prevention (`src/rhizo.nim`)**:
+  - In `dispatchAgyMessage`: Decoupled `ls_address` and `csrf_token` host-wide credential updates from `project_id`. The target agent's `agy_project_id` is now strictly preserved and never overwritten by `rhizo:agy_host:<machine_id>` or spawner project IDs (`let targetProj = if aProjId.len > 0: aProjId else: hProjId`).
+  - In `invokeAgyAgentApi`: Explicitly purged `ANTIGRAVITY_TRAJECTORY_ID` and `ANTIGRAVITY_SOURCE_METADATA` from subshell execution environment, and set `ANTIGRAVITY_PROJECT_ID` strictly to `projId` (or deleted if empty), eliminating cross-project `permission_denied` gRPC errors (`source project_id does not match target project_id`).
+  - Added fallback retry in `dispatchAgyMessage`: If language server dispatch fails with a project ID, attempts secondary fallback with an empty project ID (`""`) before reporting delivery failure.
+  - In `doRouter`: Automatically re-queues failed messages back to the inbox (`client.rPush(poppedKey, payloadStr)`) with backoff delay, preventing message loss during language server reconnects or project switches.
+  - In `doRouter`: Scrubbed inherited `ANTIGRAVITY_PROJECT_ID`, `ANTIGRAVITY_TRAJECTORY_ID`, and `ANTIGRAVITY_SOURCE_METADATA` from router daemon startup environment (`action == "start"`).
+  - Added regression test `test_44_cross_project_agentapi_isolation_and_requeue` in `tests/test_coordination_invariants.py`.
+
 ## [0.2.33] - 2026-11-11
 
 ### Added

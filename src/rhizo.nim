@@ -2977,13 +2977,24 @@ proc isRoutineAck*(rawMsgType, subject, body: string): bool =
       return true
   return false
 
-proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, projId: string): int =
+proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, projId, convId: string): int =
   var callEnv = newStringTable(modeCaseSensitive)
   for k, v in envPairs():
     callEnv[k] = v
-  if lsAddr.len > 0: callEnv["ANTIGRAVITY_LS_ADDRESS"] = lsAddr
-  if csrfToken.len > 0: callEnv["ANTIGRAVITY_CSRF_TOKEN"] = csrfToken
-  if projId.len > 0: callEnv["ANTIGRAVITY_PROJECT_ID"] = projId
+  callEnv.del("ANTIGRAVITY_TRAJECTORY_ID")
+  callEnv.del("ANTIGRAVITY_SOURCE_METADATA")
+  if convId.len > 0:
+    callEnv["ANTIGRAVITY_CONVERSATION_ID"] = convId
+  else:
+    callEnv.del("ANTIGRAVITY_CONVERSATION_ID")
+  if projId.len > 0:
+    callEnv["ANTIGRAVITY_PROJECT_ID"] = projId
+  else:
+    callEnv.del("ANTIGRAVITY_PROJECT_ID")
+  if lsAddr.len > 0:
+    callEnv["ANTIGRAVITY_LS_ADDRESS"] = lsAddr
+  if csrfToken.len > 0:
+    callEnv["ANTIGRAVITY_CSRF_TOKEN"] = csrfToken
 
   try:
     when defined(windows):
@@ -3000,7 +3011,7 @@ proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, 
     stderr.writeLine("[rhizo-agy-ear] Error invoking agentapi send-message: " & e.msg)
     return -1
 
-proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: JsonNode, id, fromAgent, subject, body: string, isTask: bool, effectiveTaskId: string) =
+proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: JsonNode, id, fromAgent, subject, body: string, isTask: bool, effectiveTaskId: string): bool =
   var convId = ""
   if client != nil:
     try:
@@ -3037,7 +3048,7 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
 
   if convId.len == 0:
     stderr.writeLine("[rhizo-agy-ear] WARNING: Could not resolve Antigravity conversation ID for @" & name & "; skipping agentapi delivery.")
-    return
+    return false
 
   var agyExe = getEnv("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
   if agyExe.len == 0 and client != nil:
@@ -3054,7 +3065,7 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
 
   if agyExe.len == 0:
     stderr.writeLine("[rhizo-agy-ear] WARNING: agentapi executable not found; skipping agentapi delivery.")
-    return
+    return false
 
   # 1. Read per-agent credentials
   var aLsAddr = ""
@@ -3101,21 +3112,23 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
     if envProj.len > 0: hProjId = envProj
     hUp = getTime().toUnix()
 
-  # Determine primary and secondary credentials based on newer timestamp
+  # Project ID resolution:
+  # ls_address and csrf_token are host-wide (shared across the singleton standalone language server),
+  # whereas project_id is per-agent/workspace!
+  # NEVER overwrite the target agent's aProjId with hProjId!
+  let targetProj = if aProjId.len > 0: aProjId else: hProjId
+
+  # Determine primary and secondary LS address/token based on newer timestamp
   var primaryLs = aLsAddr
   var primaryCsrf = aCsrfToken
-  var primaryProj = aProjId
   var secondaryLs = hLsAddr
   var secondaryCsrf = hCsrfToken
-  var secondaryProj = hProjId
 
   if hUp > aUp or primaryLs.len == 0 or primaryCsrf.len == 0:
     primaryLs = hLsAddr
     primaryCsrf = hCsrfToken
-    primaryProj = hProjId
     secondaryLs = aLsAddr
     secondaryCsrf = aCsrfToken
-    secondaryProj = aProjId
 
   let title = "[RHIZO] @" & fromAgent & " -> @" & name & ": " & subject
   var payload = ""
@@ -3152,19 +3165,35 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
   cmdArgs.add(convId)
   cmdArgs.add(payload)
 
-  let code1 = invokeAgyAgentApi(agyExe, cmdArgs, primaryLs, primaryCsrf, primaryProj)
-  if code1 != 0:
-    if secondaryLs.len > 0 and secondaryCsrf.len > 0 and (secondaryLs != primaryLs or secondaryCsrf != primaryCsrf):
-      stderr.writeLine("[rhizo-agy-ear] Primary language server dispatch failed (code " & $code1 & "); retrying with fallback credentials...")
-      let code2 = invokeAgyAgentApi(agyExe, cmdArgs, secondaryLs, secondaryCsrf, secondaryProj)
-      if code2 == 0 and client != nil:
+  var code1 = invokeAgyAgentApi(agyExe, cmdArgs, primaryLs, primaryCsrf, targetProj, convId)
+  if code1 == 0:
+    return true
+
+  if secondaryLs.len > 0 and secondaryCsrf.len > 0 and (secondaryLs != primaryLs or secondaryCsrf != primaryCsrf):
+    stderr.writeLine("[rhizo-agy-ear] Primary language server dispatch failed (code " & $code1 & "); retrying with fallback credentials...")
+    let code2 = invokeAgyAgentApi(agyExe, cmdArgs, secondaryLs, secondaryCsrf, targetProj, convId)
+    if code2 == 0:
+      if client != nil:
         try:
           discard client.hSet(cfg.prefix & "agent:" & name, "agy_ls_address", secondaryLs)
           discard client.hSet(cfg.prefix & "agent:" & name, "agy_csrf_token", secondaryCsrf)
-          if secondaryProj.len > 0:
-            discard client.hSet(cfg.prefix & "agent:" & name, "agy_project_id", secondaryProj)
+          if targetProj.len > 0:
+            discard client.hSet(cfg.prefix & "agent:" & name, "agy_project_id", targetProj)
           discard client.hSet(cfg.prefix & "agent:" & name, "updated_at", $(getTime().toUnix()))
         except CatchableError: discard
+      return true
+
+  # Fallback retry without ANTIGRAVITY_PROJECT_ID ("") in case project_id mismatch caused failure
+  if targetProj.len > 0:
+    let code3 = invokeAgyAgentApi(agyExe, cmdArgs, primaryLs, primaryCsrf, "", convId)
+    if code3 == 0:
+      return true
+    if secondaryLs.len > 0 and secondaryCsrf.len > 0 and (secondaryLs != primaryLs or secondaryCsrf != primaryCsrf):
+      let code4 = invokeAgyAgentApi(agyExe, cmdArgs, secondaryLs, secondaryCsrf, "", convId)
+      if code4 == 0:
+        return true
+
+  return false
 
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false, forceBlocking: bool = false) =
   var cleanName = ensureProjectScopedName(cfg, name)
@@ -3527,7 +3556,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
             effectiveTaskId = extractTaskId(subject, body)
           if effectiveTaskId.len == 0:
             effectiveTaskId = id
-          dispatchAgyMessage(cfg, client, name, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
+          discard dispatchAgyMessage(cfg, client, name, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
 
       echo $parsed
       flushFile(stdout)
@@ -3789,6 +3818,9 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
 
   # action == "start":
   delEnv("ANTIGRAVITY_CONVERSATION_ID")
+  delEnv("ANTIGRAVITY_PROJECT_ID")
+  delEnv("ANTIGRAVITY_TRAJECTORY_ID")
+  delEnv("ANTIGRAVITY_SOURCE_METADATA")
   delEnv("OPENCODE_SESSION_ID")
   delEnv("PI_SESSION_ID")
   delEnv("RHIZO_AGENT_NAME")
@@ -4011,7 +4043,13 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
     if (targetConvId != redisNil and targetConvId.len > 0):
       let isRoutine = isRoutineAck(rawMsgType, subject, body)
       if not (isRoutine and suppressAck):
-        dispatchAgyMessage(cfg, client, targetAgent, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
+        let ok = dispatchAgyMessage(cfg, client, targetAgent, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
+        if not ok and not stdoutMode:
+          stderr.writeLine("[rhizo router] Warning: dispatchAgyMessage failed for @" & targetAgent & "; re-queueing message to " & poppedKey)
+          try:
+            discard client.rPush(poppedKey, payloadStr)
+          except CatchableError: discard
+          sleep(500)
 
     # Route 2: Stdout Envelope Dispatch (for OpenCode / Pi)
     if stdoutMode:

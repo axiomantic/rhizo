@@ -2901,6 +2901,157 @@ exit 0
         for hk in host_keys:
             r.delete(hk)
 
+    # -------------------------------------------------------------------------
+    # Problem 44: Cross-Project agentapi Isolation & Failed Delivery Re-queueing
+    # -------------------------------------------------------------------------
+    def test_44_cross_project_agentapi_isolation_and_requeue(self):
+        """Verify cross-project agentapi delivery isolates project_id, scrubs trajectory/source_metadata, and re-queues on failure."""
+        ag = f"polyform_orch_{int(time.time() * 1000)}"
+        conv_id = f"conv_poly_{int(time.time() * 1000)}"
+        target_proj = "polyform-project-target"
+        host_proj = "host-project-newer"
+        spawner_proj = "spawner-project-leaked"
+        spawner_traj = "spawner-traj-leaked"
+        spawner_meta = "spawner-meta-leaked"
+
+        res_stat = self.run_cmd(["router", "status", "--json"])
+        self.assertEqual(res_stat.returncode, 0)
+        stat_data = json.loads(res_stat.stdout.strip())
+        mid = stat_data.get("machine_id", "")
+        self.assertTrue(mid, "machine_id must not be empty")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_file = Path(tmp_dir) / "agentapi.log"
+            fail_flag = Path(tmp_dir) / "fail_flag"
+            mock_agentapi = Path(tmp_dir) / "agentapi"
+
+            script = f"""#!/bin/sh
+echo "CONV=$ANTIGRAVITY_CONVERSATION_ID|PROJ=$ANTIGRAVITY_PROJECT_ID|TRAJ=$ANTIGRAVITY_TRAJECTORY_ID|META=$ANTIGRAVITY_SOURCE_METADATA|ARGS=$@" >> "{log_file}"
+if [ -f "{fail_flag}" ]; then
+  exit 1
+fi
+exit 0
+"""
+            mock_agentapi.write_text(script)
+            mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+            try:
+                # 1. Register agent with specific conversation ID and target project ID
+                res_reg = self.run_cmd(
+                    ["session", "register", ag, "--session", conv_id, "--harness", "antigravity", "--json"],
+                    env_overrides={"ANTIGRAVITY_AGENTAPI_EXE": str(mock_agentapi)}
+                )
+                self.assertEqual(res_reg.returncode, 0)
+
+                subprocess.run([
+                    "redis-cli", "-u", REDIS_URL, "HSET",
+                    f"{TEST_PREFIX}agent:{ag}",
+                    "agy_agentapi_exe", str(mock_agentapi),
+                    "agy_ls_address", "127.0.0.1:49999",
+                    "agy_csrf_token", "test_csrf_token",
+                    "agy_project_id", target_proj,
+                    "updated_at", str(int(time.time())),
+                    "last_version_notified:rhizo", "0.2.33"
+                ], check=True)
+
+                # Set host credentials with newer timestamp and DIFFERENT project ID
+                subprocess.run([
+                    "redis-cli", "-u", REDIS_URL, "HSET",
+                    f"{TEST_PREFIX}agy_host:{mid}",
+                    "ls_address", "127.0.0.1:49999",
+                    "csrf_token", "test_csrf_token",
+                    "project_id", host_proj,
+                    "updated_at", str(int(time.time()) + 100)
+                ], check=True)
+
+                # 2. Stop any existing router
+                self.run_cmd(["router", "stop"])
+
+                # 3. Start router with spawner environment containing leaking variables
+                router_env = self.env.copy()
+                router_env["ANTIGRAVITY_PROJECT_ID"] = spawner_proj
+                router_env["ANTIGRAVITY_TRAJECTORY_ID"] = spawner_traj
+                router_env["ANTIGRAVITY_SOURCE_METADATA"] = spawner_meta
+                router_env["ANTIGRAVITY_AGENTAPI_EXE"] = str(mock_agentapi)
+                router_env["ANTIGRAVITY_LS_ADDRESS"] = "127.0.0.1:49999"
+                router_env["ANTIGRAVITY_CSRF_TOKEN"] = "test_csrf_token"
+                router_env["RHIZO_EAR_DISABLED"] = "0"
+                router_env["RHIZO_QUIET"] = "1"
+
+                proc = subprocess.Popen(
+                    [str(BIN_PATH), f"--redis-url={REDIS_URL}", f"--prefix={TEST_PREFIX}", "router", "start"],
+                    env=router_env,
+                    cwd=self.test_home,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                try:
+                    time.sleep(1.5)
+                    res_stat2 = self.run_cmd(["router", "status", "--json"])
+                    self.assertEqual(res_stat2.returncode, 0)
+                    self.assertEqual(json.loads(res_stat2.stdout.strip()).get("status"), "active")
+
+                    # Phase 1: Successful delivery with correct project_id and scrubbed trajectory/metadata
+                    self.run_cmd(["send", "--to", ag, "--from", "orchestrator", "--subject", "TestIsolation", "--body", "Payload1"])
+
+                    deadline = time.time() + 8.0
+                    calls = []
+                    while time.time() < deadline:
+                        if log_file.exists():
+                            content = log_file.read_text().strip()
+                            if content:
+                                calls = [line for line in content.splitlines() if line.strip()]
+                                if len(calls) >= 1:
+                                    break
+                        time.sleep(0.2)
+
+                    self.assertGreaterEqual(len(calls), 1, f"Expected agentapi invocation, got: {calls}")
+                    first_call = calls[0]
+                    self.assertIn(f"PROJ={target_proj}", first_call, f"Project ID must match target agent {target_proj}, got: {first_call}")
+                    self.assertNotIn(host_proj, first_call, f"Host project ID {host_proj} leaked into agentapi call")
+                    self.assertNotIn(spawner_proj, first_call, f"Spawner project ID {spawner_proj} leaked into agentapi call")
+                    self.assertIn("TRAJ=|", first_call, f"Trajectory ID must be scrubbed, got: {first_call}")
+                    self.assertIn("META=|", first_call, f"Source metadata must be scrubbed, got: {first_call}")
+                    self.assertIn(f"CONV={conv_id}", first_call, f"Conversation ID must match target agent, got: {first_call}")
+
+                    # Phase 2: Failed delivery re-queueing
+                    # Enable failure in mock script
+                    fail_flag.touch()
+                    self.run_cmd(["send", "--to", ag, "--from", "orchestrator", "--subject", "TestRequeue", "--body", "PayloadFail"])
+
+                    # Wait for router to attempt delivery and re-queue
+                    time.sleep(2.0)
+
+                    # Inbox must still contain the message (or re-queued)
+                    inbox_key = f"{TEST_PREFIX}inbox:{ag}"
+                    inbox_len = int(subprocess.run(
+                        ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
+                        capture_output=True, text=True, check=True
+                    ).stdout.strip())
+                    self.assertGreaterEqual(inbox_len, 1, "Failed agentapi delivery must re-queue message to inbox")
+
+                    # Remove fail flag: router should deliver the re-queued message
+                    fail_flag.unlink()
+                    time.sleep(2.0)
+
+                    # Now verify log_file has recorded delivery of TestRequeue
+                    all_calls = log_file.read_text().strip()
+                    self.assertIn("TestRequeue", all_calls, "Re-queued message should be successfully delivered after failure recovers")
+
+                finally:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    self.run_cmd(["router", "stop"])
+
+            finally:
+                self.run_cmd(["close", ag])
+                subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", f"{TEST_PREFIX}agy_host:{mid}"], capture_output=True)
+
 
 if __name__ == "__main__":
     unittest.main()
