@@ -2555,7 +2555,7 @@ exit 0
                         "agy_agentapi_exe", str(mock_agentapi),
                         "agy_ls_address", "127.0.0.1:49999",
                         "agy_csrf_token", "test_csrf_token",
-                        "last_version_notified:rhizo", "0.2.32"
+                        "last_version_notified:rhizo", "0.2.33"
                     ], check=True)
 
                 # 2. Stop any existing router on this machine

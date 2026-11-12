@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.33] - 2026-11-11
+
 ### Added
 - **Auto-Start Multiplexed Router Daemon & Dynamic Turn Context Sync (`src/rhizo.nim`)**:
   - Extracted `ensureRouterDaemonAlive*(cfg, client)` from `ensureAgyEarAlive` enabling autonomous router daemon bootstrap without requiring an active agent name.
