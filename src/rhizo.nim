@@ -113,7 +113,7 @@ const
   strandLua*     = staticRead("../scripts/strand.lua")
   EmbeddedOpencodeEar* = staticRead("../skills/rhizo/opencode-ear.js")
   EmbeddedPiEar*       = staticRead("../skills/rhizo/pi-ear.ts")
-  RhizoVersion*  = "0.2.33"
+  RhizoVersion*  = "0.2.34"
 
 # Cryptographic Helpers
 proc computeSha1*(text: string): string =
@@ -2393,10 +2393,12 @@ proc extractTaskId*(subject: string, body: string = ""): string =
   return ""
 
 proc generateAuditTicket*(): string =
-  var rndBytes: array[3, uint8]
-  if RAND_bytes(rndBytes[0].addr, 3) != 1:
-    for i in 0..<3: rndBytes[i] = uint8(rand(255))
-  result = toHex(rndBytes[0].int, 2) & toHex(rndBytes[1].int, 2) & toHex(rndBytes[2].int, 2)
+  var rndBytes: array[8, uint8]
+  if RAND_bytes(rndBytes[0].addr, 8) != 1:
+    for i in 0..<8: rndBytes[i] = uint8(rand(255))
+  result = ""
+  for i in 0..<8:
+    result.add(toHex(rndBytes[i].int, 2))
   result = result.toLowerAscii
 
 proc checkAndMintAuditTicket*(cfg: RhizoConfig, client: Redis, auditorName: string, parsed: JsonNode): tuple[isSubmitted: bool, taskId: string, ticketHex: string] =
@@ -2424,12 +2426,21 @@ proc checkAndMintAuditTicket*(cfg: RhizoConfig, client: Redis, auditorName: stri
   if isStrandSubmitted and submittedTaskId.len > 0:
     let ticketHex = generateAuditTicket()
     let ticketHash = computeSha256(ticketHex)
+    let normAuditor = auditorName.strip().toLowerAscii
     if client != nil:
-      try:
-        discard client.hSet("vine:strand:" & submittedTaskId, "audit_ticket_hash", ticketHash)
-        discard client.hSet(cfg.prefix & "strand:" & submittedTaskId, "audit_ticket_hash", ticketHash)
-        discard client.hSet(cfg.prefix & "vine:strand:" & submittedTaskId, "audit_ticket_hash", ticketHash)
-      except CatchableError: discard
+      let strandKeys = [
+        "vine:strand:" & submittedTaskId,
+        cfg.prefix & "strand:" & submittedTaskId,
+        cfg.prefix & "vine:strand:" & submittedTaskId
+      ]
+      for sKey in strandKeys:
+        try:
+          if normAuditor.len > 0:
+            discard client.hSet(sKey, "audit_ticket_hash:" & normAuditor, ticketHash)
+          let existingScalar = client.hGet(sKey, "audit_ticket_hash")
+          if existingScalar == redisNil or existingScalar.strip().len == 0 or normAuditor.contains("audit"):
+            discard client.hSet(sKey, "audit_ticket_hash", ticketHash)
+        except CatchableError: discard
 
     parsed["audit_ticket"] = %ticketHex
     parsed["audit_ticket_hash"] = %ticketHash
@@ -3885,6 +3896,7 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
   let suppressAck = getEnv("RHIZO_SUPPRESS_ACK_WAKE", "1") in ["1", "true", "yes"]
 
   var reconnectRemaining = 60
+  var roundRobinOffset = 0
   while true:
     # 1. Heartbeat router lock
     try:
@@ -3954,11 +3966,18 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
       sleep(1000)
       continue
 
-    # 5. Multiplexed bRPop (batched in chunks <= 64)
+    # 5. Multiplexed bRPop with round-robin rotation across routedAgents
+    let totalInboxes = inboxKeys.len
+    let offset = roundRobinOffset mod totalInboxes
+    var batchKeys: seq[string] = @[]
+    let batchSize = min(64, totalInboxes)
+    for i in 0 ..< batchSize:
+      batchKeys.add(inboxKeys[(offset + i) mod totalInboxes])
+    roundRobinOffset = (roundRobinOffset + 1) mod totalInboxes
+
     var popRes: RedisList
-    let batchSize = min(64, inboxKeys.len)
     try:
-      popRes = client.bRPop(inboxKeys[0 ..< batchSize], 2)
+      popRes = client.bRPop(batchKeys, 2)
     except CatchableError:
       discard
       continue
@@ -4045,11 +4064,23 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
       if not (isRoutine and suppressAck):
         let ok = dispatchAgyMessage(cfg, client, targetAgent, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
         if not ok and not stdoutMode:
-          stderr.writeLine("[rhizo router] Warning: dispatchAgyMessage failed for @" & targetAgent & "; re-queueing message to " & poppedKey)
-          try:
-            discard client.rPush(poppedKey, payloadStr)
-          except CatchableError: discard
-          sleep(500)
+          let retryCount = parsed.getOrDefault("router_retries").getInt(0)
+          if retryCount < 2:
+            parsed["router_retries"] = %(retryCount + 1)
+            let updatedPayload = $parsed
+            stderr.writeLine("[rhizo router] Warning: dispatchAgyMessage failed for @" & targetAgent & " (attempt " & $(retryCount + 1) & "/2); re-queueing message to " & poppedKey)
+            try:
+              discard client.rPush(poppedKey, updatedPayload)
+            except CatchableError: discard
+            sleep(500)
+          else:
+            stderr.writeLine("[rhizo router] ERROR: dispatchAgyMessage exceeded max retries (2) for @" & targetAgent & "; moving message to DLQ and clearing dead conversation.")
+            let dlqKey = cfg.prefix & "dlq:" & targetAgent
+            try:
+              discard client.rPush(dlqKey, payloadStr)
+              discard client.hDel(cfg.prefix & "agent:" & targetAgent, "agy_conversation_id")
+              discard client.sRem(cfg.prefix & "active_agents", targetAgent)
+            except CatchableError: discard
 
     # Route 2: Stdout Envelope Dispatch (for OpenCode / Pi)
     if stdoutMode:

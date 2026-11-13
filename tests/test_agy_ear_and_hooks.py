@@ -221,7 +221,7 @@ exit 0
             # Register agent session in Redis
             agent_key = f"{TEST_PREFIX}agent:{agent}"
             sess_key = f"{TEST_PREFIX}sessions"
-            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "agy_conversation_id", conv_id, "agy_agentapi_exe", str(mock_agentapi), "last_version_notified:rhizo", "0.2.33"], capture_output=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "agy_conversation_id", conv_id, "agy_agentapi_exe", str(mock_agentapi), "last_version_notified:rhizo", "0.2.34"], capture_output=True)
             subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", sess_key, f"agy:{conv_id}", agent], capture_output=True)
 
             inbox_key = f"{TEST_PREFIX}inbox:{agent}"
@@ -255,7 +255,8 @@ exit 0
             self.assertEqual(res.returncode, 0, f"Listen failed: {res.stderr}")
 
             # Verify mock_agentapi was NOT called for routine ACK
-            self.assertFalse(log_file.exists() and log_file.stat().st_size > 0, "Routine ACK was unexpectedly dispatched to agentapi")
+            content = log_file.read_text() if log_file.exists() else ""
+            self.assertFalse(log_file.exists() and log_file.stat().st_size > 0, f"Routine ACK was unexpectedly dispatched to agentapi: {content}")
 
             # 2. Enqueue substantive task message -> Should be dispatched via agentapi send-message
             task_msg = {
@@ -336,13 +337,199 @@ exit 0
         self.assertIn("audit_ticket_hash", item)
         ticket = item["audit_ticket"]
         thash = item["audit_ticket_hash"]
-        self.assertEqual(len(ticket), 6)
+        self.assertEqual(len(ticket), 16)
         self.assertEqual(len(thash), 64)
         self.assertEqual(hashlib.sha256(ticket.encode("utf-8")).hexdigest(), thash)
 
         # Check redis storage on vine:strand:<task_id> and prefix:strand:<task_id>
         stored_hash = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"vine:strand:{task_id}", "audit_ticket_hash"], capture_output=True, text=True).stdout.strip()
         self.assertEqual(stored_hash, thash)
+        stored_auditor_hash = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", f"vine:strand:{task_id}", f"audit_ticket_hash:{auditor}"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(stored_auditor_hash, thash)
+
+    def test_broadcast_strand_submitted_per_recipient_ticket_isolation(self):
+        auditor = "remocha-auditor"
+        implementer = "remocha-implementer"
+        task_id = "task-per-auditor-hash-test"
+        secret = "test-secret-key-32-chars-long!!"
+
+        import hashlib, hmac
+
+        # 1. First, auditor receives STRAND_SUBMITTED
+        msg1 = {
+            "id": "msg_sub_auditor_01",
+            "from": "worker-lead",
+            "to": auditor,
+            "type": "event",
+            "task_id": task_id,
+            "subject": f"STRAND_SUBMITTED: {task_id}",
+            "body": json.dumps({"event": "STRAND_SUBMITTED", "task_id": task_id, "strand": f"/path/{task_id}"}),
+            "timestamp": "2026-11-12T12:00:00Z",
+        }
+        can1 = f"{msg1['id']}|{msg1['from']}|{msg1['to']}|{msg1['type']}|{msg1['subject']}|{msg1['body']}|{msg1['timestamp']}"
+        msg1["sig"] = hmac.new(secret.encode(), can1.encode(), hashlib.sha256).hexdigest()
+
+        inbox_auditor = f"{TEST_PREFIX}inbox:{auditor}"
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_auditor], capture_output=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "LPUSH", inbox_auditor, json.dumps(msg1)], capture_output=True)
+
+        res1 = self.run_rhizo(["drain", "1", auditor, "--format", "json"])
+        self.assertEqual(res1.returncode, 0, f"Drain auditor failed: {res1.stderr}")
+        data1 = json.loads(res1.stdout)
+        item1 = data1[0] if isinstance(data1, list) else data1
+        ticket1 = item1["audit_ticket"]
+        hash1 = item1["audit_ticket_hash"]
+        self.assertEqual(len(ticket1), 16)
+        self.assertEqual(hashlib.sha256(ticket1.encode("utf-8")).hexdigest(), hash1)
+
+        # 2. 10ms later, non-auditor implementer receives broadcast copy of STRAND_SUBMITTED
+        msg2 = {
+            "id": "msg_sub_impl_02",
+            "from": "worker-lead",
+            "to": implementer,
+            "type": "event",
+            "task_id": task_id,
+            "subject": f"STRAND_SUBMITTED: {task_id}",
+            "body": json.dumps({"event": "STRAND_SUBMITTED", "task_id": task_id, "strand": f"/path/{task_id}"}),
+            "timestamp": "2026-11-12T12:00:01Z",
+        }
+        can2 = f"{msg2['id']}|{msg2['from']}|{msg2['to']}|{msg2['type']}|{msg2['subject']}|{msg2['body']}|{msg2['timestamp']}"
+        msg2["sig"] = hmac.new(secret.encode(), can2.encode(), hashlib.sha256).hexdigest()
+
+        inbox_impl = f"{TEST_PREFIX}inbox:{implementer}"
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_impl], capture_output=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "LPUSH", inbox_impl, json.dumps(msg2)], capture_output=True)
+
+        res2 = self.run_rhizo(["drain", "1", implementer, "--format", "json"])
+        self.assertEqual(res2.returncode, 0, f"Drain implementer failed: {res2.stderr}")
+        data2 = json.loads(res2.stdout)
+        item2 = data2[0] if isinstance(data2, list) else data2
+        ticket2 = item2["audit_ticket"]
+        hash2 = item2["audit_ticket_hash"]
+        self.assertEqual(len(ticket2), 16)
+        self.assertNotEqual(ticket1, ticket2, "Distinct tickets must be minted for separate recipients")
+
+        # 3. CRITICAL INVARIANT: The auditor's hash and the scalar hash must NOT be clobbered by implementer!
+        s_key = f"vine:strand:{task_id}"
+        auditor_stored = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", s_key, f"audit_ticket_hash:{auditor}"], capture_output=True, text=True).stdout.strip()
+        impl_stored = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", s_key, f"audit_ticket_hash:{implementer}"], capture_output=True, text=True).stdout.strip()
+        scalar_stored = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", s_key, "audit_ticket_hash"], capture_output=True, text=True).stdout.strip()
+
+        self.assertEqual(auditor_stored, hash1, "Auditor-specific ticket hash must be preserved")
+        self.assertEqual(impl_stored, hash2, "Implementer-specific ticket hash must be stored")
+        self.assertEqual(scalar_stored, hash1, "Scalar audit_ticket_hash must NOT be overwritten by non-auditor recipient!")
+
+    def test_router_retry_limit_dlq_and_hol_prevention(self):
+        dead_agent = "test-dead-worker"
+        alive_agent = "test-alive-worker"
+        dead_conv = "conv-dead-999"
+        alive_conv = "conv-alive-888"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_file = Path(tmp_dir) / "agentapi.log"
+            mock_agentapi = Path(tmp_dir) / "agentapi"
+
+            # Script fails on dead_conv, succeeds on alive_conv
+            script = f"""#!/bin/sh
+echo "CONV=$ANTIGRAVITY_CONVERSATION_ID|ARGS=$@" >> "{log_file}"
+if [ "$ANTIGRAVITY_CONVERSATION_ID" = "{dead_conv}" ]; then
+  exit 1
+fi
+exit 0
+"""
+            mock_agentapi.write_text(script)
+            mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+            # Register dead_agent and alive_agent
+            dead_key = f"{TEST_PREFIX}agent:{dead_agent}"
+            alive_key = f"{TEST_PREFIX}agent:{alive_agent}"
+            sess_key = f"{TEST_PREFIX}sessions"
+
+            import socket
+            my_host = socket.gethostname()
+
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", dead_key,
+                            "agy_conversation_id", dead_conv,
+                            "agy_agentapi_exe", str(mock_agentapi),
+                            "agy_ls_address", "127.0.0.1:49999",
+                            "agy_csrf_token", "test_csrf_token",
+                            "host", my_host,
+                            "last_version_notified:rhizo", "0.2.34"], check=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", alive_key,
+                            "agy_conversation_id", alive_conv,
+                            "agy_agentapi_exe", str(mock_agentapi),
+                            "agy_ls_address", "127.0.0.1:49999",
+                            "agy_csrf_token", "test_csrf_token",
+                            "host", my_host,
+                            "last_version_notified:rhizo", "0.2.34"], check=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", sess_key, f"agy:{dead_conv}", dead_agent, f"agy:{alive_conv}", alive_agent], check=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "SADD", f"{TEST_PREFIX}active_agents", dead_agent, alive_agent], check=True)
+
+            inbox_dead = f"{TEST_PREFIX}inbox:{dead_agent}"
+            inbox_alive = f"{TEST_PREFIX}inbox:{alive_agent}"
+            dlq_dead = f"{TEST_PREFIX}dlq:{dead_agent}"
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_dead, inbox_alive, dlq_dead], check=True)
+
+            # Stop existing router
+            self.run_rhizo(["router", "stop"])
+
+            # Start router
+            router_env = self.env.copy()
+            router_env["ANTIGRAVITY_AGENTAPI_EXE"] = str(mock_agentapi)
+            router_env["ANTIGRAVITY_LS_ADDRESS"] = "127.0.0.1:49999"
+            router_env["ANTIGRAVITY_CSRF_TOKEN"] = "test_csrf_token"
+            router_env["RHIZO_EAR_DISABLED"] = "0"
+            router_env["RHIZO_QUIET"] = "1"
+
+            proc = subprocess.Popen(
+                [str(BIN_RHIZO), f"--redis-url={REDIS_URL}", f"--prefix={TEST_PREFIX}", "router", "start"],
+                env=router_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            try:
+                time.sleep(1.5)
+
+                # Send message to dead_agent and to alive_agent
+                self.run_rhizo(["send", "--to", dead_agent, "--from", "orchestrator", "--subject", "MsgDead", "--body", "FailMe"])
+                self.run_rhizo(["send", "--to", alive_agent, "--from", "orchestrator", "--subject", "MsgAlive", "--body", "PassMe"])
+
+                # Wait for router to process both (retries + dlq)
+                deadline = time.time() + 8.0
+                while time.time() < deadline:
+                    dlq_len = int(subprocess.run(["redis-cli", "-u", REDIS_URL, "LLEN", dlq_dead], capture_output=True, text=True).stdout.strip() or "0")
+                    if dlq_len >= 1:
+                        break
+                    time.sleep(0.3)
+
+                # 1. Alive agent must have received its message (no HOL blocking!)
+                all_logs = log_file.read_text() if log_file.exists() else ""
+                self.assertIn(f"CONV={alive_conv}", all_logs, f"Alive worker was starved by dead worker! Logs: {all_logs}")
+
+                # 2. Dead agent message must be moved to DLQ after exceeding retries
+                dlq_len = int(subprocess.run(["redis-cli", "-u", REDIS_URL, "LLEN", dlq_dead], capture_output=True, text=True).stdout.strip() or "0")
+                self.assertEqual(dlq_len, 1, "Dead worker message must be moved to DLQ")
+
+                # 3. Dead agent inbox must now be empty
+                dead_inbox_len = int(subprocess.run(["redis-cli", "-u", REDIS_URL, "LLEN", inbox_dead], capture_output=True, text=True).stdout.strip() or "0")
+                self.assertEqual(dead_inbox_len, 0, "Dead worker inbox must be empty after DLQ relocation")
+
+                # 4. Dead agent's agy_conversation_id must be cleared in Redis
+                saved_conv = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", dead_key, "agy_conversation_id"], capture_output=True, text=True).stdout.strip()
+                self.assertEqual(saved_conv, "", "Dead worker agy_conversation_id must be cleared")
+
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                self.run_rhizo(["router", "stop"])
+                self.run_rhizo(["close", dead_agent])
+                self.run_rhizo(["close", alive_agent])
+                subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", dead_key, alive_key, dlq_dead, inbox_dead, inbox_alive], capture_output=True)
 
 
 

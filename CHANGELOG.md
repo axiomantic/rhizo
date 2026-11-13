@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.34] - 2026-11-12
+
 ### Fixed
+- **Per-Recipient Audit Ticket Storage & 64-Bit Ticket Entropy (`src/rhizo.nim`)**:
+  - In `checkAndMintAuditTicket`: Resolved multi-recipient broadcast clobbering where delivering a copy of `STRAND_SUBMITTED` to non-auditor agents (e.g. `@proj-implementer`) overwrote the auditor's `audit_ticket_hash`. Now stores per-recipient hashes under `audit_ticket_hash:<normAuditor>` across strand keys (`vine:strand:<task>`, `<prefix>strand:<task>`, `<prefix>vine:strand:<task>`).
+  - Preserved backward-compatible scalar `audit_ticket_hash`: Only overwrites scalar `audit_ticket_hash` if currently uninitialized or if the recipient name contains `"audit"`, guaranteeing non-auditor broadcast recipients never overwrite an auditor's ticket.
+  - In `generateAuditTicket`: Upgraded ticket generation from 3 bytes (6 hex characters / 24-bit entropy) to 8 cryptographically secure random bytes (16 hex characters / 64-bit entropy via `RAND_bytes`), making offline brute-force cracking of `sha256(ticket)` computationally infeasible.
+- **Multiplexed Router Head-of-Line Blocking Prevention & DLQ (`src/rhizo.nim`)**:
+  - In `doRouter`: Implemented round-robin rotation of `inboxKeys` starting offsets across `bRPop` loop iterations, ensuring high-traffic or failing inboxes cannot starve subsequent agents.
+  - Capped Antigravity dispatch delivery retries at 2 (`router_retries` counter in message JSON). Upon exceeding 2 retries, the message is safely relocated to a Dead Letter Queue (`<prefix>dlq:<targetAgent>`) and the agent's dead `agy_conversation_id` is automatically cleared to prevent endless spinning.
 - **Cross-Project Antigravity AgentAPI Isolation & Message Loss Prevention (`src/rhizo.nim`)**:
   - In `dispatchAgyMessage`: Decoupled `ls_address` and `csrf_token` host-wide credential updates from `project_id`. The target agent's `agy_project_id` is now strictly preserved and never overwritten by `rhizo:agy_host:<machine_id>` or spawner project IDs (`let targetProj = if aProjId.len > 0: aProjId else: hProjId`).
   - In `invokeAgyAgentApi`: Explicitly purged `ANTIGRAVITY_TRAJECTORY_ID` and `ANTIGRAVITY_SOURCE_METADATA` from subshell execution environment, and set `ANTIGRAVITY_PROJECT_ID` strictly to `projId` (or deleted if empty), eliminating cross-project `permission_denied` gRPC errors (`source project_id does not match target project_id`).

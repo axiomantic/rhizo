@@ -2555,7 +2555,7 @@ exit 0
                         "agy_agentapi_exe", str(mock_agentapi),
                         "agy_ls_address", "127.0.0.1:49999",
                         "agy_csrf_token", "test_csrf_token",
-                        "last_version_notified:rhizo", "0.2.33"
+                        "last_version_notified:rhizo", "0.2.34"
                     ], check=True)
 
                 # 2. Stop any existing router on this machine
@@ -2951,7 +2951,7 @@ exit 0
                     "agy_csrf_token", "test_csrf_token",
                     "agy_project_id", target_proj,
                     "updated_at", str(int(time.time())),
-                    "last_version_notified:rhizo", "0.2.33"
+                    "last_version_notified:rhizo", "0.2.34"
                 ], check=True)
 
                 # Set host credentials with newer timestamp and DIFFERENT project ID
@@ -3016,25 +3016,24 @@ exit 0
                     self.assertIn("META=|", first_call, f"Source metadata must be scrubbed, got: {first_call}")
                     self.assertIn(f"CONV={conv_id}", first_call, f"Conversation ID must match target agent, got: {first_call}")
 
-                    # Phase 2: Failed delivery re-queueing
+                    # Phase 2: Failed delivery re-queueing & recovery
                     # Enable failure in mock script
+                    log_count_before = len([l for l in log_file.read_text().splitlines() if l.strip()])
                     fail_flag.touch()
                     self.run_cmd(["send", "--to", ag, "--from", "orchestrator", "--subject", "TestRequeue", "--body", "PayloadFail"])
 
-                    # Wait for router to attempt delivery and re-queue
-                    time.sleep(2.0)
+                    # Wait for router to attempt delivery, fail, and re-queue
+                    deadline = time.time() + 4.0
+                    while time.time() < deadline:
+                        lines = [l for l in log_file.read_text().splitlines() if l.strip()]
+                        if len(lines) > log_count_before:
+                            break
+                        time.sleep(0.1)
 
-                    # Inbox must still contain the message (or re-queued)
-                    inbox_key = f"{TEST_PREFIX}inbox:{ag}"
-                    inbox_len = int(subprocess.run(
-                        ["redis-cli", "-u", REDIS_URL, "LLEN", inbox_key],
-                        capture_output=True, text=True, check=True
-                    ).stdout.strip())
-                    self.assertGreaterEqual(inbox_len, 1, "Failed agentapi delivery must re-queue message to inbox")
-
-                    # Remove fail flag: router should deliver the re-queued message
-                    fail_flag.unlink()
-                    time.sleep(2.0)
+                    # Remove fail flag so the re-queued retry succeeds
+                    if fail_flag.exists():
+                        fail_flag.unlink()
+                    time.sleep(1.5)
 
                     # Now verify log_file has recorded delivery of TestRequeue
                     all_calls = log_file.read_text().strip()
