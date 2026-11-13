@@ -228,7 +228,9 @@ elseif action == "progress" then
     end
 
     local current_owner = redis.call('HGET', task_key, "owner") or ""
-    if current_owner ~= "" and current_owner ~= worker then
+    local current_worker = redis.call('HGET', task_key, "worker") or ""
+    local eff_owner = (current_owner ~= "" and current_owner or current_worker)
+    if eff_owner ~= "" and eff_owner ~= worker then
         return redis.error_reply("ERR: Worker '" .. worker .. "' does not own task '" .. task_id .. "'")
     end
 
@@ -403,6 +405,9 @@ elseif action == "current" then
     local task_id = redis.call('GET', prefix .. "current_task:" .. worker)
     if not task_id or task_id == false or task_id == "" then
         task_id = redis.call('GET', prefix .. "agent_task:" .. worker)
+    end
+    if not task_id or task_id == false or task_id == "" then
+        task_id = redis.call('HGET', prefix .. "agent:" .. worker, "current_task")
     end
     if not task_id or task_id == false or task_id == "" then
         return "{}"

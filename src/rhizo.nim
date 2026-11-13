@@ -997,6 +997,7 @@ proc getActiveAgentName*(cfg: RhizoConfig, explicitName: string = "", fallbackDe
         return ensureProjectScopedName(cfg, redisAgent)
     except CatchableError:
       discard
+    return ""
 
   # 3. Explicit agent name via Env or Config takes precedence over ambient session mappings
   if cfg.provenance.hasKey("agent_name") and cfg.provenance["agent_name"].source in {srcEnv, srcCustomFile, srcWorkspaceFile, srcUserFile, srcSystemFile}:
@@ -2215,9 +2216,11 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 
   let effectiveForceSteal = forceSteal or cfg.forceSteal
   if name.len == 0 or name == "agent" or name == cfg.project & "-agent":
-    stderr.writeLine("Error: No agent name specified. Run 'rhizo open <agent_id>', pass the agent ID, or export RHIZO_AGENT_ID=<id>.")
-    stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <agent_id>'. Do NOT guess an existing identity from 'rhizo who' or static role files.")
-    quit(1)
+    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+               else: getCurrentDir().splitPath.tail
+    let reserved = reserveUniqueName(cfg, proj, 600)
+    name = sanitizeIdentifier(reserved.name)
+    stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
   else:
     try:
       let existingProj = client.hGet(cfg.prefix & "agent:" & name, "project")
@@ -3045,28 +3048,48 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
   var convId = ""
   if client != nil:
     try:
-      let v = client.hGet(cfg.prefix & "agent:" & name, "agy_conversation_id")
+      var v = client.hGet(cfg.prefix & "agent:" & name, "agy_conversation_id")
+      if (v == redisNil or v.len == 0):
+        let altName = if name.startsWith(cfg.project & "-"): name.substr(cfg.project.len + 1) else: cfg.project & "-" & name
+        v = client.hGet(cfg.prefix & "agent:" & altName, "agy_conversation_id")
       if v != redisNil and v.len > 0: convId = v.strip()
     except CatchableError: discard
   if convId.len == 0 and client != nil:
     try:
-      let v = client.hGet(cfg.prefix & "agent:" & name, "conversation_id")
+      var v = client.hGet(cfg.prefix & "agent:" & name, "conversation_id")
+      if (v == redisNil or v.len == 0):
+        let altName = if name.startsWith(cfg.project & "-"): name.substr(cfg.project.len + 1) else: cfg.project & "-" & name
+        v = client.hGet(cfg.prefix & "agent:" & altName, "conversation_id")
       if v != redisNil and v.len > 0: convId = v.strip()
     except CatchableError: discard
   if convId.len == 0 and client != nil:
     try:
-      let sessVal = client.hGet(cfg.prefix & "agent_sessions", name)
+      var sessVal = client.hGet(cfg.prefix & "agent_sessions", name)
+      if (sessVal == redisNil or sessVal.len == 0):
+        let altName = if name.startsWith(cfg.project & "-"): name.substr(cfg.project.len + 1) else: cfg.project & "-" & name
+        sessVal = client.hGet(cfg.prefix & "agent_sessions", altName)
       if sessVal != redisNil and sessVal.startsWith("agy:"):
         convId = sessVal.substr(4).strip()
     except CatchableError: discard
   if convId.len == 0 and client != nil:
     try:
       let allSess = client.hGetAll(cfg.prefix & "sessions")
+      let cleanName = if name.startsWith(cfg.project & "-"): name.substr(cfg.project.len + 1) else: name
       var i = 0
       while i < allSess.len - 1:
         let k = allSess[i]
         let v = allSess[i+1]
-        if v.toLowerAscii == name.toLowerAscii and k.startsWith("agy:"):
+        var agentInSess = ""
+        try:
+          let mNode = parseJson(v)
+          if mNode.kind == JObject and mNode.hasKey("agent"):
+            agentInSess = mNode["agent"].getStr("")
+          elif mNode.kind == JString:
+            agentInSess = mNode.getStr("")
+        except CatchableError:
+          agentInSess = v
+        let cleanSessAgent = if agentInSess.startsWith(cfg.project & "-"): agentInSess.substr(cfg.project.len + 1) else: agentInSess
+        if (agentInSess.toLowerAscii == name.toLowerAscii or cleanSessAgent.toLowerAscii == cleanName.toLowerAscii) and k.startsWith("agy:"):
           convId = k.substr(4).strip()
           break
         i += 2
@@ -8298,9 +8321,7 @@ proc main() =
       cli.agentName = a[13..^1]
     elif a.startsWith("--agent-id="):
       cli.agentName = a[11..^1]
-    elif a.startsWith("--id="):
-      cli.agentName = a[5..^1]
-    elif (a in ["--agent-name", "--agent-id", "--id"]) and i + 1 < rawArgs.len and not rawArgs[i+1].startsWith("-"):
+    elif (a in ["--agent-name", "--agent-id"]) and i + 1 < rawArgs.len and not rawArgs[i+1].startsWith("-"):
       cli.agentName = rawArgs[i+1]; inc i
     elif a.startsWith("--session-id="):
       cli.sessionId = a[13..^1]
