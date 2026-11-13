@@ -119,22 +119,81 @@ class TestAgyEarAndHooks(unittest.TestCase):
 
     def test_agy_post_tool_hook(self):
         agent = "test-posttool-agent"
-        stdin_payload = json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "echo 1"}}})
+        agent_key = f"{TEST_PREFIX}agent:{agent}"
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", agent_key], capture_output=True)
+
+        # 1. PostTool with JObject arguments and toolSummary
+        stdin_payload = json.dumps({
+            "toolCall": {
+                "name": "run_command",
+                "arguments": {
+                    "CommandLine": "nimble build",
+                    "toolSummary": "Build project release"
+                }
+            }
+        })
         res = self.run_rhizo(["hook", "agy-post-tool", "--agent", agent], stdin_text=stdin_payload)
         self.assertEqual(res.returncode, 0)
         self.assertEqual(res.stdout.strip(), "{}")
 
+        state = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "state"], capture_output=True, text=True).stdout.strip()
+        activity = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "activity"], capture_output=True, text=True).stdout.strip()
+        last_seen = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "last_seen"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(state, "busy")
+        self.assertEqual(activity, "Executing: run_command (Build project release)")
+        self.assertTrue(len(last_seen) > 0 and int(last_seen) > 0)
+
+        # 2. PostTool with JSON-stringified arguments
+        stdin_str_args = json.dumps({
+            "toolCall": {
+                "name": "read_file",
+                "arguments": json.dumps({"Path": "src/rhizo.nim", "toolSummary": "Inspect source"})
+            }
+        })
+        res2 = self.run_rhizo(["hook", "agy-post-tool", "--agent", agent], stdin_text=stdin_str_args)
+        self.assertEqual(res2.returncode, 0)
+        activity2 = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "activity"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(activity2, "Executing: read_file (Inspect source)")
+
+        # 3. PostTool extends active task lease and updates progress
+        task_id = "task-agy-telemetry-lease-test"
+        task_key = f"{TEST_PREFIX}task:{task_id}"
+        initial_lease = int(time.time()) + 10
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", task_key,
+                        "id", task_id,
+                        "state", "CLAIMED",
+                        "worker", agent,
+                        "lease_until", str(initial_lease)], capture_output=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "current_task", task_id], capture_output=True)
+
+        res3 = self.run_rhizo(["hook", "agy-post-tool", "--agent", agent], stdin_text=stdin_payload)
+        self.assertEqual(res3.returncode, 0)
+
+        new_lease_str = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", task_key, "lease_until"], capture_output=True, text=True).stdout.strip()
+        new_lease = int(new_lease_str)
+        self.assertGreaterEqual(new_lease, int(time.time()) + 295)
+
+        progress = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", task_key, "progress"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(progress, "Executing: run_command (Build project release)")
+
+        # Clean up
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", agent_key, task_key], capture_output=True)
+
     def test_agy_stop_hook(self):
         agent = "test-stop-agent"
+        agent_key = f"{TEST_PREFIX}agent:{agent}"
         inbox_key = f"{TEST_PREFIX}inbox:{agent}"
         thrash_key = f"{TEST_PREFIX}hook_blocks:{agent}"
 
-        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, thrash_key], capture_output=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, thrash_key, agent_key], capture_output=True)
 
-        # 1. Clean inbox -> returns {}
+        # 1. Clean inbox -> returns {} and transitions busy to idle
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "state", "busy", "last_version_notified:rhizo", "0.2.34"], capture_output=True)
         res = self.run_rhizo(["hook", "agy-stop", "--agent", agent])
         self.assertEqual(res.returncode, 0)
         self.assertEqual(res.stdout.strip(), "{}")
+        state1 = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "state"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(state1, "idle")
 
         # 2. Add unread message -> returns {"decision": "continue", "reason": ...}
         # Never returns "block"!
@@ -156,14 +215,44 @@ class TestAgyEarAndHooks(unittest.TestCase):
         self.assertIn("reason", data)
         self.assertIn("unread message", data["reason"].lower())
 
-        # 3. Thrash valve: 3 strikes allows clean stop
+        # 3. Thrash valve: 3 strikes allows clean stop and transitions busy to idle
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key, "state", "busy"], capture_output=True)
         subprocess.run(["redis-cli", "-u", REDIS_URL, "SET", thrash_key, "3"], capture_output=True)
         res3 = self.run_rhizo(["hook", "agy-stop", "--agent", agent])
         self.assertEqual(res3.returncode, 0)
         self.assertEqual(res3.stdout.strip(), "{}")
+        state3 = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "state"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(state3, "idle")
 
         # Clean up
-        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, thrash_key], capture_output=True)
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, thrash_key, agent_key], capture_output=True)
+
+    def test_probe_telemetry(self):
+        agent = "test-probe-telemetry-agent"
+        agent_key = f"{TEST_PREFIX}agent:{agent}"
+        now_sec = int(time.time())
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "HSET", agent_key,
+                        "state", "busy",
+                        "activity", "Executing: run_command (Compiling kernel)",
+                        "last_seen", str(now_sec - 5)], capture_output=True)
+
+        # 1. JSON probe
+        res = self.run_rhizo(["probe", agent, "--json"])
+        self.assertEqual(res.returncode, 0)
+        data = json.loads(res.stdout.strip())
+        self.assertEqual(data.get("agent_state"), "busy")
+        self.assertEqual(data.get("activity"), "Executing: run_command (Compiling kernel)")
+        self.assertGreaterEqual(data.get("last_seen_age_sec"), 4)
+
+        # 2. Text probe
+        res_text = self.run_rhizo(["probe", agent])
+        self.assertEqual(res_text.returncode, 0)
+        self.assertIn("BUSY", res_text.stdout)
+        self.assertIn("Executing: run_command (Compiling kernel)", res_text.stdout)
+        self.assertIn("s ago", res_text.stdout)
+
+        # Clean up
+        subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", agent_key], capture_output=True)
 
     def test_duplicate_exit_when_agy_ear_active(self):
         agent = "test-ear-dedupe-agent"
@@ -284,8 +373,18 @@ exit 0
             self.assertIn(conv_id, logged_args)
             self.assertIn("Important Directive", logged_args)
 
+            # Verify router delivery telemetry updated agent and task
+            deliv_state = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "state"], capture_output=True, text=True).stdout.strip()
+            deliv_activity = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", agent_key, "activity"], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(deliv_state, "busy")
+            self.assertIn("Delivered: Important Directive", deliv_activity)
+
+            task_key = f"{TEST_PREFIX}task:task-core-feat"
+            deliv_at = subprocess.run(["redis-cli", "-u", REDIS_URL, "HGET", task_key, "delivered_at"], capture_output=True, text=True).stdout.strip()
+            self.assertTrue(len(deliv_at) > 0 and int(deliv_at) > 0)
+
             # Clean up
-            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, agent_key], capture_output=True)
+            subprocess.run(["redis-cli", "-u", REDIS_URL, "DEL", inbox_key, agent_key, task_key], capture_output=True)
 
     def test_vine_gate_interlock_woven_status(self):
         worker = "test-woven-worker"

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Live Antigravity Telemetry across Lifecycle Hooks, Router Delivery, and Agent Probes (`src/rhizo.nim`)**:
+  - **Router & Ear Delivery Telemetry**: In `recordDeliveryTelemetry` / `doRouter` / `dispatchAgyMessage`, when delivering non-routine messages to Antigravity sessions, automatically updates `agent:<targetAgent>` (`state = "busy"`, `activity = "Delivered: <subject>"`, `last_seen`, `updated_at`) and stamps `task:<taskId>` with `delivered_at`.
+  - **Tool Execution Activity & Automatic Task Lease Extension**: In `doHookAgyPostTool`, parses `toolName` and `toolSummary` (supporting both JObject and JSON-encoded arguments strings) to record live activity (`Executing: <toolName> (<toolSummary>)` truncated to <= 120 chars) and update `agent:<agent>` state to `"busy"`. For active tasks (`CLAIMED` or `IN_PROGRESS`), logs task progress and extends `task:lease_until` by at least 300s, preventing premature lease expiration during long-running builds or test runs.
+  - **Stop Hook Clean Transition to Idle**: In `doHookAgyStop`, transitions agent `state` from `"busy"` to `"idle"` and refreshes `last_seen` when allowing clean turn exit (both in zero-backlog clean stop and after 3 thrash valve strikes).
+  - **Comprehensive Probe Telemetry**: In `doProbe`, surfaces `agent_state`, `activity`, and `last_seen_age_sec` in both `--json` output and human-readable output (e.g. `BUSY (Executing: run_command 4s ago)` and `Last Seen: ... (4s ago)`).
+  - Added regression test suite in `tests/test_agy_ear_and_hooks.py`.
+
 ## [0.2.34] - 2026-11-12
 
 ### Fixed

@@ -3022,6 +3022,25 @@ proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, 
     stderr.writeLine("[rhizo-agy-ear] Error invoking agentapi send-message: " & e.msg)
     return -1
 
+proc recordDeliveryTelemetry*(cfg: RhizoConfig, client: Redis, name: string, subject, body, rawMsgType: string, isTask: bool, effectiveTaskId: string) =
+  if client == nil: return
+  if isRoutineAck(rawMsgType, subject, body): return
+  let nowSec = $(getTime().toUnix())
+  let subjTrunc = if subject.len > 80: subject[0..<77] & "..." else: subject
+  let actMsg = if subjTrunc.len > 0: "Delivered: " & subjTrunc else: "Delivered message"
+  try:
+    discard client.hSet(cfg.prefix & "agent:" & name, "state", "busy")
+    discard client.hSet(cfg.prefix & "agent:" & name, "activity", actMsg)
+    discard client.hSet(cfg.prefix & "agent:" & name, "last_seen", nowSec)
+    discard client.hSet(cfg.prefix & "agent:" & name, "updated_at", nowSec)
+    var taskToUpdate = if isTask and effectiveTaskId.len > 0: effectiveTaskId else: ""
+    if taskToUpdate.len == 0:
+      let curT = client.hGet(cfg.prefix & "agent:" & name, "current_task")
+      if curT != redisNil and curT.len > 0: taskToUpdate = curT.strip()
+    if taskToUpdate.len > 0:
+      discard client.hSet(cfg.prefix & "task:" & taskToUpdate.toLowerAscii, "delivered_at", nowSec)
+  except CatchableError: discard
+
 proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: JsonNode, id, fromAgent, subject, body: string, isTask: bool, effectiveTaskId: string): bool =
   var convId = ""
   if client != nil:
@@ -3176,9 +3195,13 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
   cmdArgs.add(convId)
   cmdArgs.add(payload)
 
+  proc onDeliverySuccess(): bool =
+    recordDeliveryTelemetry(cfg, client, name, subject, body, parsed.getOrDefault("type").getStr(""), isTask, effectiveTaskId)
+    return true
+
   var code1 = invokeAgyAgentApi(agyExe, cmdArgs, primaryLs, primaryCsrf, targetProj, convId)
   if code1 == 0:
-    return true
+    return onDeliverySuccess()
 
   if secondaryLs.len > 0 and secondaryCsrf.len > 0 and (secondaryLs != primaryLs or secondaryCsrf != primaryCsrf):
     stderr.writeLine("[rhizo-agy-ear] Primary language server dispatch failed (code " & $code1 & "); retrying with fallback credentials...")
@@ -3192,17 +3215,17 @@ proc dispatchAgyMessage*(cfg: RhizoConfig, client: Redis, name: string, parsed: 
             discard client.hSet(cfg.prefix & "agent:" & name, "agy_project_id", targetProj)
           discard client.hSet(cfg.prefix & "agent:" & name, "updated_at", $(getTime().toUnix()))
         except CatchableError: discard
-      return true
+      return onDeliverySuccess()
 
   # Fallback retry without ANTIGRAVITY_PROJECT_ID ("") in case project_id mismatch caused failure
   if targetProj.len > 0:
     let code3 = invokeAgyAgentApi(agyExe, cmdArgs, primaryLs, primaryCsrf, "", convId)
     if code3 == 0:
-      return true
+      return onDeliverySuccess()
     if secondaryLs.len > 0 and secondaryCsrf.len > 0 and (secondaryLs != primaryLs or secondaryCsrf != primaryCsrf):
       let code4 = invokeAgyAgentApi(agyExe, cmdArgs, secondaryLs, secondaryCsrf, "", convId)
       if code4 == 0:
-        return true
+        return onDeliverySuccess()
 
   return false
 
@@ -4063,7 +4086,10 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
       let isRoutine = isRoutineAck(rawMsgType, subject, body)
       if not (isRoutine and suppressAck):
         let ok = dispatchAgyMessage(cfg, client, targetAgent, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
-        if not ok and not stdoutMode:
+        if ok:
+          if not isRoutine:
+            recordDeliveryTelemetry(cfg, client, targetAgent, subject, body, rawMsgType, isTask, effectiveTaskId)
+        elif not stdoutMode:
           let retryCount = parsed.getOrDefault("router_retries").getInt(0)
           if retryCount < 2:
             parsed["router_retries"] = %(retryCount + 1)
@@ -6092,6 +6118,21 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
   let isAlive = client.exists(cfg.prefix & "heartbeat:" & probeTarget)
   let hbTtl = if isAlive: client.ttl(cfg.prefix & "heartbeat:" & probeTarget) else: -1
   let lastSeen = client.hGet(cfg.prefix & "agent:" & probeTarget, "last_seen")
+  var agentState = try: client.hGet(cfg.prefix & "agent:" & probeTarget, "state") except CatchableError: redisNil
+  if agentState == redisNil: agentState = ""
+  var agentActivity = try: client.hGet(cfg.prefix & "agent:" & probeTarget, "activity") except CatchableError: redisNil
+  if agentActivity == redisNil: agentActivity = ""
+
+  var lastSeenAgeSec = -1
+  if lastSeen != redisNil and lastSeen.len > 0:
+    try:
+      let lsEpoch = parseIsoOrUnix(lastSeen)
+      if lsEpoch > 0:
+        let nowEpoch = getTime().toUnix()
+        lastSeenAgeSec = max(0, int(nowEpoch - lsEpoch))
+    except CatchableError:
+      lastSeenAgeSec = -1
+
   let sessionPubkey = try: client.hGet(cfg.prefix & "agent:" & probeTarget, "session_pubkey") except CatchableError: redisNil
   let listenerVal = client.get(cfg.prefix & "listener:" & probeTarget)
   let inboxDepth = try: client.lLen(cfg.prefix & "inbox:" & probeTarget) except CatchableError: 0
@@ -6175,6 +6216,9 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
     if isAlias:
       j["alias_of"] = %probeTarget
     j["status"] = %status
+    j["agent_state"] = %agentState
+    j["activity"] = %agentActivity
+    j["last_seen_age_sec"] = %lastSeenAgeSec
     j["heartbeat_active"] = %(isAlive or inFlightActive)
     j["heartbeat_ttl_sec"] = %(if isAlive: hbTtl elif inFlightActive: taskLeaseRemaining else: -1)
     j["last_seen"] = %(if lastSeen != redisNil: lastSeen else: "")
@@ -6202,9 +6246,22 @@ proc doProbe*(cfg: RhizoConfig, agentName: string, jsonOutput: bool = false): st
     outStr.add("RHIZO AGENT HEALTH PROBE: @" & normName & "\n")
   outStr.add("====================================================\n")
   outStr.add("Health Status      : " & status & "\n")
+  if agentState.len > 0:
+    var stateLine = agentState.toUpperAscii()
+    if agentActivity.len > 0:
+      stateLine.add(" (" & agentActivity)
+      if lastSeenAgeSec >= 0:
+        stateLine.add(" " & $lastSeenAgeSec & "s ago")
+      stateLine.add(")")
+    elif lastSeenAgeSec >= 0:
+      stateLine.add(" (" & $lastSeenAgeSec & "s ago)")
+    outStr.add("Agent State        : " & stateLine & "\n")
+  elif agentActivity.len > 0:
+    outStr.add("Activity           : " & agentActivity & "\n")
   outStr.add("Heartbeat Active   : " & (if isAlive: "YES (TTL: " & $hbTtl & "s)" elif inFlightActive: "YES (In-Flight Lease: " & $taskLeaseRemaining & "s)" else: "NO (OFFLINE)") & "\n")
   if lastSeen != redisNil and lastSeen.len > 0:
-    outStr.add("Last Seen          : " & lastSeen & "\n")
+    let ageSuffix = if lastSeenAgeSec >= 0: " (" & $lastSeenAgeSec & "s ago)" else: ""
+    outStr.add("Last Seen          : " & lastSeen & ageSuffix & "\n")
   if sessionPubkey != redisNil and sessionPubkey.len > 0:
     outStr.add("Session Pubkey     : " & sessionPubkey & "\n")
   if curTask.len > 0:
@@ -7100,34 +7157,58 @@ proc doHookAgyPostTool*(cfg: RhizoConfig, agentNameParam: string = ""): string =
     try: client.close() except CatchableError: discard
 
   let nowSec = getTime().toUnix()
-  let throttleKey = cfg.prefix & "agy_post_tool_throttle:" & normName
-  try:
-    let lastSeenStr = client.get(throttleKey)
-    if lastSeenStr != redisNil and lastSeenStr.len > 0:
-      let lastSeen = parseInt(lastSeenStr)
-      if nowSec - lastSeen < 15:
-        return "{}"
-    discard client.setEx(throttleKey, 30, $nowSec)
-  except CatchableError: discard
+
+  let toolCall = stdinNode.getOrDefault("toolCall")
+  let toolName = if toolCall != nil and toolCall.kind == JObject: toolCall.getOrDefault("name").getStr("") else: ""
+  var toolSummary = ""
+  if toolCall != nil and toolCall.kind == JObject:
+    var argsNode = toolCall.getOrDefault("arguments")
+    if argsNode == nil or argsNode.kind == JNull:
+      argsNode = toolCall.getOrDefault("args")
+    if argsNode != nil:
+      if argsNode.kind == JObject:
+        toolSummary = argsNode.getOrDefault("toolSummary").getStr("")
+      elif argsNode.kind == JString:
+        try:
+          let parsedArgs = parseJson(argsNode.getStr(""))
+          if parsedArgs.kind == JObject:
+            toolSummary = parsedArgs.getOrDefault("toolSummary").getStr("")
+        except CatchableError: discard
+
+  var actStr = ""
+  if toolSummary.len > 0:
+    actStr = "Executing: " & toolName & " (" & toolSummary & ")"
+  elif toolName.len > 0:
+    actStr = "Executing: " & toolName
+  else:
+    actStr = "Active"
+  if actStr.len > 120:
+    actStr = actStr[0..<117] & "..."
 
   let hbTtl = if cfg.heartbeatTtl > 0: cfg.heartbeatTtl else: 150
   try:
     discard client.setEx(cfg.prefix & "heartbeat:" & normName, hbTtl, "1")
+    discard client.hSet(cfg.prefix & "agent:" & normName, "state", "busy")
+    discard client.hSet(cfg.prefix & "agent:" & normName, "activity", actStr)
     discard client.hSet(cfg.prefix & "agent:" & normName, "last_seen", $nowSec)
+    discard client.hSet(cfg.prefix & "agent:" & normName, "updated_at", $nowSec)
   except CatchableError: discard
 
-  let toolCall = stdinNode.getOrDefault("toolCall")
-  let toolName = if toolCall != nil and toolCall.kind == JObject: toolCall.getOrDefault("name").getStr("") else: ""
-  if toolName.len > 0:
-    let cTaskStr = doTask(cfg, "current", [normName])
-    if cTaskStr.len > 0 and cTaskStr != "{}":
-      try:
-        let tNode = parseJson(cTaskStr)
-        let tid = tNode.getOrDefault("id").getStr("")
-        let tState = tNode.getOrDefault("state").getStr("")
-        if tid.len > 0 and tState in ["CLAIMED", "IN_PROGRESS"]:
-          discard doTask(cfg, "progress", [tid, normName, "Tool executed: " & toolName])
-      except CatchableError: discard
+  let cTaskStr = doTask(cfg, "current", [normName])
+  if cTaskStr.len > 0 and cTaskStr != "{}":
+    try:
+      let tNode = parseJson(cTaskStr)
+      let tid = tNode.getOrDefault("id").getStr("")
+      let tState = tNode.getOrDefault("state").getStr("")
+      if tid.len > 0 and tState in ["CLAIMED", "IN_PROGRESS"]:
+        discard doTask(cfg, "progress", [tid, normName, actStr])
+        let curLeaseStr = client.hGet(cfg.prefix & "task:" & tid.toLowerAscii, "lease_until")
+        var curLease = 0
+        if curLeaseStr != redisNil and curLeaseStr.len > 0:
+          try: curLease = parseInt(curLeaseStr) except ValueError: curLease = 0
+        let newLease = max(curLease, int(nowSec + 300))
+        discard client.hSet(cfg.prefix & "task:" & tid.toLowerAscii, "lease_until", $newLease)
+    except CatchableError: discard
 
   return "{}"
 
@@ -7146,6 +7227,16 @@ proc doHookAgyStop*(cfg: RhizoConfig, agentNameParam: string = ""): string =
   defer:
     try: client.close() except CatchableError: discard
 
+  proc transitionToIdle(c: Redis, name: string) =
+    try:
+      let st = c.hGet(cfg.prefix & "agent:" & name, "state")
+      if st == "busy":
+        let nowSec = $(getTime().toUnix())
+        discard c.hSet(cfg.prefix & "agent:" & name, "state", "idle")
+        discard c.hSet(cfg.prefix & "agent:" & name, "last_seen", nowSec)
+        discard c.hSet(cfg.prefix & "agent:" & name, "updated_at", nowSec)
+    except CatchableError: discard
+
   var probeTarget = normName
   let aliasVal = try: client.hGet(cfg.prefix & "aliases", normName) except CatchableError: redisNil
   if aliasVal != redisNil and aliasVal.len > 0:
@@ -7161,6 +7252,7 @@ proc doHookAgyStop*(cfg: RhizoConfig, agentNameParam: string = ""): string =
     blockCount = 0
 
   if blockCount >= 3:
+    transitionToIdle(client, normName)
     return "{}"
 
   # 1. Active unacknowledged work item check
@@ -7241,6 +7333,7 @@ proc doHookAgyStop*(cfg: RhizoConfig, agentNameParam: string = ""): string =
     discard client.del(@[thrashKey])
   except CatchableError: discard
 
+  transitionToIdle(client, normName)
   return "{}"
 
 proc resolveSkillFile(filename: string): string =
