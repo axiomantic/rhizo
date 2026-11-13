@@ -2600,8 +2600,8 @@ exit 0
                         if log_file.exists():
                             content = log_file.read_text().strip()
                             if content:
-                                calls = [line for line in content.splitlines() if line.strip()]
-                                if len(calls) >= 2:
+                                calls = [line for line in content.splitlines() if line.startswith("send-message")]
+                                if len(calls) >= 2 and conv_a in content and conv_b in content:
                                     break
                         time.sleep(0.2)
 

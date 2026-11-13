@@ -2216,11 +2216,17 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 
   let effectiveForceSteal = forceSteal or cfg.forceSteal
   if name.len == 0 or name == "agent" or name == cfg.project & "-agent":
-    let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
-               else: getCurrentDir().splitPath.tail
-    let reserved = reserveUniqueName(cfg, proj, 600)
-    name = sanitizeIdentifier(reserved.name)
-    stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
+    let hasSession = (cfg.sessionId.len > 0 or getEnv("RHIZO_SESSION_ID", "").strip().len > 0 or getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip().len > 0 or getEnv("OPENCODE_SESSION_ID", "").strip().len > 0 or getEnv("PI_SESSION_ID", "").strip().len > 0)
+    if hasSession:
+      let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
+                 else: getCurrentDir().splitPath.tail
+      let reserved = reserveUniqueName(cfg, proj, 600)
+      name = sanitizeIdentifier(reserved.name)
+      stderr.writeLine("[NOTICE] No agent name specified; atomically reserved project-scoped codename via 'rhizo name': @" & name)
+    else:
+      stderr.writeLine("Error: No agent name specified. Run 'rhizo open <agent_id>', pass the agent ID, or export RHIZO_AGENT_ID=<id>.")
+      stderr.writeLine("Note for AI assistants: In an unbootstrapped session, run 'rhizo name' to allocate a fresh unique identity, then 'rhizo open <agent_id>'. Do NOT guess an existing identity from 'rhizo who' or static role files.")
+      quit(1)
   else:
     try:
       let existingProj = client.hGet(cfg.prefix & "agent:" & name, "project")
