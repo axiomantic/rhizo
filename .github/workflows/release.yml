@@ -421,7 +421,7 @@ jobs:
 
       - name: Setup Pages
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload Pages Artifact
         if: startsWith(github.ref, 'refs/tags/')
