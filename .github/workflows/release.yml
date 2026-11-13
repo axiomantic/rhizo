@@ -349,6 +349,9 @@ jobs:
     name: Publish GitHub Release
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     permissions:
       contents: write
       pages: write

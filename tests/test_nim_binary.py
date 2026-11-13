@@ -31,6 +31,8 @@ class TestRhizoNimBinary(unittest.TestCase):
     def setUp(self):
         self.test_home = tempfile.mkdtemp(prefix="rhizo_test_home_")
         self.env = os.environ.copy()
+        for k in ["ANTIGRAVITY_CONVERSATION_ID", "OPENCODE_SESSION_ID", "PI_SESSION_ID", "CODEX_SESSION_ID", "RHIZO_SESSION_ID", "CLAUDE_CONVERSATION_ID", "CLAUDE_SESSION_ID"]:
+            self.env.pop(k, None)
         self.env["HOME"] = self.test_home
         self.env["USERPROFILE"] = self.test_home
         self.env["RHIZO_REDIS_URL"] = REDIS_URL

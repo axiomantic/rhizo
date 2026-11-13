@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Cross-Platform CI, Windows RESP2 Compatibility, and Release Deployment Fixes**:
+  - **Bare `rhizo open` Lexicon Codename Auto-Reservation (`src/rhizo.nim`)**: In `doOpen`, restored auto-reservation of project-scoped lexicon codename via `reserveUniqueName(cfg, proj, 600)` when `rhizo open` is invoked without arguments or explicit name in fresh sessions, adhering to the unbootstrapped session allocation invariant and fixing `test_name_reservation.py`.
+  - **Explicit `--session-id` Precedence over Leaked Ambient Environment (`src/rhizo.nim`)**: In `getActiveAgentName`, when explicit CLI `--session-id` is supplied without an existing Redis session mapping, returns `""` instead of falling back to leaked ambient `RHIZO_AGENT_NAME` / `A2A_NAME` / `MY_NAME` from parent harness subshells, ensuring `doOpen` generates a clean project-scoped agent name and fixing `test_nim_binary.py::test_08_active_agent_persistence`.
+  - **Global Argument Parser `--id` Flag Isolation (`src/rhizo.nim`)**: In `parseCli`, removed `--id` and `--id=` from the global agent name alias matchers (`--agent-name`, `--agent-id`), preventing task IDs in `rhizo send --id <taskId>` from corrupting sender identity and message IDs, fixing LLM CI ping-pong e2e test failure.
+  - **Windows Redis 5 / Memurai RESP2 Protocol Alignment (`tests/test_coordination_invariants.py`)**: Added explicit `protocol=2` to Python Redis clients in `test_42_role_vs_unique_agent_id_separation` and `test_43_router_autostart_and_hook_sync`, resolving `unknown command HELLO` failures on Windows CI running Redis 5.
+  - **Windows Native Mock Script Executable Compatibility (`tests/test_coordination_invariants.py`, `tests/test_agy_ear_and_hooks.py`)**: Provisioned Windows `.bat` batch scripts (`@echo off`) with caret-escaped pipe symbols when `sys.platform == "win32"` for mock `agentapi` processes, resolving Win32 `%1 is not a valid Win32 application` execution failures in `test_40`, `test_44`, and `test_router_retry_limit_dlq_and_hol_prevention`.
+  - **GitHub Pages Environment Declaration (`.github/workflows/release.yml`)**: Added required `environment: name: github-pages` and `url: ${{ steps.deployment.outputs.page_url }}` to the `publish-release` job for `actions/deploy-pages@v4`, resolving deployment job HttpError failures.
+
 ### Added
 - **Live Antigravity Telemetry across Lifecycle Hooks, Router Delivery, and Agent Probes (`src/rhizo.nim`)**:
   - **Router & Ear Delivery Telemetry**: In `recordDeliveryTelemetry` / `doRouter` / `dispatchAgyMessage`, when delivering non-routine messages to Antigravity sessions, automatically updates `agent:<targetAgent>` (`state = "busy"`, `activity = "Delivered: <subject>"`, `last_seen`, `updated_at`) and stamps `task:<taskId>` with `delivered_at`.

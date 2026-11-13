@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import socket
@@ -2525,13 +2526,21 @@ class TestCoordinationInvariants(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_file = Path(tmp_dir) / "agentapi.log"
-            mock_agentapi = Path(tmp_dir) / "agentapi"
-            script = f"""#!/bin/sh
+            is_win = sys.platform == "win32"
+            mock_agentapi = Path(tmp_dir) / ("agentapi.bat" if is_win else "agentapi")
+            if is_win:
+                script = f"""@echo off
+echo %* >> "{log_file}"
+exit /b 0
+"""
+            else:
+                script = f"""#!/bin/sh
 echo "$@" >> "{log_file}"
 exit 0
 """
             mock_agentapi.write_text(script)
-            mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if not is_win:
+                mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
             try:
                 # 1. Register agent-a and agent-b with distinct conversation IDs
@@ -2547,8 +2556,19 @@ exit 0
                 )
                 self.assertEqual(res_b.returncode, 0)
 
+                reg_name_a = ag_a
+                try:
+                    reg_name_a = json.loads(res_a.stdout.strip()).get("agent", ag_a)
+                except Exception:
+                    pass
+                reg_name_b = ag_b
+                try:
+                    reg_name_b = json.loads(res_b.stdout.strip()).get("agent", ag_b)
+                except Exception:
+                    pass
+
                 # Configure mock credentials for both agents
-                for ag in [ag_a, ag_b]:
+                for ag in set([ag_a, ag_b, reg_name_a, reg_name_b]):
                     subprocess.run([
                         "redis-cli", "-u", REDIS_URL, "HSET",
                         f"{TEST_PREFIX}agent:{ag}",
@@ -2781,7 +2801,7 @@ exit 0
 
         # Verify in Redis
         import redis
-        r = redis.from_url(self.env["RHIZO_REDIS_URL"], decode_responses=True)
+        r = redis.from_url(self.env["RHIZO_REDIS_URL"], decode_responses=True, protocol=2)
         prefix = self.env["RHIZO_REDIS_PREFIX"]
         self.assertEqual(r.hget(f"{prefix}agent:{unique_id_1}", "role"), "architect")
         tags_1 = r.hget(f"{prefix}agent:{unique_id_1}", "tags") or ""
@@ -2823,7 +2843,7 @@ exit 0
     def test_43_router_autostart_and_hook_sync(self):
         """Verify that session register and agy hooks automatically synchronize host credentials, session mappings, and router state."""
         import redis
-        r = redis.from_url(self.env["RHIZO_REDIS_URL"], decode_responses=True)
+        r = redis.from_url(self.env["RHIZO_REDIS_URL"], decode_responses=True, protocol=2)
         prefix = self.env["RHIZO_REDIS_PREFIX"]
 
         # 1. rhizo session register with --ls-address and --csrf-token updates rhizo:agy_host:<mid> and agy_conversation_id
@@ -2923,9 +2943,17 @@ exit 0
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_file = Path(tmp_dir) / "agentapi.log"
             fail_flag = Path(tmp_dir) / "fail_flag"
-            mock_agentapi = Path(tmp_dir) / "agentapi"
+            is_win = sys.platform == "win32"
+            mock_agentapi = Path(tmp_dir) / ("agentapi.bat" if is_win else "agentapi")
 
-            script = f"""#!/bin/sh
+            if is_win:
+                script = f"""@echo off
+echo CONV=%ANTIGRAVITY_CONVERSATION_ID%^|PROJ=%ANTIGRAVITY_PROJECT_ID%^|TRAJ=%ANTIGRAVITY_TRAJECTORY_ID%^|META=%ANTIGRAVITY_SOURCE_METADATA%^|ARGS=%* >> "{log_file}"
+if exist "{fail_flag}" exit /b 1
+exit /b 0
+"""
+            else:
+                script = f"""#!/bin/sh
 echo "CONV=$ANTIGRAVITY_CONVERSATION_ID|PROJ=$ANTIGRAVITY_PROJECT_ID|TRAJ=$ANTIGRAVITY_TRAJECTORY_ID|META=$ANTIGRAVITY_SOURCE_METADATA|ARGS=$@" >> "{log_file}"
 if [ -f "{fail_flag}" ]; then
   exit 1
@@ -2933,7 +2961,8 @@ fi
 exit 0
 """
             mock_agentapi.write_text(script)
-            mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if not is_win:
+                mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
             try:
                 # 1. Register agent with specific conversation ID and target project ID
@@ -2942,17 +2971,23 @@ exit 0
                     env_overrides={"ANTIGRAVITY_AGENTAPI_EXE": str(mock_agentapi)}
                 )
                 self.assertEqual(res_reg.returncode, 0)
+                reg_name = ag
+                try:
+                    reg_name = json.loads(res_reg.stdout.strip()).get("agent", ag)
+                except Exception:
+                    pass
 
-                subprocess.run([
-                    "redis-cli", "-u", REDIS_URL, "HSET",
-                    f"{TEST_PREFIX}agent:{ag}",
-                    "agy_agentapi_exe", str(mock_agentapi),
-                    "agy_ls_address", "127.0.0.1:49999",
-                    "agy_csrf_token", "test_csrf_token",
-                    "agy_project_id", target_proj,
-                    "updated_at", str(int(time.time())),
-                    "last_version_notified:rhizo", "0.2.34"
-                ], check=True)
+                for a_key in set([ag, reg_name]):
+                    subprocess.run([
+                        "redis-cli", "-u", REDIS_URL, "HSET",
+                        f"{TEST_PREFIX}agent:{a_key}",
+                        "agy_agentapi_exe", str(mock_agentapi),
+                        "agy_ls_address", "127.0.0.1:49999",
+                        "agy_csrf_token", "test_csrf_token",
+                        "agy_project_id", target_proj,
+                        "updated_at", str(int(time.time())),
+                        "last_version_notified:rhizo", "0.2.34"
+                    ], check=True)
 
                 # Set host credentials with newer timestamp and DIFFERENT project ID
                 subprocess.run([

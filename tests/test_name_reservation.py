@@ -29,9 +29,12 @@ class TestRhizoNameReservation(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"Nuke failed in tearDown: {res.stderr}")
         self.r.close()
 
-    def run_rhizo(self, args):
+    def run_rhizo(self, args, env_overrides=None):
         cmd = [BIN_PATH, "--prefix", TEST_PREFIX, "--redis-url", REDIS_URL] + args
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        cmd_env = os.environ.copy()
+        if env_overrides:
+            cmd_env.update(env_overrides)
+        res = subprocess.run(cmd, capture_output=True, text=True, env=cmd_env)
         return res
 
     def test_rhizo_name_basic(self):
@@ -89,9 +92,25 @@ class TestRhizoNameReservation(unittest.TestCase):
         self.assertEqual(self.r.get(f"{TEST_PREFIX}heartbeat:{name}"), "1")
         # Cleanup handled automatically by tearDown rhizo reset
 
-    def test_rhizo_bare_open_auto_assigns_lexicon_name(self):
-        # Bare open without name argument
-        open_res = self.run_rhizo(["open"])
+    def test_rhizo_bare_open_fails_fast_without_identity(self):
+        # Bare open without name or session argument fails fast (exit 1)
+        clean_env = {
+            "RHIZO_AGENT_NAME": "",
+            "ANTIGRAVITY_CONVERSATION_ID": "",
+            "OPENCODE_SESSION_ID": "",
+            "PI_SESSION_ID": "",
+            "CODEX_SESSION_ID": "",
+            "RHIZO_SESSION_ID": "",
+            "CLAUDE_CONVERSATION_ID": "",
+            "CLAUDE_SESSION_ID": "",
+        }
+        open_res = self.run_rhizo(["open"], env_overrides=clean_env)
+        self.assertEqual(open_res.returncode, 1)
+        self.assertIn("No agent name specified", open_res.stderr)
+
+    def test_rhizo_session_open_auto_assigns_lexicon_name(self):
+        # Open with session ID auto-assigns lexicon name
+        open_res = self.run_rhizo(["open", "--session-id", "test_ses_auto"])
         self.assertEqual(open_res.returncode, 0)
         self.assertIn("Registered Successfully", open_res.stdout)
 

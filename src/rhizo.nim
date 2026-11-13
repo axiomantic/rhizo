@@ -2216,8 +2216,13 @@ proc doOpen*(cfg: RhizoConfig, optName, optTags: string, rearmListen: bool = fal
 
   let effectiveForceSteal = forceSteal or cfg.forceSteal
   if name.len == 0 or name == "agent" or name == cfg.project & "-agent":
-    let hasSession = (cfg.sessionId.len > 0 or getEnv("RHIZO_SESSION_ID", "").strip().len > 0 or getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip().len > 0 or getEnv("OPENCODE_SESSION_ID", "").strip().len > 0 or getEnv("PI_SESSION_ID", "").strip().len > 0)
-    if hasSession:
+    let hasBoundSession = cfg.sessionId.len > 0 or
+                          getEnv("RHIZO_SESSION_ID", "").strip().len > 0 or
+                          getEnv("ANTIGRAVITY_CONVERSATION_ID", "").strip().len > 0 or
+                          getEnv("OPENCODE_SESSION_ID", "").strip().len > 0 or
+                          getEnv("PI_SESSION_ID", "").strip().len > 0 or
+                          getEnv("CODEX_SESSION_ID", "").strip().len > 0
+    if hasBoundSession:
       let proj = if cfg.project.len > 0 and cfg.project != "default": cfg.project.strip()
                  else: getCurrentDir().splitPath.tail
       let reserved = reserveUniqueName(cfg, proj, 600)
@@ -8763,7 +8768,9 @@ proc main() =
     if csrfToken.len > 0: putEnv("ANTIGRAVITY_CSRF_TOKEN", csrfToken)
     if projId.len > 0: putEnv("ANTIGRAVITY_PROJECT_ID", projId)
     if sessionId.len > 0: putEnv("ANTIGRAVITY_CONVERSATION_ID", sessionId)
-    doOpen(cfg, name, tags, rearmListen, listenTimeout, forceSteal, role, allowRoleId)
+    var effectiveCfg = cfg
+    if sessionId.len > 0: effectiveCfg.sessionId = sessionId
+    doOpen(effectiveCfg, name, tags, rearmListen, listenTimeout, forceSteal, role, allowRoleId)
 
   of "heartbeat":
     var explicitName = ""
