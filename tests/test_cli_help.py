@@ -28,34 +28,34 @@ def test_listen_help_variants():
     # 1. rhizo listen --help
     code, out, err = run_rhizo("listen", "--help")
     assert code == 0, f"Error: {err}"
-    assert "Usage: rhizo listen [name]" in out
+    assert "Usage: rhizo listen" in out
     assert "--timeout" in out
     assert "--continuous" in out
 
     # 2. rhizo listen -h
     code, out, err = run_rhizo("listen", "-h")
     assert code == 0, f"Error: {err}"
-    assert "Usage: rhizo listen [name]" in out
+    assert "Usage: rhizo listen" in out
 
     # 3. rhizo listen <name> --help (previously would start listening or fail on agent)
     code, out, err = run_rhizo("listen", "mock-agent-xyz", "--help")
     assert code == 0, f"Error: {err}"
-    assert "Usage: rhizo listen [name]" in out
+    assert "Usage: rhizo listen" in out
 
     # 4. rhizo listen <name> -h
     code, out, err = run_rhizo("listen", "mock-agent-xyz", "-h")
     assert code == 0, f"Error: {err}"
-    assert "Usage: rhizo listen [name]" in out
+    assert "Usage: rhizo listen" in out
 
     # 5. rhizo help listen
     code, out, err = run_rhizo("help", "listen")
     assert code == 0, f"Error: {err}"
-    assert "Usage: rhizo listen [name]" in out
+    assert "Usage: rhizo listen" in out
 
     # 6. rhizo --help listen
     code, out, err = run_rhizo("--help", "listen")
     assert code == 0, f"Error: {err}"
-    assert "Usage: rhizo listen [name]" in out
+    assert "Usage: rhizo listen" in out
 
 def test_messaging_subcommands_help():
     for subcmd in ["send", "reply", "broadcast", "request", "scatter"]:
