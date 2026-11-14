@@ -3023,12 +3023,23 @@ proc invokeAgyAgentApi(agyExe: string, cmdArgs: seq[string], lsAddr, csrfToken, 
 
   try:
     when defined(windows):
-      let p = if agyExe.toLowerAscii.endsWith(".bat") or agyExe.toLowerAscii.endsWith(".cmd"):
+      let p = if agyExe.toLowerAscii.endsWith(".py"):
+                let pyExe = if findExe("python").len > 0: findExe("python")
+                            elif findExe("python3").len > 0: findExe("python3")
+                            else: "python.exe"
+                startProcess(command = pyExe, args = @[agyExe] & cmdArgs, env = callEnv, options = {poUsePath})
+              elif agyExe.toLowerAscii.endsWith(".bat") or agyExe.toLowerAscii.endsWith(".cmd"):
                 startProcess(command = "cmd.exe", args = @["/c", agyExe] & cmdArgs, env = callEnv, options = {poUsePath})
               else:
                 startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
     else:
-      let p = startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
+      let p = if agyExe.toLowerAscii.endsWith(".py"):
+                let pyExe = if findExe("python3").len > 0: findExe("python3")
+                            elif findExe("python").len > 0: findExe("python")
+                            else: "python3"
+                startProcess(command = pyExe, args = @[agyExe] & cmdArgs, env = callEnv, options = {poUsePath})
+              else:
+                startProcess(command = agyExe, args = cmdArgs, env = callEnv, options = {poUsePath})
     let code = p.waitForExit()
     p.close()
     return code

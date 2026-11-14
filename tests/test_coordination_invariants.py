@@ -2527,18 +2527,19 @@ class TestCoordinationInvariants(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_file = Path(tmp_dir) / "agentapi.log"
             is_win = sys.platform == "win32"
-            mock_agentapi = Path(tmp_dir) / ("agentapi.bat" if is_win else "agentapi")
+            mock_agentapi = Path(tmp_dir) / ("agentapi.py" if is_win else "agentapi")
             if is_win:
-                script = f"""@echo off
-echo %* >> "{log_file}"
-exit /b 0
+                script = f"""import sys
+with open(r"{log_file}", "a", encoding="utf-8") as f:
+    f.write(" ".join(sys.argv[1:]) + "\\n")
+sys.exit(0)
 """
             else:
                 script = f"""#!/bin/sh
 echo "$@" >> "{log_file}"
 exit 0
 """
-            mock_agentapi.write_text(script)
+            mock_agentapi.write_text(script, encoding="utf-8")
             if not is_win:
                 mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -2944,13 +2945,20 @@ exit 0
             log_file = Path(tmp_dir) / "agentapi.log"
             fail_flag = Path(tmp_dir) / "fail_flag"
             is_win = sys.platform == "win32"
-            mock_agentapi = Path(tmp_dir) / ("agentapi.bat" if is_win else "agentapi")
+            mock_agentapi = Path(tmp_dir) / ("agentapi.py" if is_win else "agentapi")
 
             if is_win:
-                script = f"""@echo off
-echo CONV=%ANTIGRAVITY_CONVERSATION_ID%^|PROJ=%ANTIGRAVITY_PROJECT_ID%^|TRAJ=%ANTIGRAVITY_TRAJECTORY_ID%^|META=%ANTIGRAVITY_SOURCE_METADATA%^|ARGS=%* >> "{log_file}"
-if exist "{fail_flag}" exit /b 1
-exit /b 0
+                script = f"""import os, sys
+conv = os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
+proj = os.environ.get("ANTIGRAVITY_PROJECT_ID", "")
+traj = os.environ.get("ANTIGRAVITY_TRAJECTORY_ID", "")
+meta = os.environ.get("ANTIGRAVITY_SOURCE_METADATA", "")
+args = " ".join(sys.argv[1:])
+with open(r"{log_file}", "a", encoding="utf-8") as f:
+    f.write(f"CONV={{conv}}|PROJ={{proj}}|TRAJ={{traj}}|META={{meta}}|ARGS={{args}}\\n")
+if os.path.exists(r"{fail_flag}"):
+    sys.exit(1)
+sys.exit(0)
 """
             else:
                 script = f"""#!/bin/sh
@@ -2960,7 +2968,7 @@ if [ -f "{fail_flag}" ]; then
 fi
 exit 0
 """
-            mock_agentapi.write_text(script)
+            mock_agentapi.write_text(script, encoding="utf-8")
             if not is_win:
                 mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 

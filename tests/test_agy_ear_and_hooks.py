@@ -527,14 +527,18 @@ exit 0
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_file = Path(tmp_dir) / "agentapi.log"
             is_win = sys.platform == "win32"
-            mock_agentapi = Path(tmp_dir) / ("agentapi.bat" if is_win else "agentapi")
+            mock_agentapi = Path(tmp_dir) / ("agentapi.py" if is_win else "agentapi")
 
             # Script fails on dead_conv, succeeds on alive_conv
             if is_win:
-                script = f"""@echo off
-echo CONV=%ANTIGRAVITY_CONVERSATION_ID%^|ARGS=%* >> "{log_file}"
-if "%ANTIGRAVITY_CONVERSATION_ID%"=="{dead_conv}" exit /b 1
-exit /b 0
+                script = f"""import os, sys
+conv = os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
+args = " ".join(sys.argv[1:])
+with open(r"{log_file}", "a", encoding="utf-8") as f:
+    f.write(f"CONV={{conv}}|ARGS={{args}}\\n")
+if conv == "{dead_conv}":
+    sys.exit(1)
+sys.exit(0)
 """
             else:
                 script = f"""#!/bin/sh
@@ -544,7 +548,7 @@ if [ "$ANTIGRAVITY_CONVERSATION_ID" = "{dead_conv}" ]; then
 fi
 exit 0
 """
-            mock_agentapi.write_text(script)
+            mock_agentapi.write_text(script, encoding="utf-8")
             if not is_win:
                 mock_agentapi.chmod(mock_agentapi.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
