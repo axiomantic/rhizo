@@ -74,11 +74,12 @@ suite "Rhizo Core Messaging, Directory, Tags, Reply & Encryption Suite":
   test "agent registration, who directory filtering, tag management, and close":
     sandbox:
       allow(redisPluginInstance)
+      allow(nfos.osprocPluginInstance)
       let tmpHome = nextTmpDir("proto_dir")
       let saved = saveAndInitProtoEnv(tmpHome, "test_project")
       defer:
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       check runRhizoInProcess(["open", "nim_test_bot", "backend,worker"]).code == 0
 
@@ -124,7 +125,7 @@ suite "Rhizo Core Messaging, Directory, Tags, Reply & Encryption Suite":
       let saved = saveAndInitProtoEnv(tmpHome, "test_project")
       defer:
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       check runRhizoInProcess(["open", "alice", "lead"]).code == 0
       check runRhizoInProcess(["open", "bob", "worker,nim"]).code == 0
@@ -186,7 +187,7 @@ suite "Rhizo Core Messaging, Directory, Tags, Reply & Encryption Suite":
       let saved = saveAndInitProtoEnv(tmpHome, "test_project")
       defer:
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       check runRhizoInProcess(["open", "sec_bot", "worker"]).code == 0
       let rSec = runRhizoInProcess(["get-secret"])
@@ -267,7 +268,7 @@ suite "Rhizo Message Banners, Cross-Machine Safety, Tenancy & Zero-Disk JSON Sui
       let saved = saveAndInitProtoEnv(tmpHome, "test_project")
       defer:
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       check runRhizoInProcess(["open", "alice", "worker"]).code == 0
       check runRhizoInProcess(["open", "bob", "worker"]).code == 0
@@ -347,7 +348,7 @@ suite "Rhizo Orchestrator Scoping & Session Pubkey Suite":
       let saved = saveAndInitProtoEnv(tmpHome, "proj_alpha")
       defer:
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       var client = openRedisClient(testRedisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -428,8 +429,8 @@ suite "Rhizo Lifecycle Hooks, Agy Ear, Audit Tickets & Routing CLI Suite":
       defer:
         try: setCurrentDir(initialWorkingDir) except CatchableError: discard
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
-        removeDir(projDir)
+        try: removeDir(tmpHome) except CatchableError: discard
+        try: removeDir(projDir) except CatchableError: discard
 
       var client = openRedisClient(testRedisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -535,7 +536,7 @@ suite "Rhizo Lifecycle Hooks, Agy Ear, Audit Tickets & Routing CLI Suite":
       let saved = saveAndInitProtoEnv(tmpHome, "ear_proj", secret)
       defer:
         restoreProtoEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       var client = openRedisClient(testRedisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -633,13 +634,15 @@ suite "Rhizo Lifecycle Hooks, Agy Ear, Audit Tickets & Routing CLI Suite":
 
   test "route init, route lint, missing routes file, setup --help, and typo suggestion":
     sandbox:
+      allow(redisPluginInstance)
+      allow(nfos.osprocPluginInstance)
       allow(hf.httpclientPluginInstance)
       let tmpDir = nextTmpDir("routing_cli")
       let saved = saveAndInitProtoEnv(tmpDir, "routing_proj")
       defer:
         try: setCurrentDir(initialWorkingDir) except CatchableError: discard
         restoreProtoEnv(saved)
-        removeDir(tmpDir)
+        try: removeDir(tmpDir) except CatchableError: discard
 
       setCurrentDir(tmpDir)
       let rInit = runRhizoInProcess(["route", "init"])
@@ -662,4 +665,5 @@ suite "Rhizo Lifecycle Hooks, Agy Ear, Audit Tickets & Routing CLI Suite":
       check rSetupHelp.outStr.contains("rhizo route setup")
       check rSetupHelp.outStr.contains("--daemon")
 
-      removeDir(testTmpRoot)
+      try: setCurrentDir(initialWorkingDir) except CatchableError: discard
+      try: removeDir(testTmpRoot) except CatchableError: discard

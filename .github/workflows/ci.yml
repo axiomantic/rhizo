@@ -143,7 +143,15 @@ jobs:
       - name: Run test suite
         env:
           RHIZO_REDIS_URL: redis://127.0.0.1:6379
-        run: nimble test && nimble check
+        run: |
+          set -o pipefail
+          (nimble test && nimble check) 2>&1 | tee ci_test.log || {
+            FAIL_MSG="$((grep -E '(\[FAILED\]|Check failed:|Error:|Unhandled exception:|Defect|Exception|FAILED:)' -B 2 -A 3 ci_test.log || tail -n 30 ci_test.log) | tail -n 35 | tr '\r\n' '  ')"
+            echo "::error title=CI Test Failure::${FAIL_MSG}"
+            rm -f ci_test.log
+            exit 1
+          }
+          rm -f ci_test.log
 
   auto-tag:
     name: Auto-Tag on Version Bump

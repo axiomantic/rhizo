@@ -86,7 +86,7 @@ suite "Rhizo Pulse Cron Scheduler & Mock Time Suite":
       let saved = saveAndInitCoordEnv(tmpHome, "pulse_project")
       defer:
         restoreCoordEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       var client = openRedisClient(testRedisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -218,7 +218,7 @@ suite "Rhizo Session Cryptographic Attestation Suite":
       let saved = saveAndInitCoordEnv(tmpHome, "crypto_project")
       defer:
         restoreCoordEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       var client = openRedisClient(testRedisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -452,7 +452,7 @@ suite "Rhizo Task Claim Strand Provisioning Suite":
         putEnv("PATH", origPath)
         restoreCoordEnv(saved)
         try: setCurrentDir(initialWorkingDir) except CatchableError: discard
-        removeDir(tmpDir)
+        try: removeDir(tmpDir) except CatchableError: discard
 
       proc writeMockVine(mode: string, customPath: string = "") =
         when defined(windows):
@@ -564,7 +564,7 @@ suite "Rhizo Coordination Invariants, WISM, Watchdog & Role Separation Suite":
       let saved = saveAndInitCoordEnv(tmpHome, "coord_project")
       defer:
         restoreCoordEnv(saved)
-        removeDir(tmpHome)
+        try: removeDir(tmpHome) except CatchableError: discard
 
       var client = openRedisClient(testRedisUrl)
       defer: (try: client.close() except CatchableError: discard)
@@ -735,4 +735,5 @@ suite "Rhizo Coordination Invariants, WISM, Watchdog & Role Separation Suite":
       check rAlias.code == 0
       check runRhizoInProcess(["drain", "u-rec-1", "--json"]).outStr.contains("AliasBody")
 
-      removeDir(testTmpRoot)
+      try: setCurrentDir(initialWorkingDir) except CatchableError: discard
+      try: removeDir(testTmpRoot) except CatchableError: discard
