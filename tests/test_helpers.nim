@@ -10,6 +10,8 @@ elif defined(windows):
   proc c_close(fd: cint): cint {.importc: "_close", header: "<io.h>".}
 import config, redis, rhizo
 
+proc c_clearerr(f: File) {.importc: "clearerr", header: "<stdio.h>".}
+
 putEnv("RHIZO_EAR_DISABLED", "1")
 putEnv("RHIZO_TEST", "1")
 
@@ -109,10 +111,12 @@ when defined(posix):
     let savedIn = dup(STDIN_FILENO)
     discard fcntl(savedIn, F_SETFD, FD_CLOEXEC)
     discard dup2(fdIn, STDIN_FILENO)
+    c_clearerr(stdin)
     try:
       result = captureIoSplit(fn)
     finally:
       discard dup2(savedIn, STDIN_FILENO)
+      c_clearerr(stdin)
       discard close(savedIn)
       close(fIn)
       try: removeFile(inPath) except CatchableError: discard
@@ -160,10 +164,12 @@ elif defined(windows):
     let fdIn = cint(getFileHandle(fIn))
     let savedIn = c_dup(0)
     discard c_dup2(fdIn, 0)
+    c_clearerr(stdin)
     try:
       result = captureIoSplit(fn)
     finally:
       discard c_dup2(savedIn, 0)
+      c_clearerr(stdin)
       discard c_close(savedIn)
       close(fIn)
       try: removeFile(inPath) except CatchableError: discard
