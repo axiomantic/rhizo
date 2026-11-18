@@ -102,7 +102,7 @@ jobs:
           git clone --depth 1 https://github.com/elijahr/tripwire.git ../tripwire
           sed -i.bak 's/const TripwireCapThreshold\* = 15/const TripwireCapThreshold* {.intdefine.} = 15/' ../tripwire/src/tripwire/cap_counter.nim
           rm -f ../tripwire/src/tripwire/cap_counter.nim.bak
-          nimble install -y "parsetoml >= 0.7.0"
+          nimble install -y parsetoml
           TMP_REDIS="$(mktemp -d 2>/dev/null || mktemp -d -t 'rhizo-redis')"
           if git clone --depth 1 -b feat/timeouts-and-reconnect https://github.com/elijahr/redis.git "$TMP_REDIS" 2>/dev/null; then
             (cd "$TMP_REDIS" && nimble install -y) || true
