@@ -27,7 +27,7 @@ proc nextTmpDir(name: string): string =
 
 proc saveAndInitProtoEnv(fakeHome: string, projectName: string = "test_project", secretVal: string = ""): seq[tuple[k, v: string, present: bool]] =
   let keys = [
-    "HOME", "USERPROFILE", "XDG_CONFIG_HOME",
+    "HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA",
     "RHIZO_REDIS_URL", "RHIZO_VALKEY_URL", "REDIS_URL",
     "RHIZO_PREFIX", "RHIZO_REDIS_PREFIX", "RHIZO_PROJECT",
     "RHIZO_CONFIG", "RHIZO_PROFILE", "RHIZO_SECRET", "RHIZO_SECRET_FILE",
@@ -43,6 +43,7 @@ proc saveAndInitProtoEnv(fakeHome: string, projectName: string = "test_project",
   putEnv("HOME", fakeHome)
   putEnv("USERPROFILE", fakeHome)
   putEnv("XDG_CONFIG_HOME", fakeHome)
+  putEnv("APPDATA", fakeHome)
   putEnv("RHIZO_REDIS_URL", testRedisUrl)
   putEnv("RHIZO_PREFIX", testPrefix)
   putEnv("RHIZO_REDIS_PREFIX", testPrefix)

@@ -26,7 +26,7 @@ proc nextTmpDir(name: string): string =
 
 proc saveAndScrubRhizoEnv(fakeHome: string = ""): seq[tuple[k, v: string, present: bool]] =
   let keys = [
-    "HOME", "USERPROFILE", "XDG_CONFIG_HOME",
+    "HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA",
     "RHIZO_REDIS_URL", "RHIZO_VALKEY_URL", "REDIS_URL",
     "RHIZO_PREFIX", "RHIZO_REDIS_PREFIX", "RHIZO_PROJECT",
     "RHIZO_CONFIG", "RHIZO_PROFILE", "RHIZO_SECRET", "RHIZO_SECRET_FILE",
@@ -44,6 +44,7 @@ proc saveAndScrubRhizoEnv(fakeHome: string = ""): seq[tuple[k, v: string, presen
     putEnv("HOME", fakeHome)
     putEnv("USERPROFILE", fakeHome)
     putEnv("XDG_CONFIG_HOME", fakeHome)
+    putEnv("APPDATA", fakeHome)
 
 proc restoreEnv(saved: seq[tuple[k, v: string, present: bool]]) =
   for item in saved:
@@ -471,8 +472,8 @@ suite "Rhizo Installer & Packaging Spec Verification Suite":
     let curVer = pkgJson["version"].getStr()
     check curVer.len > 0
 
-    let rootSkill = readFile(initialWorkingDir / "SKILL.md")
-    let pkgSkill = readFile(initialWorkingDir / "skills" / "rhizo" / "SKILL.md")
+    let rootSkill = readFile(initialWorkingDir / "SKILL.md").replace("\r\n", "\n")
+    let pkgSkill = readFile(initialWorkingDir / "skills" / "rhizo" / "SKILL.md").replace("\r\n", "\n")
     check rootSkill.len > 0
     check pkgSkill.startsWith("---\n")
     check pkgSkill.contains("name: rhizo")
