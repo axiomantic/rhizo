@@ -41,7 +41,11 @@ Never assume you are the orchestrator or an existing active worker simply becaus
 </INVARIANT>
 
 <INVARIANT>
-Sovereign Session & Subagent Prohibition: Swarm workers are ALWAYS sovereign, independent interactive sessions (dedicated terminal tabs, CLI windows, or IDE sessions) bootstrapped via Garden 10-backtick prompt cards. Harness-internal subagents (e.g., Antigravity's 'invoke_subagent', Claude Code's 'Task', OpenCode subagents, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster swarm workers across all harnesses. Internal subagents are ephemeral, terminate upon single-task completion, cannot maintain persistent blocking listeners ('rhizo listen'), corrupt workspace isolation, and cause severe context poisoning by dumping execution traces back into the parent prompt. When orchestrating or bootstrapping a swarm, an orchestrator must NEVER spawn internal subagents and must NEVER offer "subagents" as a worker execution option during intake.
+Capability-Aware Worker Execution & Subagent Policy: First check 'rhizo who --all --json' and attach to active project or unassigned pool workers when available. On cold starts, execution mode matches harness visibility and direct chat interactivity:
+1. Drillable Persistent Subagents (Default on Antigravity IDE & OpenCode Desktop): Persistent child sessions where the operator can click in and chat interactively (e.g., Antigravity 'invoke_subagent' + 'send_message' with clickable 'conversation://<id>' links, or OpenCode Desktop child sessions) are valid swarm workers when they follow the full worker procedure (unique 'rhizo name' + 'rhizo open <name>', explicit '--agent <name>', isolated 1:1 Vine strand, 'vine submit', and independent Key 3 audit by a separate auditor).
+2. Automated 'tmux' Panes (Codex CLI in tmux / opt-in CLI): CLI sessions spawned in 'tmux' panes wired to 'rhizo listen' and prompt cards.
+3. Top-Level Prompt Card Sessions (Default on Codex Desktop & non-tmux CLI): Independent interactive windows bootstrapped via Garden 10-backtick prompt cards.
+Opaque, non-interactive CLI subagents (such as headless 'Task' jobs that cannot be drilled into or steered) are STRICTLY PROHIBITED as cluster swarm workers.
 </INVARIANT>
 
 <FORBIDDEN>
@@ -82,7 +86,7 @@ Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicas
 
 ### 6. Delegation Precedence & Operator-Named Worker Mandate
 <INVARIANT>
-Delegation Precedence & Operator-Named Worker Mandate: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when the operator explicitly requests a "subagent" by name.
+Delegation Precedence & Operator-Named Worker Mandate: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). On cold starts with no active cluster workers, use the harness's capability-aware default (drillable persistent subagents with clickable session links on Antigravity IDE & OpenCode Desktop; automated 'tmux' panes or 10-backtick prompt cards on CLI / Codex Desktop). Opaque non-interactive subagents (e.g. headless 'Task' tools without drill-in chat) must NEVER fulfill cluster swarm roles and remain restricted to transient single-turn ad-hoc inspections.
 Furthermore, when the operator explicitly requests or names a worker or peer session (e.g. 'u + autopxd-architect' or 'assign to worker-1'), the orchestrator MUST dispatch directly to that named recipient over Rhizo ('rhizo send --to <worker> ...'). The orchestrator MUST NEVER gate delegation on whether that worker appears in local single-project 'rhizo who', and MUST NEVER fall back to internal subagents. When inspecting the cluster roster for active workers, an orchestrator MUST query 'rhizo who --all --json' (or check specific peers via 'rhizo who <worker>' / 'rhizo probe <worker>'). Never assume the cluster is empty based solely on local single-project 'rhizo who' output.
 </INVARIANT>
 
@@ -133,7 +137,7 @@ Aggressive Replacement Purge: Any existing code, configurations, or fallbacks th
 </CRITICAL>
 <!-- END RHIZO GUIDE -->
 
-<!-- BEGIN VINE GUIDE [v1.7] -->
+<!-- BEGIN VINE GUIDE [v1.8] -->
 <!-- DO NOT EDIT DIRECTLY: Managed by `vine guide install` -->
 
 ## Vine Workspace & Strand Coordination Guide
@@ -147,12 +151,12 @@ npm install -g @axiomantic/rhizo @axiomantic/vine
 ```
 
 ### 1. Invariants & Strand Identity
-* **Sovereign Worker Allocation**:
-  Workspaces (Strands) are allocated strictly 1:1 to sovereign, dedicated worker sessions. Never assign harness-internal subagents to strand directories to prevent git index contention and lifecycle premature termination.
+* **1:1 Worker Strand Allocation**:
+  Workspaces (Strands) are allocated strictly 1:1 to individual worker tasks/personas (whether top-level Rhizo sessions, `tmux` CLI panes, or persistent drillable subagents in Antigravity IDE / OpenCode Desktop). Never share a single strand directory concurrently across multiple workers or let opaque ephemeral subagents mutate the parent working tree directly.
 * **No Workspace-Scoped Identity Files**:
   Agent identity is strictly decoupled from directory paths. Never create or read `.rhizo.agent` or `.vine.agent` in any project or strand directory.
 * **Zero Dirty Commits**:
-  All strand state, lockfiles, temporary buffers, and manifests must be ignored in `~/.gitignore_global` or `.git/info/exclude`. Never stage or commit coordination metadata (`.vine.json`, `workspaces/`).
+  All strand state, lockfiles, temporary buffers, and manifests must be ignored in `~/.gitignore_global` or `.git/info/exclude`. Never stage or commit coordination metadata (`workspaces/`).
 * **Post-Compaction Ceremony Restoration**:
   Whenever context compaction occurs in a session that used Vine (or Rhizo/Garden), the compaction summary MUST include the mandatory directive commanding the resurrected agent to re-read `vine` (and `rhizo`/`garden` if active) and inspect active strands before touching canonical trunk files. This directive must remain intact across all future compactions.
 * **Compaction Recovery**:
@@ -160,9 +164,13 @@ npm install -g @axiomantic/rhizo @axiomantic/vine
   ```bash
   vine list 2>/dev/null || rift list 2>/dev/null || ls -la ~/Development/workspaces/ 2>/dev/null || true
   ```
-  If an assigned task has an active `.vine.json`, re-anchor to that directory instead of touching the canonical repository root.
+  If an assigned task has an active strand (via 'vine status' or Redis), re-anchor to that directory instead of touching the canonical repository root.
 * **Closed-Circuit Two-Point Diff & Holistic Integration Mandate**:
   Never construct isolated code in a vacuum. Every strand deliverable must contain both a Provider (new capability) and an active Consumer call-site (live entrypoint, router, CLI dispatcher, or UI). Modules tested solely by their own test suites are strictly prohibited as incomplete shelfware. Furthermore, the integration must be holistic (no toys, stubs, mocks, or shallow heuristics). Any legacy or obsolete code targeted for replacement MUST be deleted in the same strand—never preserved as a vestigial fallback or commented out.
+* **Anti-Defeat-Device & Anti-Theatrical Interceptor Mandate**:
+  Prompt keyword interceptors (e.g. prompt-matching query branches targeting specific benchmark tasks) and theatrical mock questionnaires in generic runtimes that bypass genuine neural/radar/algorithmic pipelines to fake benchmark compliance are strictly prohibited across `src/` and `scripts/`. Mechanically caught by `vine gate` (Exit 7: `ExitGateDefeatDeviceViolation`) and instantly rejected at Key 3 as critical defects.
+* **Autonomous Intensive Audit Mandate (Authorized SOP)**:
+  Intensive Five-Pillar adversarial audits (Key 3) are Standard Operating Procedure (SOP). They are pre-authorized, mandatory, and autonomous across the Triad. Orchestrators and Auditors MUST execute them automatically without prompting for human operator permission or input.
 * **Literal Fidelity & Reference Parity Mandate (Anti-Approximation)**:
   When recreating, porting, reverse-engineering, duplicating functionality from an existing reference, or executing an operator directive where fidelity is expected, the deliverable must exhibit literal, true fidelity. Approximations ("looks right", "good enough for happy paths", or "approximate heuristic") are STRICTLY REJECTED. The implementation must literally be the thing that was asked for, matching all edge cases, type boundaries, flags, and error flows.
 * **Structural Assertion Rigor (Anti-Green-Mirage)**:
@@ -242,8 +250,8 @@ done
 #### Step 5: Non-Destructive Polyglot `.envrc` Setup
 Place this `.envrc` in `$STRAND_DIR` and run `direnv allow "$STRAND_DIR"`:
 ```bash
-# Source parent repository .envrc if present (non-destructive chaining)
-[ -f "$HOME/Development/<project>/.envrc" ] && source_env "$HOME/Development/<project>/.envrc"
+# Source parent repository .envrc if present (non-destructive chaining with inode self-recursion guard)
+[ -f "$HOME/Development/<project>/.envrc" ] && [ ! "$PWD/.envrc" -ef "$HOME/Development/<project>/.envrc" ] && source_env "$HOME/Development/<project>/.envrc"
 
 export PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 export CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/dev-workspaces/$(basename "$PROJECT_ROOT")"
@@ -265,19 +273,11 @@ export UV_LINK_MODE="clone"
 export NIMCACHE="$CACHE_ROOT/nimcache"
 ```
 
-#### Step 6: Initialize Strand Manifest (`.vine.json`)
-```json
-{
-  "task_id": "<task-id>",
-  "project": "<project>",
-  "strand_path": "<strand-dir>",
-  "branch": "<branch>",
-  "base_branch": "<base-branch>",
-  "base_commit": "<base-commit-sha>",
-  "status": "IN_PROGRESS",
-  "created_at": "2026-09-26T12:00:00Z"
-}
+#### Step 6: Verify Strand Manifest in Redis
+```bash
+vine status
 ```
+Strand lifecycle state and metadata are automatically provisioned and managed directly in Redis.
 
 ---
 
@@ -303,15 +303,19 @@ vine gate -- <custom-test-command>
 ```
 *Never bypass this gate. `git merge-tree` only verifies text mergeability, not compilation or semantic correctness.*
 * **Changelog Validation**: If a changelog file exists in the repository, `vine gate` verifies that it is modified under the `## [Unreleased]` section. Update it via `vine changelog "Description of changes"` or use `vine changelog --ensure-unreleased` to scaffold the section. For non-user-facing or test-only tasks, pass `--allow-no-changelog`.
+* **Contract Skeleton Mode**: For pre-plan contract skeleton strands (`strand/task-<slug>-skeleton`), pass `--skeleton` to `vine gate` or `vine submit`. Allows interface stubs without consumers and permits `UNIMPLEMENTED_CONTRACT` in tests while enforcing compilation.
 
 #### Key 3: Pre-Weave Adversarial Code Audit Pump
 Execute the Five-Pillar adversarial code audit under the presumption of guilt:
 1. **Closed-Circuit Two-Point Diff**: Active consumer call-site wired to provider.
-2. **Holistic Integration**: Real state and error handling; zero hollow mocks or naive string splits.
+2. **Holistic Integration & Anti-Defeat-Device**: Real state and error handling; zero hollow mocks, naive string splits, or prompt keyword interceptors.
 3. **Literal Fidelity & Reference Parity**: Exact, uncompromised fidelity to operator directives and reference specifications (zero "good enough" approximations).
 4. **Aggressive Replacement Purge**: Obsolete legacy code and fallbacks completely deleted.
 5. **Structural Assertion Rigor**: Complete object equality (`assert actual == expected`) and negative controls.
 Remediate findings through the **Delta Re-Pump Loop** until 0 defects remain.
+* **Mandatory Diff Inspection**: Auditors MUST execute `vine audit inspect [<task_id>]` before approving. `vine audit approve` strictly enforces `inspected_tree_sha == merge_tree_sha`.
+* **Strict Ticket Verification**: When an audit ticket is set, `--ticket <hex>` is strictly required on `vine audit approve` and cannot be bypassed with `--force`.
+* **Evidence-Bound Approval**: `vine audit approve` strictly requires `--evidence "<text>"` (>= 20 characters citing at least one actual changed file from the diff, e.g. `vine audit approve <task_id> --auditor <name> --ticket <hex> --evidence "Verified <file>:<symbol> and test <test_file>"`). Generic rubber-stamps without specific file citations are rejected (`ExitGateAuditViolation = 6`). The Auditor only ratifies Key 3; the Lead Orchestrator executes `vine weave` (the Auditor is NEVER a merge clerk).
 
 #### Step 3: Weave into Canonical Trunk
 Once Key 1, Key 2, and Key 3 pass 100% green:
@@ -364,7 +368,7 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
 
 ### 2. Fleet Lifecycle & Session Coordination
 * **Human Operator Absolute Override & ARM-NOW Invariant**:
-  A prompt, message, or slash command from the human operator in the interactive chat window ALWAYS takes absolute precedence over in-flight tasks, background execution, or autonomous worker mandates. Agents must NEVER ignore, defer, or deprioritize an operator directive. Furthermore, the Rhizo listener is an ARM NOW primitive, NEVER an "ARM WHEN I'M DONE" afterthought: when the operator issues any listen instruction ('/rhizo listen', 'arm listener', 'listen now', 'bro arm it now'), it is an IMMEDIATE TOOL CALL MANDATE in the current turn. Workers are strictly forbidden from deferring arming behind a multi-step plan.
+  A prompt, message, or slash command from the human operator in the interactive chat window ALWAYS takes absolute precedence over in-flight tasks, background execution, or autonomous worker mandates. Agents must NEVER ignore, defer, or deprioritize an operator directive. Furthermore, in CLI subprocess harnesses, the Rhizo listener is an ARM NOW primitive, NEVER an "ARM WHEN I'M DONE" afterthought: when the operator issues any listen instruction ('/rhizo listen', 'arm listener', 'listen now', 'bro arm it now'), it is an IMMEDIATE TOOL CALL MANDATE in the current turn. Workers in CLI harnesses are strictly forbidden from deferring arming behind a multi-step plan. In Multiplexed Router harnesses (Antigravity, OpenCode, Pi), running 'rhizo open <name>' or 'rhizo session register <name>' immediately activates and verifies router reception.
 * **Unbootstrapped Session Identity Invariant**:
   If a session was NOT explicitly bootstrapped with an identity in its conversation history (via a Garden bootstrap prompt card, an explicit operator assignment, or prior 'rhizo open <name>' in that same conversation), it MUST NEVER guess, adopt, or assume an existing identity from 'rhizo who --json' or 'garden-swarm.json' (especially NEVER '<project>-orchestrator'). If the operator commands '/rhizo listen' without arguments in an unbootstrapped session, the session MUST either run 'rhizo name' + 'rhizo open <name>' to acquire a fresh unique identity, or ask the operator via 'ask_question' which persona or role this window represents. Never assume you are the orchestrator or an existing active worker simply because those names appear in the project directory.
 * **Never Hijack or Kill Another Session's Active Listener**:
@@ -375,33 +379,47 @@ npm install -g @axiomantic/rhizo @axiomantic/vine @axiomantic/garden rift-snapsh
   - **Mandatory `ask_question` Tool Discipline**: If operator routing input is genuinely required (true cold start with 0 cluster workers online and no explicit delegation directive), the orchestrator MUST invoke the interactive `ask_question` tool. Dumping numbered multiple-choice lists (1, 2, 3) or raw option text directly into the chat stream is STRICTLY PROHIBITED.
   - **Project-Scoped Fleet Mandate & Anti-Hijacking Invariant**: Workers assigned to a named project belong exclusively to that project. Cross-project worker poaching is strictly prohibited by default. When online workers exist FOR THIS PROJECT (or in the unassigned pool: project 'unassigned'/'default' or tagged 'pool'/'float'/'shared'), dispatch or repurpose them over Rhizo (`rhizo send` / `garden repurpose`). If only workers of OTHER projects are online and no unassigned workers are available, the orchestrator MUST NOT hijack foreign workers; it MUST bootstrap dedicated workers for the project via prompt cards (`garden prompts` / `garden launch`).
   - **Routing Modes (when solicited via `ask_question`)**:
-    - **Option 1 (Full Ceremony - RFE ➔ RFD ➔ RFC ➔ Swarm)**: For architectural shifts, new subsystems, major refactors, or cross-cutting migrations. Sows the idea as a persistent roadmap seed (`garden plant`), authors the Research/RFD, System Architecture/RFC, and Adversarial Audit documents, schedules monotonic locks and isolated Vine strands, and writes worker prompts to `/tmp/garden-<project>/`.
+    - **Option 1 (Full Ceremony - RFE ➔ RFD ➔ RFC ➔ Contract Skeleton Strand ➔ Swarm)**: For architectural shifts, new subsystems, major refactors, or cross-cutting migrations. Sows the idea as a persistent roadmap seed (`garden plant`), authors the Research/RFD (extracting codebase idioms), System Architecture/RFC (defining exact types & interfaces), and Adversarial Audit documents, commits the Pre-Plan Contract Skeleton Strand on `epic/<slug>` with red contract tests, schedules monotonic locks and isolated Vine strands, and writes worker prompts to `/tmp/garden-<project>/`.
     - **Option 2 (Direct Swarm Dispatch)**: For well-defined, self-contained features. Bypasses long design ceremonies and enqueues tasks straight to cluster queues (`rhizo enqueue`) or dispatches to active workers (`rhizo send`).
-    - **Option 3 (Inline Execution)**: For trivial 1-file fixes, documentation, or quick scratch tweaks executed directly in the main session.
-* **Sovereign Sessions & Subagent Prohibition**:
-  Swarm workers operate strictly in dedicated, independent interactive coding sessions (separate terminal tabs or IDE windows for Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`) wrapped in 10 backticks. Harness-internal subagents (e.g. Antigravity's `invoke_subagent`, Claude Code's `Task`, OpenCode subtasks, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster workers across all harnesses. Subagents are ephemeral single-turn jobs; they cannot maintain continuous background listeners, survive across task boundaries, or preserve clean workspace isolation, and they cause severe context poisoning by dumping full execution traces into the orchestrator prompt. Terminal multiplexers (tmux) are neither required nor supported; sessions are always sovereign and prompt-bootstrapped.
+    - **Option 3 (Inline Execution - Strongly Deprioritized / Non-Code Only)**: Strongly discouraged for code implementation. The orchestrator context window must remain dedicated to high-level planning, architectural analysis, and governance. Even for small or single-file code changes, Single-Worker Direct Dispatch (`rhizo send` to 1 worker in a dedicated Vine strand) is strongly preferred over Orchestrator Inline Execution. Inline execution in the orchestrator is reserved strictly for high-level planning, analysis, design discussions, or non-code scratch inspection.
+* **Capability-Aware Harness Execution & Worker Modes**:
+  Before provisioning new sessions, always run `rhizo who --all --json` first: if active project workers or unassigned idle pool peers exist, reuse or repurpose them via the Active Swarm Fast-Path. On cold starts (`execution_mode = "auto"`), Garden matches the execution primitive to harness visibility and direct chat interactivity:
+  - **Drillable Persistent Subagents (`subagents` — Default on Antigravity IDE & OpenCode Desktop)**: On harnesses where the user can click directly into a child session (`conversation://<id>` pills in Antigravity or the sidebar session tree in OpenCode Desktop) to inspect live output and chat interactively, persistent subagents (`invoke_subagent` + `send_message`, or OpenCode child sessions) are first-class swarm workers when they follow the full worker procedure: unique Rhizo identity (`rhizo name` + `rhizo open <name>`), explicit `--agent <name>` invocation, 1:1 isolated Vine strand (`vine new <task_id>`), `vine submit`, and independent Key 3 audit by a separate `@auditor` subagent.
+  - **Automated `tmux` Pane Factory (`tmux` — Default on Codex CLI in `tmux`, Opt-In for OpenCode CLI / Claude Code CLI)**: On CLI harnesses where internal subagents cannot be drilled into and chatted with directly, `garden launch --tmux` spawns a dedicated `tmux` window/pane per worker wired to `rhizo listen` and `/tmp/garden-<project>/<worker>.md`.
+  - **Prompt-Bootstrapped Top-Level Sessions (`prompts` — Default on Codex Desktop & Non-Tmux CLI)**: On Codex Desktop (where top-level threads are the interactive UI unit) or non-`tmux` terminals, Garden emits 10-backtick prompt cards in `/tmp/garden-<project>/<worker>.md`.
+  - **Opaque Ephemeral Subagent Restriction**: Non-interactive, opaque subagents (such as headless CLI `Task` calls that the user cannot drill into and steer mid-flight) remain restricted to transient ad-hoc inspections and must NEVER replace interactive swarm workers.
 * **Active Swarm Fast-Path & Intake Protocol**:
   Before asking ANY intake questions or configuring new personas, the designated orchestrator MUST inspect the cluster via `rhizo who --all --json`. If active workers are already registered and healthy on the Rhizo cluster FOR THIS PROJECT (or in the unassigned pool), the orchestrator MUST skip swarm setup, latch directly onto the existing workers, and proceed immediately to task planning and dispatch. Note: This fast-path applies ONLY to workers belonging to the same project or unassigned pool; workers belonging to other named projects are protected against cross-project poaching. Fresh unbootstrapped sessions must never latch onto `<project>-orchestrator`.
-  Only during cold starts (zero active cluster workers for this project) does the orchestrator conduct intake (`garden` / `choose-personas`) and generate prompt cards (`garden prompts`). Because the current coding harness is auto-detected from the session environment (ANTIGRAVITY_APP_DIR, CLAUDE_CODE, OPENCODE_SESSION_ID, CODEX_SESSION_ID, PI_SESSION_ID), intake consists of at most a SINGLE concise question: Execution mode & swarm shape in the detected harness (e.g., "Balanced Triad in <Detected Harness>", "Focused Duo in <Detected Harness>", "Single-Agent Inline").
-  Standalone "foundation model pairing" questions are STRICTLY PROHIBITED: swarm workers are sovereign interactive sessions and inherit whatever foundation model is active in that harness session (e.g., Gemini in Antigravity, Claude in Claude Code). Prompt cards specify `Model: Session Default (active in this window)`. The orchestrator must NEVER offer or present internal subagents as an option for workers.
-* **Prompt-Bootstrapped Sessions**:
-  Swarm workers operate in dedicated interactive coding sessions (Claude Code, OpenCode, Antigravity, Pi, Cursor) bootstrapped from Garden prompt cards (`garden prompts` / `garden launch`). Prompt cards are automatically written to `/tmp/garden-<project>/<worker>.md` instead of dumped inline into chat, preserving context window tokens and eliminating chat rendering artifacts. Never detach unmanaged background processes with `&` or redirect output.
-* **Listener Discipline**:
-  Workers arm their single-shot Rhizo listener (`rhizo listen <agent>`) with zero-timeout infinite wait to prevent token thrashing. Never wrap `rhizo listen` in a shell while-loop.
+  Only during cold starts (zero active cluster workers for this project) does the orchestrator conduct intake (`garden` / `choose-personas`) and configure workers (`garden prompts` / `garden launch`). Because the current coding harness is auto-detected from the session environment (`ANTIGRAVITY_APP_DIR`, `CLAUDE_CODE`, `OPENCODE_DESKTOP`, `OPENCODE_SESSION_ID`, `CODEX_CLI`, `CODEX_SESSION_ID`, `PI_SESSION_ID`), intake consists of at most a SINGLE concise question: Execution mode & swarm shape in the detected harness (defaulting to Drillable Subagents on Antigravity IDE / OpenCode Desktop, `tmux` panes on Codex CLI when `tmux` is active, and 10-backtick Prompt Cards on Codex Desktop / non-`tmux` CLI).
+  Standalone "foundation model pairing" questions are STRICTLY PROHIBITED: swarm workers inherit whatever foundation model is active in that harness session (`Session Default (active in this window)`).
+* **Prompt-Bootstrapped Sessions & Subagent Briefs**:
+  When bootstrapping top-level or `tmux` workers, prompt cards are automatically written to `/tmp/garden-<project>/<worker>.md` (and subagent task briefs to `/tmp/garden-<project>/subagent-<worker>.md`) instead of dumping thousands of lines inline into chat. Never detach unmanaged background processes with `&` or redirect output.
+* **Listener Discipline, Multiplexed Router & Session Registry**:
+  Swarm coordination operates in two listener models based on the harness:
+  - **Multiplexed Router Harnesses (Google Antigravity, OpenCode, Pi)**: Sessions register their identity, session/conversation ID, and token/address mapping via `rhizo open <name>` / `rhizo session register <name>`. One singleton `rhizo router` service listens for all agents on the machine and routes messages directly to the right session/conversation ID, while hooks and CLI commands automatically update `rhizo:agent:<name>` and `rhizo:agy_host:<machine_id>` whenever the language server address or CSRF token changes. Agents in these harnesses (and persistent subagents driven via `send_message`) DO NOT need to spawn blocking `rhizo listen` subprocesses every turn.
+  - **CLI Subprocess Harnesses (Claude Code, Codex, Generic Shells)**: Workers arm their single-shot Rhizo listener (`rhizo listen <agent>`) with zero-timeout infinite wait to prevent token thrashing. Never wrap `rhizo listen` in a shell while-loop.
 * **Delegation Precedence**:
-  When instructed to "delegate", "assign", or "dispatch" work, the orchestrator MUST route tasks to active cluster workers via Rhizo (`rhizo send`, `rhizo enqueue`, `rhizo task assign/claim`). Harness-internal subagents (e.g. `invoke_subagent`, `Task`, `Agent`) must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when the operator explicitly specifies the word "subagent".
+  When instructed to "delegate", "assign", or "dispatch" work, the orchestrator MUST route tasks to active cluster workers via Rhizo (`rhizo send`, `rhizo enqueue`, `rhizo task assign/claim`). On cold starts without online cluster workers, dispatch via the harness's default execution mode (`subagents` with clickable `conversation://` / child-session links on Antigravity IDE & OpenCode Desktop; `tmux` panes or 10-backtick prompt cards on CLI / Codex Desktop). Opaque non-interactive CLI subagents (where the user cannot drill in and chat) must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient ad-hoc inspections.
 * **Orchestrator Non-Implementation Invariant**:
-  When acting as an Orchestrator (or in any session with active cluster workers), the session is a conductor, not a coder. When the operator presents a task, feature request, bugfix, or asks to work on something, the orchestrator MUST NEVER directly write code or edit files. If active cluster workers exist or delegation is commanded, the orchestrator MUST autonomously break down the task, provision isolated Vine strands (`vine new <task>`), and dispatch work to cluster workers via Rhizo (`rhizo send` / `rhizo enqueue`). It is strictly forbidden from stalling execution by asking routing questions when workers are available. Only during a true cold start with 0 cluster workers may it solicit routing via the interactive `ask_question` tool.
+  When acting as an Orchestrator (or in any session with active cluster workers), the session is a conductor, not a coder. The orchestrator context window must remain dedicated to high-level planning, architectural analysis, and governance. When the operator presents a task, feature request, bugfix, or asks to work on something, the orchestrator MUST NEVER directly write code or edit files. If active cluster workers exist or delegation is commanded, the orchestrator MUST autonomously break down the task, provision isolated Vine strands (`vine new <task>`), and dispatch work to cluster workers via Rhizo (`rhizo send` / `rhizo enqueue`). Even for small or single-file changes, Single-Worker Direct Dispatch (`rhizo send` to 1 worker in a dedicated Vine strand) is strongly preferred over Orchestrator Inline Execution. It is strictly forbidden from stalling execution by asking routing questions when workers are available. Only during a true cold start with 0 cluster workers may it solicit routing via the interactive `ask_question` tool.
 * **Post-Compaction Ceremony Restoration**:
   Whenever context compaction occurs in a session that used Garden, Rhizo, or Vine, the compaction summary MUST include an explicit directive commanding the resurrected agent to re-read the active coordination skills (`garden`, `orchestrate-swarm`, `rhizo`, `vine`) before executing any further tools. Upon waking from compaction, the agent MUST immediately re-read those skills to restore ceremony, gate protocols, and listener discipline. This directive must remain intact across all future compactions.
 * **Worker Autonomous Execution Invariant**:
-  When 'rhizo listen' unblocks and exits, a task has been delivered! Swarm workers operate as sovereign, autonomous implementers, not passive chatbots. Workers MUST NOT wait for an operator prompt or ask "Shall I start?". They MUST immediately transition to active execution: claim the task, enter the isolated Vine strand, perform the work, update the changelog (`vine changelog`) if present, verify the Three-Key Gate, report results, and re-arm the single-shot listener.
+  When a task is delivered (via 'rhizo listen' unblocking in CLI subprocess harnesses, or reactively delivered into session context via the Multiplexed Router in Antigravity, OpenCode, and Pi), a task has arrived! Swarm workers operate as sovereign, autonomous implementers, not passive chatbots. Workers MUST NOT wait for an operator prompt or ask "Shall I start?". They MUST immediately transition to active execution: claim the task, enter the isolated Vine strand, perform the work, update the changelog (`vine changelog`) if present, verify the Three-Key Gate, report results, and re-arm the single-shot listener (in CLI harnesses) or resume listening via the Multiplexed Router. Remember: THE WORKER IS NOT THE AUDITOR; an independent adversarial auditor must review and ratify Key 3 ('vine audit approve').
 
-### 3. The Three-Key Gate & Strand Weaving
+### 3. The Three-Key Gate, Contract Skeleton & Strand Weaving
 Never weave a strand into the canonical trunk without passing all three keys:
+* **Pre-Plan Contract Skeleton Ceremony (Option B)**:
+  Before authoring `implementation_plan.md` and dispatching parallel workers, the Triad commits idiomatic public types, callable stubs (`UNIMPLEMENTED_CONTRACT`), and red contract test suites onto the feature integration branch `epic/<slug>` via `vine new task-<slug>-skeleton --parent epic/<slug>`, `vine submit --skeleton`, and Key 3 audit. Parallel implementation strands branch off `--parent epic/<slug>`.
+* **Contract Immutability & Anti-Mock-Fallback**:
+  Workers branching off `--parent epic/<slug>` MUST NOT alter exported contract signatures or weaken contract tests without an approved `[DESIGN ADDENDUM]`. Workers are strictly prohibited from implementing silent mock fallbacks (e.g. `lesMockFallback`); missing dependencies require halting immediately with `BLOCKER: MISSING_DEPENDENCY`.
 * **Key 1 (Mechanical)**: In-memory conflict pre-check (`git merge-tree --write-tree`).
 * **Key 2 (Semantic & Changelog)**: Automated compiler, test suite, and changelog verification inside the strand (`vine gate`). If the repository contains a changelog, changes must be documented under `## [Unreleased]`.
-* **Key 3 (Adversarial Code Audit Pump)**: Five-pillar adversarial audit under the presumption of guilt (Changelog gate, Two-point diff, holistic integration, literal fidelity, carcass purge, structural assertions) with iterative Delta Re-Pump loop until 0 open defects remain.
+* **Key 3 (Adversarial Code Audit Pump & Auditor Merge-Clerk Decoupling)**:
+  Five-pillar adversarial audit under the presumption of guilt (Changelog gate, Two-point diff, holistic integration, literal fidelity, carcass purge, structural assertions) with iterative Delta Re-Pump loop until 0 open defects remain.
+  - *Auditor Merge-Clerk Decoupling Invariant*: The Adversarial Auditor ONLY inspects and ratifies/rejects Key 3 (`vine audit inspect` + `vine audit approve/reject`). The Lead Orchestrator is solely responsible for running `vine weave` after Key 3 ratification. The Orchestrator is strictly forbidden from delegating weaving (`--weave`), merge conflict resolution, `ROADMAP.md` updates, or release chores to the Adversarial Auditor. Turning the Auditor into a merge clerk biases the LLM toward rubber-stamping audits just to finish its administrative checklist.
+  - *Inverted Effort Gradient & Evidence Mandate*: Rejection is the fast path whenever ANY doubt or defect exists (`vine audit reject <task_id> --ticket <hex> --reason "..."`). Approval is evidence-bound and strictly requires `--evidence "..."` citing specific changed file basenames, provider->consumer call-sites, and negative control assertions from the diff (`vine audit approve <task_id> --ticket <hex> --evidence "..."`).
+  - *Inspection & Anti-Force*: The independent Auditor MUST execute `vine audit inspect <task_id>` before approval; using `--force` on approvals is strictly prohibited. Auditors are adversarial verifiers, NOT release or merge clerks.
 * **Weave**: `vine weave && rhizo ack queue:<project>:tasks <task_id>`
 * **Post-Push CI Verification**: After weaving and pushing to remote when CI is running, if your coding harness supports native timers/schedules, set a periodic check (default: every 5m, max 12 checks / 1h) to verify CI completion (`gh run list` / `gh run view`) and cancel the timer once CI passes or fails.
 <!-- END GARDEN GUIDE -->
@@ -501,6 +519,10 @@ Agents and human engineers operating in this repository must consult the dedicat
 | **CLI Reference Manual** | [`docs/cli_reference.md`](docs/cli_reference.md) | Comprehensive catalog of all 35+ commands, subcommands, flags, and JSON formats. |
 | **Configuration Architecture** | [`docs/configuration.md`](docs/configuration.md) | Layered configuration files, environment variables, and Redis security profiles. |
 | **Routes Schema Reference** | [`docs/routes_schema.md`](docs/routes_schema.md) | YAML schema definition, match operators, and queue interpolation. |
+
+
+
+
 
 
 

@@ -5,6 +5,7 @@ import tripwire
 import ./plugins/redis_tripwire
 import std/[os, strutils, json, tables, unittest]
 import config, rhizo
+import ./test_helpers
 
 suite "Rhizo Native Tripwire Redis Passthrough Suite":
 

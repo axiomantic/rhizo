@@ -45,10 +45,15 @@ for _, agent in ipairs(active_agents) do
             table.insert(dead_agents, agent)
             if not dry_run then
                 redis.call("SREM", prefix .. "active_agents", agent)
+                redis.call("DEL", prefix .. "listener:" .. agent)
                 local agent_tags = redis.call("HGET", prefix .. "agent:" .. agent, "tags") or ""
                 for t in string.gmatch(agent_tags, "([^,]+)") do
-                    local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
-                    if tr ~= "" then redis.call("SREM", prefix .. "tag:" .. tr, agent) end
+                    local raw_tr = string.match(t, "^%s*(.-)%s*$")
+                    if raw_tr ~= "" then
+                        redis.call("SREM", prefix .. "tag:" .. raw_tr, agent)
+                        local tr = string.lower(raw_tr)
+                        if tr ~= raw_tr then redis.call("SREM", prefix .. "tag:" .. tr, agent) end
+                    end
                 end
                 redis.call("UNLINK", prefix .. "agent:" .. agent)
             end

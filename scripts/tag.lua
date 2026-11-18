@@ -37,22 +37,21 @@ end
 
 if action == "add" then
     for t in string.gmatch(tags_arg, "([^,]+)") do
-        local tr = string.match(t, "^%s*(.-)%s*$")
+        local raw_tr = string.match(t, "^%s*(.-)%s*$")
+        local tr = raw_tr and string.lower(raw_tr) or ""
         if tr ~= "" then
             tag_set[tr] = true
             redis.call('SADD', prefix .. 'tag:' .. tr, name)
-            local tr_low = string.lower(tr)
-            if tr_low ~= tr then redis.call('SADD', prefix .. 'tag:' .. tr_low, name) end
         end
     end
 elseif action == "remove" then
     for t in string.gmatch(tags_arg, "([^,]+)") do
-        local tr = string.match(t, "^%s*(.-)%s*$")
+        local raw_tr = string.match(t, "^%s*(.-)%s*$")
+        local tr = raw_tr and string.lower(raw_tr) or ""
         if tr ~= "" then
             tag_set[tr] = nil
             redis.call('SREM', prefix .. 'tag:' .. tr, name)
-            local tr_low = string.lower(tr)
-            if tr_low ~= tr then redis.call('SREM', prefix .. 'tag:' .. tr_low, name) end
+            if raw_tr ~= tr then redis.call('SREM', prefix .. 'tag:' .. raw_tr, name) end
         end
     end
 elseif action == "set" then
@@ -63,12 +62,11 @@ elseif action == "set" then
     end
     tag_set = {}
     for t in string.gmatch(tags_arg, "([^,]+)") do
-        local tr = string.match(t, "^%s*(.-)%s*$")
+        local raw_tr = string.match(t, "^%s*(.-)%s*$")
+        local tr = raw_tr and string.lower(raw_tr) or ""
         if tr ~= "" then
             tag_set[tr] = true
             redis.call('SADD', prefix .. 'tag:' .. tr, name)
-            local tr_low = string.lower(tr)
-            if tr_low ~= tr then redis.call('SADD', prefix .. 'tag:' .. tr_low, name) end
         end
     end
 end

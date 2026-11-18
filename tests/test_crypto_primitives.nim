@@ -1,5 +1,6 @@
 import std/[unittest, strutils, os]
 import ../src/session_crypto
+import ./test_helpers
 
 suite "Session Crypto Unit Tests":
   test "Generate keypair, sign and verify":

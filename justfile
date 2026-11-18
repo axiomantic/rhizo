@@ -10,13 +10,9 @@ setup:
 # 2. Test Suite Execution
 test:
     @just test-nim
-    @just test-py
 
 test-nim:
     nimble test
-
-test-py:
-    uv run pytest
 
 # 3. Linter Execution
 lint:

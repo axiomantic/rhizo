@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **100% In-Process Nim Test Suite Migration (`tests/config.nims`, `tests/test_helpers.nim`, `tests/test_config_and_guide.nim`, `tests/test_protocol_comprehensive.nim`, `tests/test_coordination_and_security.nim`, `src/rhizo.nim`, `src/config.nim`, `src/routing.nim`, `src/guide.nim`, `src/upgrade_notify.nim`, `rhizo.nimble`, `justfile`, `.github/workflows/ci.yml`)**:
+  - Parameterized `main*(customArgs, useCustomArgs)` with `-d:inProcessTest` `CliExitError`/`testQuit` and non-blocking POSIX pipe / Windows CRT stdout/stderr capture (`captureIoSplit*`, `runRhizoInProcess*`), migrating all Python test suites (`pytest`, `pytest.ini`, `pyproject.toml`, `requirements.txt` deleted) to native Nim via `nimble test`.
+- **Capability-Aware Worker Execution & Subagent Policy (`src/guide.nim`, `AGENTS.md`, `skills/rhizo/SKILL.md`, `SKILL.md`, `skills/rhizo/rules/`, `skills/rhizo/references/capability_archetypes.md`)**:
+  - Updated coordination guides and rule artifacts to recognize drillable persistent subagents on Antigravity IDE (`conversation://<id>`) and OpenCode Desktop (child sessions) and automated `tmux` panes on CLI harnesses alongside top-level prompt card sessions, while keeping opaque non-interactive CLI subagents restricted to ad-hoc inspections.
+
 ### Fixed
+- **Deep Code-Review Hardening (`scripts/*.lua`, `src/session_crypto.nim`, `src/routing.nim`)**:
+  - Hardened Redis Cluster `{...}` slot affinity, atomic Lua state transitions, and argument guards across `claim.lua`, `claim_renew.lua`, `sweep.lua`, `task.lua`, `strand.lua`, `workflow.lua`, `scatter.lua`, `multicast.lua`, `tag.lua`, `unregister.lua`, `blackboard.lua`, and `ballot.lua`, alongside session cryptography and semantic routing edge cases.
 - **Cross-Platform CI, Windows RESP2 Compatibility, and Release Deployment Fixes**:
   - **Windows Native Python Mock AgentAPI Dispatch & Subshell Escaping (`src/rhizo.nim`, `tests/test_coordination_invariants.py`, `tests/test_agy_ear_and_hooks.py`)**: Added native `.py` script execution support to `invokeAgyAgentApi` via direct `python` / `python.exe` process invocation without `cmd.exe` shell interpretation. Updated Windows mock agentapi test harnesses in `test_40`, `test_44`, and `test_router_retry_limit_dlq_and_hol_prevention` to use `agentapi.py` instead of `.bat` scripts, eliminating Windows `cmd.exe` multiline newline parsing failures, syntax errors on unquoted argument expansion, and process startup failures.
   - **Bare `rhizo open` Lexicon Codename Auto-Reservation (`src/rhizo.nim`)**: In `doOpen`, restored auto-reservation of project-scoped lexicon codename via `reserveUniqueName(cfg, proj, 600)` when `rhizo open` is invoked without arguments or explicit name in fresh sessions, adhering to the unbootstrapped session allocation invariant and fixing `test_name_reservation.py`.

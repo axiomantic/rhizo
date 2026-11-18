@@ -98,6 +98,11 @@ jobs:
       - name: Install dependencies
         run: |
           set -euo pipefail
+          rm -rf ../tripwire
+          git clone --depth 1 https://github.com/elijahr/tripwire.git ../tripwire
+          sed -i.bak 's/const TripwireCapThreshold\* = 15/const TripwireCapThreshold* {.intdefine.} = 15/' ../tripwire/src/tripwire/cap_counter.nim
+          rm -f ../tripwire/src/tripwire/cap_counter.nim.bak
+          nimble install -y "parsetoml >= 0.7.0"
           TMP_REDIS="$(mktemp -d 2>/dev/null || mktemp -d -t 'rhizo-redis')"
           if git clone --depth 1 -b feat/timeouts-and-reconnect https://github.com/elijahr/redis.git "$TMP_REDIS" 2>/dev/null; then
             (cd "$TMP_REDIS" && nimble install -y) || true
@@ -113,8 +118,6 @@ jobs:
               done
             fi
           done
-          python -m pip install --upgrade pip
-          python -m pip install -e . "skilz>=0.1.0" || python -m pip install -e .
 
       - name: Verify rule files in sync with AGENTS.md
         run: python scripts/compile_rules.py --check
@@ -138,8 +141,7 @@ jobs:
       - name: Run test suite
         env:
           RHIZO_REDIS_URL: redis://127.0.0.1:6379
-          PYTHONUTF8: "1"
-        run: python -m pytest -v -m "not llm"
+        run: nimble test && nimble check
 
   auto-tag:
     name: Auto-Tag on Version Bump

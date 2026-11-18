@@ -6,6 +6,9 @@
 import std/[os, strutils, json, tables, httpclient, uri, net]
 import yaml/tojson, config
 
+when defined(inProcessTest):
+  template quit(code: int = 0) = testQuit(code)
+
 type
   OverflowStrategy* = enum
     osSplitAggregate = "split_aggregate"
@@ -591,9 +594,21 @@ proc lintRoutesConfigFile*(filePath: string, checkService: bool = false, isOverl
   except CatchableError as e:
     return (false, @["Failed to read file: " & e.msg], @[])
 
+proc applyRoutingEnvOverrides*(cfg: var RoutingConfig) =
+  loadDotEnv()
+  let envUrl = getEnvFirst("RHIZO_SERVICE_URL", "RHIZO_SYSTEMONE_URL", "RHIZO_LAYA_URL", "SYSTEMONE_URL", "LAYA_URL")
+  if envUrl.len > 0: cfg.service.url = envUrl
+  let envModel = getEnvFirst("RHIZO_MODEL", "RHIZO_SYSTEMONE_MODEL", "SYSTEMONE_MODEL", "LAYA_MODEL")
+  if envModel.len > 0: cfg.service.model = envModel
+  let envKey = getEnvFirst("LAYA_API_KEY", "RHIZO_LAYA_API_KEY")
+  if envKey.len > 0: cfg.service.apiKey = envKey
+  let envTimeout = getEnvFirst("RHIZO_ROUTE_TIMEOUT", "RHIZO_SYSTEMONE_TIMEOUT", "SYSTEMONE_TIMEOUT")
+  if envTimeout.len > 0:
+    try: cfg.service.timeoutSeconds = parseFloat(envTimeout)
+    except ValueError: discard
+
 # Parse full configuration from YAML content
 proc parseRoutesConfig*(yamlContent: string, configPath: string = ""): RoutingConfig =
-  loadDotEnv()
   var doc: seq[JsonNode]
   try:
     var s = yamlContent
@@ -623,18 +638,6 @@ proc parseRoutesConfig*(yamlContent: string, configPath: string = ""): RoutingCo
         result.service.timeoutSeconds = sNode["timeout_seconds"].getFloat()
       elif sNode["timeout_seconds"].kind == JInt:
         result.service.timeoutSeconds = float(sNode["timeout_seconds"].getInt())
-
-  # Env overrides
-  let envUrl = getEnvFirst("RHIZO_SERVICE_URL", "RHIZO_SYSTEMONE_URL", "RHIZO_LAYA_URL", "SYSTEMONE_URL", "LAYA_URL")
-  if envUrl.len > 0: result.service.url = envUrl
-  let envModel = getEnvFirst("RHIZO_MODEL", "RHIZO_SYSTEMONE_MODEL", "SYSTEMONE_MODEL", "LAYA_MODEL")
-  if envModel.len > 0: result.service.model = envModel
-  let envKey = getEnvFirst("LAYA_API_KEY", "RHIZO_LAYA_API_KEY")
-  if envKey.len > 0: result.service.apiKey = envKey
-  let envTimeout = getEnvFirst("RHIZO_ROUTE_TIMEOUT", "RHIZO_SYSTEMONE_TIMEOUT", "SYSTEMONE_TIMEOUT")
-  if envTimeout.len > 0:
-    try: result.service.timeoutSeconds = parseFloat(envTimeout)
-    except ValueError: discard
 
   # Parse limits
   if root.hasKey("limits") and root["limits"].kind == JObject:
@@ -771,6 +774,7 @@ proc loadEffectiveRoutesConfig*(customPath: string = ""): RoutingConfig =
       let localCfg = parseRoutesConfig(readFile(localCompanion), localCompanion)
       mergeRoutingConfigs(baseCfg, localCfg)
       baseCfg.configPath = p & " (+ " & localCompanion.extractFilename & ")"
+    applyRoutingEnvOverrides(baseCfg)
     return baseCfg
 
   let envPath = getEnv("RHIZO_ROUTES_FILE")
@@ -781,6 +785,7 @@ proc loadEffectiveRoutesConfig*(customPath: string = ""): RoutingConfig =
       let localCfg = parseRoutesConfig(readFile(localCompanion), localCompanion)
       mergeRoutingConfigs(baseCfg, localCfg)
       baseCfg.configPath = envPath & " (+ " & localCompanion.extractFilename & ")"
+    applyRoutingEnvOverrides(baseCfg)
     return baseCfg
 
   # Hierarchical resolution:
@@ -815,13 +820,16 @@ proc loadEffectiveRoutesConfig*(customPath: string = ""): RoutingConfig =
 
   if fileChain.len == 0:
     # No route files anywhere in chain: return built-in fallback default
-    return defaultFallbackRoutingConfig()
+    var defCfg = defaultFallbackRoutingConfig()
+    applyRoutingEnvOverrides(defCfg)
+    return defCfg
 
   var effective = parseRoutesConfig(readFile(fileChain[0]), fileChain[0])
   for i in 1 ..< fileChain.len:
     let nextCfg = parseRoutesConfig(readFile(fileChain[i]), fileChain[i])
     mergeRoutingConfigs(effective, nextCfg)
 
+  applyRoutingEnvOverrides(effective)
   effective.configPath = pathDescriptions.join(" -> ")
   return effective
 

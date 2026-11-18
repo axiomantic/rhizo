@@ -7,4 +7,4 @@ venv_policy = "prompt"
 vendor_dirs = ["deps", "vendor", "node_modules"]
 
 [verification]
-test_command = "uv run pytest tests/test_coordination_invariants.py tests/test_pulse.py"
+test_command = "nimble test"

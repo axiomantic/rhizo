@@ -43,10 +43,14 @@ proc getSecret*(cfg: RhizoConfig): string =
 proc openRedisClient*(redisUrl: string): Redis =
   let parsed = parseRedisUrl(redisUrl)
   result = open(parsed.host, parsed.port.Port)
-  if parsed.password.len > 0:
-    result.auth(parsed.password)
-  if parsed.db != 0:
-    discard result.select(parsed.db)
+  try:
+    if parsed.password.len > 0:
+      result.auth(parsed.password)
+    if parsed.db != 0:
+      discard result.select(parsed.db)
+  except CatchableError as e:
+    try: result.close() except CatchableError: discard
+    raise e
 
 proc isMachineOutputContext*(rawArgs: seq[string]): bool =
   ## Returns true if current invocation is a machine-parseable, non-interactive,
@@ -136,7 +140,7 @@ proc notifyClusterOfUpgrade*(
 
     # Construct and sign notice
     let canonical = msgId & "|system:upgrade|" & agentName & "|notice|" & subject & "|" & guidanceBody & "|" & nowIso
-    let sig = try: computeHmacSha256(secret, canonical) except Exception: ""
+    let sig = try: computeHmacSha256(secret, canonical) except CatchableError: ""
 
     var msgObj = newJObject()
     msgObj["id"] = %msgId

@@ -125,8 +125,10 @@ elseif action == "deliver" then
         redis.call('SADD', prefix .. "tasks", task_id)
     else
         local attempts = tonumber(redis.call('HGET', task_key, "delivery_attempts") or 0) + 1
+        local cur_st = redis.call('HGET', task_key, "state") or ""
+        local next_st = (cur_st == "IN_PROGRESS" or cur_st == "READY_TO_WEAVE" or cur_st == "COMPLETED") and cur_st or "DELIVERED"
         redis.call('HSET', task_key,
-            "state", "DELIVERED",
+            "state", next_st,
             "owner", worker,
             "delivered_at", now,
             "delivery_until", (now + timeout_sec),
@@ -275,6 +277,13 @@ elseif action == "complete" then
 
     local current_owner = redis.call('HGET', task_key, "owner") or ""
     local is_orchestrator = (worker == "orchestrator" or string.find(worker, "orchestrator") ~= nil)
+    if not is_orchestrator and worker ~= "" then
+        local w_tags = string.lower(redis.call('HGET', prefix .. "agent:" .. worker, "tags") or "")
+        local w_role = string.lower(redis.call('HGET', prefix .. "agent:" .. worker, "role") or "")
+        if string.find(w_tags, "orchestrator") ~= nil or string.find(w_tags, "lead") ~= nil or w_role == "orchestrator" or w_role == "lead" then
+            is_orchestrator = true
+        end
+    end
     if current_owner ~= "" and current_owner ~= worker and not is_orchestrator and worker ~= "" then
         -- Allow orchestrator or owner to complete
         return redis.error_reply("ERR: Worker '" .. worker .. "' does not own task '" .. task_id .. "'")
@@ -338,16 +347,22 @@ elseif action == "yield" or action == "abandon" then
         return redis.error_reply("ERR: Task '" .. task_id .. "' does not exist")
     end
 
+    local current_owner = redis.call('HGET', task_key, "owner") or ""
+    if current_owner ~= "" and worker ~= "" and current_owner ~= worker then
+        return redis.error_reply("ERR: Worker '" .. worker .. "' does not own task '" .. task_id .. "'")
+    end
+
     redis.call('HSET', task_key,
         "state", "QUEUED",
         "owner", "",
         "lease_until", 0,
         "yield_reason", reason
     )
-    if worker ~= "" then
-        redis.call('DEL', prefix .. "agent_task:" .. worker)
-        redis.call('DEL', prefix .. "current_task:" .. worker)
-        redis.call('HDEL', prefix .. "agent:" .. worker, "current_task")
+    local clear_owner = (worker ~= "" and worker or current_owner)
+    if clear_owner ~= "" then
+        redis.call('DEL', prefix .. "agent_task:" .. clear_owner)
+        redis.call('DEL', prefix .. "current_task:" .. clear_owner)
+        redis.call('HDEL', prefix .. "agent:" .. clear_owner, "current_task")
     end
     return "OK"
 

@@ -81,7 +81,7 @@ function resolveBinary() {
       ? (process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'))
       : path.join(os.homedir(), '.cache')
   );
-  const cacheBinDir = path.join(cacheBase, PKG_NAME, 'bin');
+  const cacheBinDir = path.join(cacheBase, PKG_NAME, VERSION, 'bin');
   const cachedBin = path.join(cacheBinDir, `${PKG_NAME}${ext}`);
 
   if (isCompatibleBinary(cachedBin)) {
@@ -116,7 +116,8 @@ function resolveBinary() {
   const srcFile = path.join(__dirname, '..', 'src', `${PKG_NAME}.nim`);
   if (fs.existsSync(srcFile)) {
     try {
-      execSync('which nim', { stdio: 'ignore' });
+      const whichCmd = process.platform === 'win32' ? 'where nim' : 'which nim';
+      execSync(whichCmd, { stdio: 'ignore' });
       process.stderr.write(`[@axiomantic/${PKG_NAME}] Building from source via Nim compiler...\n`);
       fs.mkdirSync(cacheBinDir, { recursive: true });
       execSync(`nim c -d:release --opt:speed -o:"${cachedBin}" "${srcFile}"`, { stdio: 'inherit' });

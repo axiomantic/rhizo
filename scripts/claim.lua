@@ -19,8 +19,8 @@ end
 qname = string.lower(qname)
 
 local agent = string.lower(ARGV[3] or "unknown")
-local lease_sec = tonumber(ARGV[4]) or 120
-local max_retries = tonumber(ARGV[5]) or 3
+local lease_sec = math.max(1, tonumber(ARGV[4]) or 120)
+local max_retries = math.max(1, tonumber(ARGV[5]) or 3)
 
 local queue_key = prefix .. "queue:{" .. qname .. "}"
 local leases_key = prefix .. "leases:{" .. qname .. "}"

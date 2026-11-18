@@ -88,7 +88,7 @@ Never Hijack or Kill Another Session's Active Listener: When 'rhizo listen <agen
 </FORBIDDEN>
 
 <INVARIANT>
-Ad-Hoc Subagents & No Double-Daemons: Subagents are tools for sessions to run ad-hoc tasks, never cluster swarm workers or listener relays. If an ad-hoc subagent is explicitly requested by the operator for a one-off inspection, 'rhizo listen' inside that subagent must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents.
+Ad-Hoc Ephemeral Subagents & No Double-Daemons: Non-interactive/opaque subagents are tools for transient inspections, never cluster swarm workers or listener relays. If an ad-hoc subagent runs `rhizo listen`, it must run as a synchronous blocking foreground command that exits on message receipt. Never spawn background daemons inside subagents. (Drillable persistent subagents in Antigravity IDE and OpenCode Desktop are exempt when operating under the full Garden/Vine worker procedure.)
 </INVARIANT>
 
 <INVARIANT>
@@ -115,11 +115,15 @@ Case-Insensitive Coordination: All channel names, agent codenames, inbox address
 </INVARIANT>
 
 <INVARIANT>
-Sovereign Session & Subagent Prohibition: Swarm workers are ALWAYS sovereign, independent interactive sessions (dedicated terminal tabs, CLI windows, or IDE sessions) bootstrapped via Garden 10-backtick prompt cards. Harness-internal subagents (e.g., Antigravity's 'invoke_subagent', Claude Code's 'Task', OpenCode subagents, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster swarm workers across all harnesses. Internal subagents are ephemeral, terminate upon single-task completion, cannot maintain persistent blocking listeners ('rhizo listen'), corrupt workspace isolation, and cause severe context poisoning by dumping execution traces back into the parent prompt. When orchestrating or bootstrapping a swarm, an orchestrator must NEVER spawn internal subagents and must NEVER offer "subagents" as a worker execution option during intake.
+Capability-Aware Worker Execution & Subagent Policy: First check 'rhizo who --all --json' and attach to active project or unassigned pool workers when available. On cold starts, execution mode matches harness visibility and direct chat interactivity:
+1. Drillable Persistent Subagents (Default on Antigravity IDE & OpenCode Desktop): Persistent child sessions where the operator can click in and chat interactively (e.g., Antigravity 'invoke_subagent' + 'send_message' with clickable 'conversation://<id>' links, or OpenCode Desktop child sessions) are valid swarm workers when they follow the full worker procedure (unique 'rhizo name' + 'rhizo open <name>', explicit '--agent <name>', isolated 1:1 Vine strand, 'vine submit', and independent Key 3 audit by a separate auditor).
+2. Automated 'tmux' Panes (Codex CLI in tmux / opt-in CLI): CLI sessions spawned in 'tmux' panes wired to 'rhizo listen' and prompt cards.
+3. Top-Level Prompt Card Sessions (Default on Codex Desktop & non-tmux CLI): Independent interactive windows bootstrapped via Garden 10-backtick prompt cards.
+Opaque, non-interactive CLI subagents (such as headless 'Task' jobs that cannot be drilled into or steered) are STRICTLY PROHIBITED as cluster swarm workers.
 </INVARIANT>
 
 <INVARIANT>
-Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work (or when acting as an orchestrator in a repository with active cluster workers), the session MUST route tasks to active cluster workers via Rhizo (`rhizo send <worker>`, `rhizo enqueue queue:<project>:tasks`, or `rhizo task assign/claim`). Harness-internal subagents (e.g. `invoke_subagent`, `Task`, `Agent`) must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when the operator explicitly requests a "subagent" by name.
+Delegation Precedence: When instructed to "delegate", "assign", or "dispatch" work (or when acting as an orchestrator in a repository with active cluster workers), the session MUST route tasks to active cluster workers via Rhizo (`rhizo send <worker>`, `rhizo enqueue queue:<project>:tasks`, or `rhizo task assign/claim`). On cold starts with no active cluster workers, use the harness's capability-aware default (drillable persistent subagents with clickable session links on Antigravity IDE & OpenCode Desktop; automated `tmux` panes or 10-backtick prompt cards on CLI / Codex Desktop). Opaque non-interactive CLI subagents (e.g. headless `Task` tools without drill-in chat) must NEVER fulfill cluster swarm roles and remain restricted to transient single-turn ad-hoc inspections.
 </INVARIANT>
 
 <CRITICAL>

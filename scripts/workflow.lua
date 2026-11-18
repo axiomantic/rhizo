@@ -238,6 +238,9 @@ elseif action == "resolve" then
     if not flow.steps[step_name] then
         return redis.error_reply("ERR: Step not found in workflow")
     end
+    if flow.steps[step_name].status == "pending" then
+        return redis.error_reply("ERR: Step '" .. step_name .. "' has unmet dependencies and is still pending")
+    end
 
     flow.steps[step_name].status = "completed"
     flow.steps[step_name].output = output

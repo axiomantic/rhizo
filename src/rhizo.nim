@@ -10,6 +10,9 @@ when defined(posix):
   import posix
 import config, redis, guide, routing, lexicon, update, changelog_data, upgrade_notify, session_crypto, std/[net, asyncdispatch, httpclient]
 
+when defined(inProcessTest):
+  template quit(code: int = 0) = testQuit(code)
+
 when not compiles(type(RedisResponseError)):
   type RedisResponseError* = object of RedisError
 
@@ -465,7 +468,7 @@ proc decryptAes*(ciphertext, secret: string, cfg: RhizoConfig = RhizoConfig()): 
   var raw = ""
   try:
     raw = decode(ciphertext.strip())
-  except Exception:
+  except CatchableError:
     raise newException(ValueError, "Decryption failed: invalid base64 encoding")
 
   if raw.len < 16 or not raw.startsWith("Salted__"):
@@ -528,10 +531,14 @@ proc formatRedisValue*(val: RedisValue, cmd: string = ""): string =
 proc openRedisClient*(redisUrl: string): Redis =
   let parsed = parseRedisUrl(redisUrl)
   result = open(parsed.host, parsed.port.Port)
-  if parsed.password.len > 0:
-    result.auth(parsed.password)
-  if parsed.db != 0:
-    discard result.select(parsed.db)
+  try:
+    if parsed.password.len > 0:
+      result.auth(parsed.password)
+    if parsed.db != 0:
+      discard result.select(parsed.db)
+  except CatchableError as e:
+    try: result.close() except CatchableError: discard
+    raise e
 
 proc connectRedis*(redisUrl: string): Redis =
   try:
@@ -615,13 +622,13 @@ proc runSignalCleanups*() =
       var client = openRedisClient(c.url)
       defer: (try: client.close() except CatchableError: discard)
       discard client.del(@[c.key])
-    except Exception:
+    except CatchableError:
       discard
 
 when defined(posix):
   proc handleSignal(sig: cint) {.noconv.} =
     runSignalCleanups()
-    quit(128 + int(sig))
+    system.quit(128 + int(sig))
 
   proc installSignalHandlers*() =
     var sa: Sigaction
@@ -632,13 +639,13 @@ when defined(posix):
     discard sigaction(SIGTERM, sa)
     setControlCHook(proc() {.noconv.} =
       runSignalCleanups()
-      quit(130)
+      system.quit(130)
     )
 else:
   proc installSignalHandlers*() =
     setControlCHook(proc() {.noconv.} =
       runSignalCleanups()
-      quit(130)
+      system.quit(130)
     )
 
 proc runLuaScript*(redisUrl, scriptText, scriptSha: string, evalArgs: openArray[string]): string =
@@ -1086,6 +1093,8 @@ proc getActiveListenerInfo*(cfg: RhizoConfig, name: string): tuple[active: bool,
 proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = "", explicitBind: bool = false): bool
 
 proc ensureRouterDaemonAlive*(cfg: RhizoConfig, client: Redis = nil): bool =
+  when defined(inProcessTest):
+    return false
   if getEnv("RHIZO_EAR_DISABLED", "") in ["1", "true", "yes"]: return false
   if getEnv("PYTEST_CURRENT_TEST", "").len > 0 or getEnv("RHIZO_TEST", "").len > 0: return false
 
@@ -1371,19 +1380,19 @@ proc bindAgentSessionPubkey*(cfg: RhizoConfig, agentName: string, client: Redis,
   return pubHex
 
 proc resolveSenderSessionPubkey*(cfg: RhizoConfig, client: Redis, fromAgent: string, cachedPubkey: string = ""): string =
+  let normFrom = sanitizeIdentifier(fromAgent)
+  if normFrom.len > 0 and client != nil:
+    try:
+      let rPubHash = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
+      if rPubHash != redisNil and rPubHash.len == 64:
+        return rPubHash
+      let rPubKey = client.get(cfg.prefix & "agent:" & normFrom & ":session_pubkey")
+      if rPubKey != redisNil and rPubKey.len == 64:
+        return rPubKey
+    except CatchableError:
+      discard
   if cachedPubkey.len == 64:
     return cachedPubkey
-  let normFrom = sanitizeIdentifier(fromAgent)
-  if normFrom.len == 0: return ""
-  try:
-    let rPubHash = client.hGet(cfg.prefix & "agent:" & normFrom, "session_pubkey")
-    if rPubHash != redisNil and rPubHash.len == 64:
-      return rPubHash
-    let rPubKey = client.get(cfg.prefix & "agent:" & normFrom & ":session_pubkey")
-    if rPubKey != redisNil and rPubKey.len == 64:
-      return rPubKey
-  except CatchableError:
-    discard
   return ""
 
 proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: string = "", convIdParam: string = "", harnessParam: string = "", explicitBind: bool = false): bool =
@@ -1549,6 +1558,10 @@ proc syncSessionRegistry*(client: Redis, cfg: RhizoConfig, agentNameParam: strin
   return true
 
 proc checkAutoSyncSessionRegistry*(cfg: RhizoConfig, client: Redis = nil, agentName: string = "") =
+  when defined(inProcessTest):
+    return
+  if getEnv("RHIZO_TEST", "").len > 0 or getEnv("PYTEST_CURRENT_TEST", "").len > 0:
+    return
   if getEnv("ANTIGRAVITY_LS_ADDRESS", "").len > 0 or
      getEnv("ANTIGRAVITY_CONVERSATION_ID", "").len > 0 or
      getEnv("OPENCODE_SESSION_ID", "").len > 0 or
@@ -1668,6 +1681,8 @@ proc doHeartbeat*(cfg: RhizoConfig, agentName: string): string =
 
 proc checkAndMintAuditTicket*(cfg: RhizoConfig, client: Redis, auditorName: string, parsed: JsonNode): tuple[isSubmitted: bool, taskId: string, ticketHex: string]
 proc printAuditTicketBanner*(auditorName, taskId, ticketHex: string)
+proc extractTaskId*(subject: string, body: string = ""): string
+proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = "json", forceSteal: bool = false, peek: bool = false): string =
   var client = connectRedis(cfg.redisUrl)
@@ -1768,6 +1783,7 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
         parsed["encrypted"] = %false
       except ValueError as e:
         stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping corrupted/undecryptable message: " & e.msg & " (ID: " & id & ")")
+        continue
     let mockOffset = try:
       let v = client.get(cfg.prefix & "mock_time_offset")
       if v != redisNil and v.len > 0: parseInt(v) else: 0
@@ -1792,6 +1808,21 @@ proc doDrain*(cfg: RhizoConfig, name: string, count: int = 50, format: string = 
       let (isSubmitted, submittedTaskId, ticketHex) = checkAndMintAuditTicket(cfg, client, name, parsed)
       if isSubmitted:
         printAuditTicketBanner(name, submittedTaskId, ticketHex)
+      let rawMsgType = msgType.toLowerAscii()
+      let toField = toAgent.strip().toLowerAscii()
+      let isBroadcastMsg = (toField == "*" or toField == "all" or toField == "" or toField.startsWith("@"))
+      let isCompleteFlag = parsed.getOrDefault("complete").getBool(false) or (rawMsgType == "complete")
+      if (rawMsgType in ["task", "work"]) and not isBroadcastMsg and not isCompleteFlag:
+        var effectiveTaskId = parsed.getOrDefault("task_id").getStr("")
+        let effBody = parsed.getOrDefault("body").getStr(body)
+        if effectiveTaskId.len == 0:
+          effectiveTaskId = extractTaskId(subject, effBody)
+        if effectiveTaskId.len == 0:
+          effectiveTaskId = id
+        try:
+          discard doTask(cfg, "deliver", [effectiveTaskId, name, "900", subject, effBody])
+        except CatchableError:
+          discard
 
     validMessages.add(parsed)
 
@@ -1890,21 +1921,27 @@ proc cleanupOldTmpFiles*() =
         except OSError:
           discard
 
-proc buildShutdownPayload*(reason: string = "bus shutdown"): string =
+proc buildShutdownPayload*(cfg: RhizoConfig, reason: string = "bus shutdown"): string =
+  let secret = getSecret(cfg)
+  let id = "msg_shutdown_" & $getTime().toUnix()
+  let ts = now().utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+  let canonical = id & "|system|*|shutdown|Shutdown|" & reason & "|" & ts
+  let sig = computeHmacSha256(secret, canonical)
   var node = newJObject()
-  node["id"] = %("msg_shutdown_" & $getTime().toUnix())
+  node["id"] = %id
   node["from"] = %"system"
   node["to"] = %"*"
   node["type"] = %"shutdown"
   node["subject"] = %"Shutdown"
   node["body"] = %reason
-  node["timestamp"] = %($getTime().toUnix())
+  node["timestamp"] = %ts
+  node["sig"] = %sig
   return $node
 
 proc doNuke*(cfg: RhizoConfig, asJson: bool = false): string =
   clearCurrentAgent()
   cleanupOldTmpFiles()
-  let shutdownPayload = buildShutdownPayload("rhizo nuke initiated")
+  let shutdownPayload = buildShutdownPayload(cfg, "rhizo nuke initiated")
 
   # 1. Notify listeners so BLPOP unblocks immediately
   let notifyRes = runLuaScript(cfg.redisUrl, resetLua, resetSha, [cfg.prefix, "notify", "*", shutdownPayload])
@@ -1959,7 +1996,7 @@ proc doReset*(cfg: RhizoConfig, optProject: string = "", forceAll: bool = false,
   if saved.startsWith(proj & "-") or saved == proj:
     clearCurrentAgent()
 
-  let shutdownPayload = buildShutdownPayload("rhizo reset initiated for project " & proj)
+  let shutdownPayload = buildShutdownPayload(cfg, "rhizo reset initiated for project " & proj)
 
   # 1. Notify project listeners so BLPOP unblocks
   let notifyRes = runLuaScript(cfg.redisUrl, resetLua, resetSha, [cfg.prefix, "notify", proj, shutdownPayload])
@@ -2086,7 +2123,6 @@ proc doDirectory*(cfg: RhizoConfig, filterTag: string = "", asJson: bool = false
 proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: bool = false, quiet: bool = false, force: bool = false, continuous: bool = false, rosterGuard: bool = false, agyEar: bool = false, forceBlocking: bool = false)
 proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false, harnessParam: string = "", stdoutMode: bool = false, isJson: bool = false)
 proc doAuditLog*(cfg: RhizoConfig, actor, action, details: string)
-proc extractTaskId*(subject: string, body: string = ""): string
 proc doStatus*(cfg: RhizoConfig, name, state: string, activity: string = ""): string
 proc findVineManifestPath*(startDir: string = ""): string
 proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandPath: string = "", explicitGateToken: string = "", worker: string = "", cfg: RhizoConfig = RhizoConfig(), subject: string = ""): tuple[passed: bool, token: string, errorMsg: string]
@@ -2097,7 +2133,6 @@ proc doReply*(cfg: RhizoConfig, toAgent, fromAgent, subject, body: string,
              skipGate: bool = false, idle: bool = false, complete: bool = false, taskId: string = ""): string
 proc doTaskComplete*(cfg: RhizoConfig, taskId: string, worker: string, gateToken: var string,
                      strandPath: string = "", weave: bool = false, skipGate: bool = false): string
-proc doTask*(cfg: RhizoConfig, action: string, args: openArray[string]): string
 
 
 proc reserveUniqueName*(cfg: RhizoConfig, optPrefix: string = "", ttlSec: int = 600): tuple[name, prefix, codename: string] =
@@ -2452,7 +2487,14 @@ proc checkAndMintAuditTicket*(cfg: RhizoConfig, client: Redis, auditorName: stri
           if normAuditor.len > 0:
             discard client.hSet(sKey, "audit_ticket_hash:" & normAuditor, ticketHash)
           let existingScalar = client.hGet(sKey, "audit_ticket_hash")
-          if existingScalar == redisNil or existingScalar.strip().len == 0 or normAuditor.contains("audit"):
+          var isAuditorRole = normAuditor.contains("audit")
+          if not isAuditorRole and normAuditor.len > 0:
+            let aRole = try: client.hGet(cfg.prefix & "agent:" & normAuditor, "role") except CatchableError: redisNil
+            let aTags = try: client.hGet(cfg.prefix & "agent:" & normAuditor, "tags") except CatchableError: redisNil
+            if (aRole != redisNil and aRole.toLowerAscii().contains("audit")) or
+               (aTags != redisNil and aTags.toLowerAscii().contains("audit")):
+              isAuditorRole = true
+          if existingScalar == redisNil or existingScalar.strip().len == 0 or isAuditorRole:
             discard client.hSet(sKey, "audit_ticket_hash", ticketHash)
         except CatchableError: discard
 
@@ -2594,11 +2636,16 @@ proc checkVineGateInterlock*(taskId: string = "", startDir: string = "", strandP
 
   let status = vj.getOrDefault("status").getStr("").toUpperAscii()
   let lifecycle = vj.getOrDefault("lifecycle_state").getStr("").toUpperAscii()
+  let state = vj.getOrDefault("state").getStr("").toUpperAscii()
   let gatePassedBool = vj.getOrDefault("gate_passed").getBool(false)
 
-  let statusOk = (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "WOVEN"]) or
-                 (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "WOVEN"]) or
-                 gatePassedBool
+  let isRejected = (status in ["REJECTED", "GATE_FAILED"]) or (lifecycle in ["REJECTED", "GATE_FAILED"]) or (state in ["REJECTED", "GATE_FAILED"])
+  let statusOk = not isRejected and (
+    (status in ["READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "RATIFIED", "WOVEN"]) or
+    (lifecycle in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "RATIFIED", "WOVEN"]) or
+    (state in ["GATE_PASSED", "READY_TO_WEAVE", "READY_FOR_WEAVE", "AUDIT_RATIFIED", "RATIFIED", "WOVEN"]) or
+    gatePassedBool
+  )
 
   var token = explicitGateToken
   if token.len == 0:
@@ -2975,8 +3022,8 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
     let displayBody = if fullText.len > 140: fullText[0..136] & "..." else: fullText
 
     when defined(macosx) or defined(darwin):
-      let escapedTitle = title.replace("\"", "\\\"")
-      let escapedBody = displayBody.replace("\"", "\\\"")
+      let escapedTitle = title.replace("\\", "\\\\").replace("\"", "\\\"")
+      let escapedBody = displayBody.replace("\\", "\\\\").replace("\"", "\\\"")
       let script = "display notification \"" & escapedBody & "\" with title \"" & escapedTitle & "\""
       discard execCmdEx("osascript -e " & quoteShell(script))
     elif defined(windows):
@@ -2986,7 +3033,7 @@ proc sendDesktopNotification*(msgNode: JsonNode) =
       discard execCmdEx("powershell -NoProfile -Command " & quoteShell(psCmd))
     else:
       discard execCmdEx("notify-send " & quoteShell(title) & " " & quoteShell(displayBody))
-  except Exception:
+  except CatchableError:
     discard
 
 proc isRoutineAck*(rawMsgType, subject, body: string): bool =
@@ -3465,7 +3512,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
               let node = parseJson(currentVal)
               if node.getOrDefault("pid").getInt(0) == myPid and node.getOrDefault("host").getStr("") == myHost:
                 isMyLock = true
-            except Exception:
+            except CatchableError:
               discard
           if isMyLock:
             discard client.setEx(cfg.prefix & "listener:" & name, hbTtl, listenerJson)
@@ -3784,7 +3831,7 @@ proc doListen*(cfg: RhizoConfig, name: string, timeoutSec: int = -1, notify: boo
         let node = parseJson(currentVal)
         if node.getOrDefault("pid").getInt(0) == myPid and node.getOrDefault("host").getStr("") == myHost:
           discard client.del(@[listenerKey])
-    except Exception:
+    except CatchableError:
       discard
 
 proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false, harnessParam: string = "", stdoutMode: bool = false, isJson: bool = false) =
@@ -4131,23 +4178,24 @@ proc doRouter*(cfg: RhizoConfig, action: string = "start", daemon: bool = false,
       let isRoutine = isRoutineAck(rawMsgType, subject, body)
       if not (isRoutine and suppressAck):
         let ok = dispatchAgyMessage(cfg, client, targetAgent, parsed, id, fromAgent, subject, body, isTask, effectiveTaskId)
+        let retryKey = cfg.prefix & "router_retries:" & targetAgent
         if ok:
+          try: discard client.hDel(retryKey, id) except CatchableError: discard
           if not isRoutine:
             recordDeliveryTelemetry(cfg, client, targetAgent, subject, body, rawMsgType, isTask, effectiveTaskId)
         elif not stdoutMode:
-          let retryCount = parsed.getOrDefault("router_retries").getInt(0)
-          if retryCount < 2:
-            parsed["router_retries"] = %(retryCount + 1)
-            let updatedPayload = $parsed
-            stderr.writeLine("[rhizo router] Warning: dispatchAgyMessage failed for @" & targetAgent & " (attempt " & $(retryCount + 1) & "/2); re-queueing message to " & poppedKey)
+          let retryCount = try: int(client.hIncrBy(retryKey, id, 1)) except CatchableError: 1
+          if retryCount <= 2:
+            stderr.writeLine("[rhizo router] Warning: dispatchAgyMessage failed for @" & targetAgent & " (attempt " & $retryCount & "/2); re-queueing message to " & poppedKey)
             try:
-              discard client.rPush(poppedKey, updatedPayload)
+              discard client.rPush(poppedKey, payloadStr)
             except CatchableError: discard
             sleep(500)
           else:
             stderr.writeLine("[rhizo router] ERROR: dispatchAgyMessage exceeded max retries (2) for @" & targetAgent & "; moving message to DLQ and clearing dead conversation.")
             let dlqKey = cfg.prefix & "dlq:" & targetAgent
             try:
+              discard client.hDel(retryKey, id)
               discard client.rPush(dlqKey, payloadStr)
               discard client.hDel(cfg.prefix & "agent:" & targetAgent, "agy_conversation_id")
               discard client.sRem(cfg.prefix & "active_agents", targetAgent)
@@ -4743,11 +4791,8 @@ proc decryptBlackboardValue(raw: string, secret: string, cfg: RhizoConfig, conte
       stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping corrupted blackboard entry: " & e.msg)
       quit(1)
   elif parts.len == 2:
-    try:
-      return decryptAes(parts[1], secret, cfg)
-    except ValueError as e:
-      stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping corrupted blackboard entry: " & e.msg)
-      quit(1)
+    stderr.writeLine("[RHIZO SECURITY] WARNING: Dropping unsigned/unauthenticated blackboard entry: " & contextMsg)
+    quit(1)
   return raw
 
 proc doBlackboard*(cfg: RhizoConfig, action, room: string, key: string = "", val: string = "", ttlSec: int = -1): string =
@@ -5074,7 +5119,7 @@ proc doBallotStatus*(cfg: RhizoConfig, ballotId: string) =
     quit(1)
   echo res
 
-proc doLeaderAcquire*(cfg: RhizoConfig, role, agentName: string, leaseSec: int = 30) =
+proc doLeaderAcquire*(cfg: RhizoConfig, role, agentName: string, leaseSec: int = 7200) =
   let normRole = role.toLowerAscii
   let normAgent = agentName.toLowerAscii
   let secret = getSecret(cfg)
@@ -5112,7 +5157,7 @@ proc doLeaderAcquire*(cfg: RhizoConfig, role, agentName: string, leaseSec: int =
     quit(1)
   echo res
 
-proc doLeaderRenew*(cfg: RhizoConfig, role, agentName: string, leaseSec: int = 30) =
+proc doLeaderRenew*(cfg: RhizoConfig, role, agentName: string, leaseSec: int = 7200) =
   let normRole = role.toLowerAscii
   let normAgent = agentName.toLowerAscii
   let secret = getSecret(cfg)
@@ -5721,11 +5766,15 @@ proc doSub*(cfg: RhizoConfig, channel: string, timeoutSec: int = -1) =
   proc asyncSub(): Future[string] {.async.} =
     let parsed = parseRedisUrl(cfg.redisUrl)
     let r = await openAsync(parsed.host, parsed.port.Port)
-    if parsed.password.len > 0:
-      await r.auth(parsed.password)
-    if parsed.db != 0:
-      discard await r.select(parsed.db)
-    await r.subscribe(fullChan)
+    try:
+      if parsed.password.len > 0:
+        await r.auth(parsed.password)
+      if parsed.db != 0:
+        discard await r.select(parsed.db)
+      await r.subscribe(fullChan)
+    except CatchableError as e:
+      try: await r.close() except CatchableError: discard
+      raise e
     if timeoutSec > 0:
       let msgFut = r.nextMessage()
       if await withTimeout(msgFut, timeoutSec * 1000):
@@ -7443,16 +7492,18 @@ proc installEarFile(harnessName, srcFilename, destFilename, targetDir, embeddedC
     writeFile(targetFile, embeddedContent)
     return "✓ Successfully installed Rhizo " & harnessName & " in " & targetFile & " (embedded)"
 
+proc buildRhizoHookCmd(exePath, hookAction, agentName: string): string =
+  let agentArg = if agentName.len > 0: " --agent " & quoteShell(agentName) else: ""
+  let inner = "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook " & hookAction & agentArg
+  result = "sh -c " & quoteShell(inner)
+
 proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentNameParam: string = "", isGlobal: bool = false, isLocal: bool = false): string =
   var normName = sanitizeIdentifier(agentNameParam)
   if normName.len == 0:
     normName = sanitizeIdentifier(getActiveAgentName(cfg, ""))
 
   let exePath = getAppFilename()
-  let targetCmd = if normName.len > 0:
-    "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook codex-stop --agent " & normName & "'"
-  else:
-    "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook codex-stop'"
+  let targetCmd = buildRhizoHookCmd(exePath, "codex-stop", normName)
 
   case targetHarness.toLowerAscii
   of "codex":
@@ -7579,20 +7630,9 @@ proc doHookInstall*(cfg: RhizoConfig, targetHarness: string = "codex", agentName
     if not rootNode.hasKey("rhizo") or rootNode["rhizo"].kind != JObject:
       rootNode["rhizo"] = newJObject()
 
-    let agyPreInvCmd = if normName.len > 0:
-      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-pre-invocation --agent " & normName & "'"
-    else:
-      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-pre-invocation'"
-
-    let agyPostToolCmd = if normName.len > 0:
-      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-post-tool --agent " & normName & "'"
-    else:
-      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-post-tool'"
-
-    let agyStopCmd = if normName.len > 0:
-      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-stop --agent " & normName & "'"
-    else:
-      "sh -c 'export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"; " & quoteShell(exePath) & " hook agy-stop'"
+    let agyPreInvCmd = buildRhizoHookCmd(exePath, "agy-pre-invocation", normName)
+    let agyPostToolCmd = buildRhizoHookCmd(exePath, "agy-post-tool", normName)
+    let agyStopCmd = buildRhizoHookCmd(exePath, "agy-stop", normName)
 
     # 1. PreInvocation (flat array of handler objects)
     var preInvArr = newJArray()
@@ -8300,11 +8340,80 @@ proc printSubcommandHelp*(subcmd: string, args: seq[string] = @[]): bool =
   else:
     return false
 
+proc printHelp*() =
+  echo "Rhizo " & RhizoVersion & " - High Performance Inter-Assistant Redis Bus (Nim Native)"
+  echo "Usage:"
+  echo "  rhizo version"
+  echo "  rhizo name [prefix] [--ttl <sec>] [--json]"
+  echo "  rhizo open [name] [tags] [--listen/-l]"
+  echo "  rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--agy-ear] (default timeout: 0 / infinite)"
+  echo "  rhizo ear [name] [--quiet/-q]"
+  echo "  rhizo send --to <agent> [--type task|query|reply|status] --subject <subj> --body <body> [--listen/-l]"
+  echo "  rhizo reply --to <agent> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l]"
+  echo "  rhizo broadcast [--tags <tags>] --subject <subj> --body <body>"
+  echo "  rhizo request --to <agent> --subject <subj> --body <body> [--timeout 30] [--raw]"
+  echo "  rhizo scatter --targets <@tag|agents|*> --subject <subj> --body <body> [--quorum N] [--timeout 30] [--raw]"
+  echo "  rhizo enqueue <queue_name> --subject <subj> --body <body>"
+  echo "  rhizo enqueue --route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
+  echo "  rhizo route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
+  echo "  rhizo route <lint|check> [--routes-file <file>] [--check-service]"
+  echo "  rhizo route init [--global] [--force]"
+  echo "  rhizo route setup [--daemon]"
+  echo "  rhizo work <queue_name> [--timeout <sec>] [--run-id <id>] (default timeout: 0 / infinite)"
+  echo "  rhizo claim <queue_name> [--timeout <sec>] [--lease 120] [--run-id <id>] [--raw]"
+  echo "  rhizo ack <queue_name> <task_id>"
+  echo "  rhizo blackboard <set|get|append|snapshot|load|delete|clear> <room> [key] [value]"
+  echo "  rhizo floor <request|yield|pass|status> <room> [args...]"
+  echo "  rhizo cancel <run_id> [--reason <reason>] | check <run_id> | clear <run_id>"
+  echo "  rhizo ballot <open|cast|tally|status> <ballot_id> [args...]"
+  echo "  rhizo leader <acquire|renew|resign|status> <role> [args...]"
+  echo "  rhizo workflow <define|next|resolve|fail|status|export|import> <flow_id> [args...]"
+  echo "  rhizo pulse <add|list|remove|tick> [args...]"
+  echo "  rhizo status <idle|busy|error> [activity_text] [name] [--listen/-l]"
+  echo "  rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw]"
+  echo "  rhizo unlock <lock_name>"
+  echo "  rhizo pub <channel> <message>"
+  echo "  rhizo sub <channel> [timeout_sec]"
+  echo "  rhizo who [-a|--all] [--json] [filter_tag]"
+  echo "  rhizo probe <agent> [--json]"
+  echo "  rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json] [-- <command...>]"
+  echo "  rhizo title [name]"
+  echo "  rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
+  echo "  rhizo sweep [--dry-run] [--raw]"
+  echo "  rhizo tag <add|remove|set> <tags> [name]"
+  echo "  rhizo reassign <worker> --project <project> --role <role> [--tags <tags>] [--queue <queue>]"
+  echo "  rhizo check-inbox [name]"
+  echo "  rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain] [--json|--hook|--raw]"
+  echo "  rhizo drain [count] [name] [--limit N] [--format json|hook|raw] [--hook]"
+  echo "  rhizo ping [--json]"
+  echo "  rhizo close [name]"
+  echo "  rhizo reset [project] [--all/-a] [--json]"
+  echo "  rhizo nuke [--json]"
+  echo "  rhizo get-secret"
+  echo "  rhizo config <show|get|path|init>"
+  echo "  rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
+  echo "  rhizo guide <install|uninstall|check> [path]"
+  echo "  rhizo hook <codex-stop|install|agy-pre-invocation|agy-post-tool|agy-stop> [--codex|--claude|--opencode|--pi|--antigravity] [--global] [--local]"
+  echo "  rhizo router [start|status|stop] [--daemon] [--harness <name>] [--stdout] [--json]"
+  echo "  rhizo session <register|set|get|resolve|remove|list> [args...]"
+  echo "  rhizo alias <set|get|list|del> [args...] (DEPRECATED: use capability tags)"
+  echo ""
+  echo "Global Options:"
+  echo "  --version, -v         Print version and exit"
+  echo "  --profile <name>      Select configuration profile from config file"
+  echo "  --config <file>       Explicit configuration file path"
+  echo "  --redis-url, --valkey-url, -u <url> Redis / Valkey connection endpoint"
+  echo "  --prefix <pfx>        Key namespace prefix"
+  echo "  --project <proj>      Project isolation group"
+  echo "  --encrypt             Enable AES-256-CBC payload encryption"
+  echo "  --cluster             Enable Redis Cluster hash tag compatibility"
+
 # Main Entrypoint / CLI Router
-proc main() =
-  installSignalHandlers()
+proc main*(customArgs: seq[string] = @[], useCustomArgs: bool = false) =
+  when not defined(inProcessTest):
+    installSignalHandlers()
   randomize()
-  let rawArgs = commandLineParams()
+  let rawArgs = if useCustomArgs: customArgs else: commandLineParams()
   var cli: CliOverrides
   var positionalArgs: seq[string] = @[]
 
@@ -8394,72 +8503,7 @@ proc main() =
     return
 
   if args.len == 0 or (args.len == 1 and args[0] in ["-h", "--help", "help"]):
-    echo "Rhizo " & RhizoVersion & " - High Performance Inter-Assistant Redis Bus (Nim Native)"
-    echo "Usage:"
-    echo "  rhizo version"
-    echo "  rhizo name [prefix] [--ttl <sec>] [--json]"
-    echo "  rhizo open [name] [tags] [--listen/-l]"
-    echo "  rhizo listen [name] [--timeout <sec>] [--force/-f] [--notify/-n] [--quiet/-q] [--agy-ear] (default timeout: 0 / infinite)"
-    echo "  rhizo ear [name] [--quiet/-q]"
-    echo "  rhizo send --to <agent> [--type task|query|reply|status] --subject <subj> --body <body> [--listen/-l]"
-    echo "  rhizo reply --to <agent> --subject <subj> --body <body> [--reply-to <id>] [--listen/-l]"
-    echo "  rhizo broadcast [--tags <tags>] --subject <subj> --body <body>"
-    echo "  rhizo request --to <agent> --subject <subj> --body <body> [--timeout 30] [--raw]"
-    echo "  rhizo scatter --targets <@tag|agents|*> --subject <subj> --body <body> [--quorum N] [--timeout 30] [--raw]"
-    echo "  rhizo enqueue <queue_name> --subject <subj> --body <body>"
-    echo "  rhizo enqueue --route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
-    echo "  rhizo route <task_text> [--routes-file <file>] [--service-url <url>] [--model <model>] [--api-key <key>]"
-    echo "  rhizo route <lint|check> [--routes-file <file>] [--check-service]"
-    echo "  rhizo route init [--global] [--force]"
-    echo "  rhizo route setup [--daemon]"
-    echo "  rhizo work <queue_name> [--timeout <sec>] [--run-id <id>] (default timeout: 0 / infinite)"
-    echo "  rhizo claim <queue_name> [--timeout <sec>] [--lease 120] [--run-id <id>] [--raw]"
-    echo "  rhizo ack <queue_name> <task_id>"
-    echo "  rhizo blackboard <set|get|append|snapshot|load|delete|clear> <room> [key] [value]"
-    echo "  rhizo floor <request|yield|pass|status> <room> [args...]"
-    echo "  rhizo cancel <run_id> [--reason <reason>] | check <run_id> | clear <run_id>"
-    echo "  rhizo ballot <open|cast|tally|status> <ballot_id> [args...]"
-    echo "  rhizo leader <acquire|renew|resign|status> <role> [args...]"
-    echo "  rhizo workflow <define|next|resolve|fail|status|export|import> <flow_id> [args...]"
-    echo "  rhizo pulse <add|list|remove|tick> [args...]"
-    echo "  rhizo status <idle|busy|error> [activity_text] [name] [--listen/-l]"
-    echo "  rhizo lock <lock_name> [ttl_sec] [--fencing] [--raw]"
-    echo "  rhizo unlock <lock_name>"
-    echo "  rhizo pub <channel> <message>"
-    echo "  rhizo sub <channel> [timeout_sec]"
-    echo "  rhizo who [-a|--all] [--json] [filter_tag]"
-    echo "  rhizo probe <agent> [--json]"
-    echo "  rhizo poke <agent> [--cmd <command>] [--force/-f] [--dry-run/-n] [--json] [-- <command...>]"
-    echo "  rhizo title [name]"
-    echo "  rhizo watchdog [check|reset] [agent] [--agent <name>] [--expect-listening] [--streak <N>] [--json]"
-    echo "  rhizo sweep [--dry-run] [--raw]"
-    echo "  rhizo tag <add|remove|set> <tags> [name]"
-    echo "  rhizo reassign <worker> --project <project> --role <role> [--tags <tags>] [--queue <queue>]"
-    echo "  rhizo check-inbox [name]"
-    echo "  rhizo inbox [name] [count] [--limit N] [--peek|--no-drain] [--drain] [--json|--hook|--raw]"
-    echo "  rhizo drain [count] [name] [--limit N] [--format json|hook|raw] [--hook]"
-    echo "  rhizo ping [--json]"
-    echo "  rhizo close [name]"
-    echo "  rhizo reset [project] [--all/-a] [--json]"
-    echo "  rhizo nuke [--json]"
-    echo "  rhizo get-secret"
-    echo "  rhizo config <show|get|path|init>"
-    echo "  rhizo update [--check] [--apply] [--skip <pkg@ver>] [--disable] [--enable] [--json]"
-    echo "  rhizo guide <install|uninstall|check> [path]"
-    echo "  rhizo hook <codex-stop|install|agy-pre-invocation|agy-post-tool|agy-stop> [--codex|--claude|--opencode|--pi|--antigravity] [--global] [--local]"
-    echo "  rhizo router [start|status|stop] [--daemon] [--harness <name>] [--stdout] [--json]"
-    echo "  rhizo session <register|set|get|resolve|remove|list> [args...]"
-    echo "  rhizo alias <set|get|list|del> [args...] (DEPRECATED: use capability tags)"
-    echo ""
-    echo "Global Options:"
-    echo "  --version, -v         Print version and exit"
-    echo "  --profile <name>      Select configuration profile from config file"
-    echo "  --config <file>       Explicit configuration file path"
-    echo "  --redis-url, --valkey-url, -u <url> Redis / Valkey connection endpoint"
-    echo "  --prefix <pfx>        Key namespace prefix"
-    echo "  --project <proj>      Project isolation group"
-    echo "  --encrypt             Enable AES-256-CBC payload encryption"
-    echo "  --cluster             Enable Redis Cluster hash tag compatibility"
+    printHelp()
     return
 
   if args[0] in ["-h", "--help", "help"] and args.len > 1:
@@ -8484,13 +8528,13 @@ proc main() =
     if caller.len > 0:
       try:
         discard checkAndEmitPullUpgradeRider(cfg, caller, RhizoVersion, rawArgs)
-      except Exception:
+      except CatchableError:
         discard
 
     # Proactive push to other active agents in the cluster
     try:
       discard notifyClusterOfUpgrade(cfg, RhizoVersion, excludeAgent = caller)
-    except Exception:
+    except CatchableError:
       discard
   case subcmd
   of "update":
@@ -10658,7 +10702,7 @@ proc main() =
     let role = args[2]
 
     var agentName = ""
-    var leaseSec = 30
+    var leaseSec = 7200
 
     var i = 3
     while i < args.len:
@@ -11523,7 +11567,7 @@ proc main() =
       for a in args[3..^1]:
         if a in ["--json", "-j"]: jsonOut = true
         else:
-          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task get'. Valid flags: --json, -j")
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo decision get'. Valid flags: --json, -j")
           quit(2)
       let res = doDecision(cfg, "get", [decId])
       if jsonOut:
@@ -11721,7 +11765,7 @@ proc main() =
       for a in args[3..^1]:
         if a in ["--json", "-j"]: jsonOut = true
         else:
-          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo task get'. Valid flags: --json, -j")
+          stderr.writeLine("Error: Unknown flag '" & a & "' for 'rhizo remind get'. Valid flags: --json, -j")
           quit(2)
       let res = doRemind(cfg, "get", [remId])
       if jsonOut:
@@ -11877,7 +11921,7 @@ proc main() =
       elif not a.startsWith("-"):
         if targetAgent.len == 0: targetAgent = a
       else:
-        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'probe'. Valid flags: --json, -j")
+        stderr.writeLine("Error: Unknown flag '" & a & "' for subcommand 'history'. Valid flags: --limit, --json, -j")
         quit(2)
       inc i
     echo doHistory(cfg, targetAgent, limit, jsonOut)

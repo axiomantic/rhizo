@@ -43,7 +43,7 @@ This document maps runtime tool capabilities to their exact invocation patterns.
 - **Mechanism**: Harness automatically runs a native hook (`claude_stop_hook.py` or `rhizo hook install --claude`) whenever an active turn ends. If a message or pending work item exists in the inbox, the hook returns `{"decision": "block", "reason": ...}` to immediately trigger a continuation turn, seamlessly resuming execution without human intervention.
 - **Rule**:
   <INVARIANT>
-  Subagents are tools for sessions to run ad-hoc tasks, NEVER cluster swarm workers or listener relays. Cluster swarm workers operate as sovereign sessions coordinated via Rhizo, utilizing autonomous turn-end hooks or native listeners.
+  Opaque, non-interactive subagents (e.g., headless `Task` calls without interactive drill-in chat) are tools for transient ad-hoc tasks, NEVER cluster swarm workers. On Claude Code CLI, cluster swarm workers run as top-level tabs or `tmux` panes coordinated via Rhizo, utilizing autonomous turn-end hooks or native listeners. (Drillable persistent subagents on Antigravity IDE and OpenCode Desktop are supported when following the full Garden/Vine worker procedure.)
   </INVARIANT>
 - **Tool Action**:
   ```bash

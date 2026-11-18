@@ -22,6 +22,9 @@ type
     ikGlobalNpm = "global_npm"
 
 proc getAxiomanticConfigDir*(): string =
+  let override = getEnv("AXIOMANTIC_CONFIG_DIR", "").strip()
+  if override.len > 0:
+    return override
   result = getHomeDir() / ".config" / "axiomantic"
 
 proc getUpdatesFilePath*(): string =
@@ -145,8 +148,8 @@ proc saveUpdatesConfig*(config: JsonNode) =
   except CatchableError:
     discard
 
-proc getInstalledVersion*(pkg: string, callerVer: string = "", callerPkg: string = ""): string =
-  if (pkg == callerPkg or (callerPkg.len == 0 and (pkg == "vine" or pkg == "garden" or pkg == "rhizo"))) and callerVer.len > 0:
+proc getInstalledVersion*(pkg: string, callerVer: string = "", callerPkg: string = "rhizo"): string =
+  if pkg == callerPkg and callerVer.len > 0:
     return callerVer
 
   let binCmd = pkg & " --version"
@@ -186,7 +189,7 @@ proc fetchRemoteVersion*(pkg: string): string =
 
 proc checkTriadUpdates*(
   callerVer: string = "",
-  callerPkg: string = "",
+  callerPkg: string = "rhizo",
   force: bool = false
 ): JsonNode =
   var config = loadUpdatesConfig()
@@ -242,7 +245,7 @@ proc isAutonomousModeActive*(): bool =
   if fileExists(getCurrentDir() / ".autonomous"): return true
   return false
 
-proc getUpdatePromptRider*(callerVer: string = "", callerPkg: string = ""): string =
+proc getUpdatePromptRider*(callerVer: string = "", callerPkg: string = "rhizo"): string =
   if isAutonomousModeActive():
     return ""
 
@@ -316,8 +319,12 @@ proc doUpdateCommand*(
     elif a in ["--disable", "-d", "--never"]: disablePrompt = true
     elif a in ["--enable", "-e"]: enablePrompt = true
     elif a == "--json": jsonOut = true
-    elif a == "--skip" and i + 1 < args.len:
-      skipVersion = args[i+1]; inc i
+    elif a == "--skip":
+      if i + 1 < args.len:
+        skipVersion = args[i+1]; inc i
+      else:
+        stderr.writeLine("[ERROR] --skip requires <package>@<version>")
+        return 1
     elif a.startsWith("--skip="):
       skipVersion = a[7..^1]
     inc i
@@ -344,12 +351,17 @@ proc doUpdateCommand*(
     if not config.hasKey("settings"): config["settings"] = newJObject()
     if not config["settings"].hasKey("ignored_versions"): config["settings"]["ignored_versions"] = newJObject()
 
-    if '@' in skipVersion:
-      let parts = skipVersion.split('@')
-      let pkg = parts[0].strip().replace("@axiomantic/", "")
+    let normalizedSkip = skipVersion.strip().replace("@axiomantic/", "")
+    if '@' in normalizedSkip:
+      let parts = normalizedSkip.split('@')
+      let pkg = parts[0].strip()
       let ver = parts[1].strip()
-      config["settings"]["ignored_versions"][pkg] = %ver
-      echo "[UPDATES] Skipped notifications for " & pkg & "@" & ver
+      if pkg.len > 0 and ver.len > 0:
+        config["settings"]["ignored_versions"][pkg] = %ver
+        echo "[UPDATES] Skipped notifications for " & pkg & "@" & ver
+      else:
+        stderr.writeLine("[ERROR] Invalid --skip format. Expected <pkg>@<version>")
+        return 1
     else:
       for pkg in TriadPackages:
         config["settings"]["ignored_versions"][pkg] = %skipVersion

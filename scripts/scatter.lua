@@ -58,10 +58,15 @@ for _, agent in ipairs(targets) do
             should_send = false
             -- Prune dead agent
             redis.call('SREM', prefix .. 'active_agents', norm_agent)
+            redis.call('DEL', prefix .. 'listener:' .. norm_agent)
             local agent_tags = redis.call('HGET', prefix .. 'agent:' .. norm_agent, 'tags') or ""
             for t in string.gmatch(agent_tags, "([^,]+)") do
-                local tr = string.lower(string.match(t, "^%s*(.-)%s*$"))
-                if tr ~= "" then redis.call('SREM', prefix .. 'tag:' .. tr, norm_agent) end
+                local raw_tr = string.match(t, "^%s*(.-)%s*$")
+                if raw_tr ~= "" then
+                    redis.call('SREM', prefix .. 'tag:' .. raw_tr, norm_agent)
+                    local tr = string.lower(raw_tr)
+                    if tr ~= raw_tr then redis.call('SREM', prefix .. 'tag:' .. tr, norm_agent) end
+                end
             end
             redis.call('DEL', prefix .. 'agent:' .. norm_agent)
         end

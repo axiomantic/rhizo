@@ -1,5 +1,6 @@
 import std/[unittest, os, strutils, json, tables, times, sets]
 import config, redis, upgrade_notify, changelog_data
+import ./test_helpers
 
 suite "Protocol Upgrade Notification Suite":
   setup:

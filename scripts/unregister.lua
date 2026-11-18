@@ -17,6 +17,10 @@ name = string.lower(name)
 local tags_csv = redis.call('HGET', prefix .. 'agent:' .. name, 'tags') or ""
 
 redis.call('DEL', prefix .. 'heartbeat:' .. name)
+redis.call('DEL', prefix .. 'listener:' .. name)
+redis.call('DEL', prefix .. 'agent_task:' .. name)
+redis.call('DEL', prefix .. 'current_task:' .. name)
+redis.call('HDEL', prefix .. 'agent_sessions', name)
 redis.call('SREM', prefix .. 'active_agents', name)
 redis.call('DEL', prefix .. 'agent:' .. name)
 redis.call('DEL', prefix .. 'inbox:' .. name)

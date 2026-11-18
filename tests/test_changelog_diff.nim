@@ -1,6 +1,7 @@
 # tests/test_changelog_diff.nim
 import std/[unittest, os, strutils]
 import ../src/changelog_data
+import ./test_helpers
 
 suite "Changelog Diff & Compile-Time Embedding":
   test "embedded changelog has entries":

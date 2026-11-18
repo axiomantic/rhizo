@@ -93,8 +93,8 @@ if [[ "${1:-}" == "--uninstall" || "${1:-}" == "uninstall" || "${1:-}" == "-u" ]
   done
 
   # H. Check standard binary paths
-  for p in "/usr/local/bin/rhizo" "${HOME}/.local/bin/rhizo" "${INSTALL_DIR:-}/rhizo" \
-           "/usr/local/bin/rhizo-ear" "${HOME}/.local/bin/rhizo-ear" "${INSTALL_DIR:-}/rhizo-ear"; do
+  for p in "/usr/local/bin/rhizo" "${HOME}/.local/bin/rhizo" ${INSTALL_DIR:+"${INSTALL_DIR}/rhizo"} \
+           "/usr/local/bin/rhizo-ear" "${HOME}/.local/bin/rhizo-ear" ${INSTALL_DIR:+"${INSTALL_DIR}/rhizo-ear"}; do
     if [ -f "$p" ]; then
       echo "Removing binary at: $p"
       if [ -w "$(dirname "$p")" ]; then
@@ -441,9 +441,19 @@ if [ "${OS}" != "unknown" ] && [ "${ARCH}" != "unknown" ]; then
       echo "Verifying cryptographic checksum..."
       cd "${TMP_DIR}"
       if command -v sha256sum >/dev/null 2>&1; then
-        grep "${TARBALL}" SHA256SUMS.txt | sha256sum -c --status 2>/dev/null && echo "✓ SHA256 checksum verified." || echo "Warning: Checksum mismatch or missing entry."
+        if grep "${TARBALL}" SHA256SUMS.txt | sha256sum -c --status 2>/dev/null; then
+          echo "✓ SHA256 checksum verified."
+        else
+          echo "Error: SHA256 checksum verification failed for ${TARBALL}." >&2
+          exit 1
+        fi
       elif command -v shasum >/dev/null 2>&1; then
-        grep "${TARBALL}" SHA256SUMS.txt | shasum -a 256 -c --status 2>/dev/null && echo "✓ SHA256 checksum verified." || echo "Warning: Checksum mismatch or missing entry."
+        if grep "${TARBALL}" SHA256SUMS.txt | shasum -a 256 -c --status 2>/dev/null; then
+          echo "✓ SHA256 checksum verified."
+        else
+          echo "Error: SHA256 checksum verification failed for ${TARBALL}." >&2
+          exit 1
+        fi
       fi
       cd - >/dev/null
     fi

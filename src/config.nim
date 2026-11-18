@@ -5,6 +5,15 @@
 
 import std/[os, strutils, tables, json, options, uri, sets, net, nativesockets]
 
+when defined(inProcessTest):
+  type CliExitError* = object of Defect
+    exitCode*: int
+  proc testQuit*(code: int = 0) {.noreturn.} =
+    var e = newException(CliExitError, "CLI exit " & $code)
+    e.exitCode = code
+    raise e
+  template quit(code: int = 0) = testQuit(code)
+
 when defined(macosx) or defined(macos) or defined(bsd):
   proc sysctlbyname(name: cstring, oldp: pointer, oldlenp: ptr csize_t, newp: pointer, newlen: csize_t): cint {.importc: "sysctlbyname", header: "<sys/sysctl.h>".}
 
@@ -273,11 +282,20 @@ proc parseSimpleToml*(content: string): TomlTable =
       continue
 
     # Remove inline comments if not inside quotes
-    var inQuotes = false
+    var quoteChar = '\0'
+    var escaped = false
     var cleanLine = ""
     for c in line:
-      if c == '"' or c == '\'': inQuotes = not inQuotes
-      elif c == '#' and not inQuotes: break
+      if escaped:
+        escaped = false
+      elif c == '\\' and quoteChar == '"':
+        escaped = true
+      elif quoteChar == '\0' and (c == '"' or c == '\''):
+        quoteChar = c
+      elif c == quoteChar:
+        quoteChar = '\0'
+      elif c == '#' and quoteChar == '\0':
+        break
       cleanLine.add(c)
     cleanLine = cleanLine.strip()
     if cleanLine.len == 0: continue
@@ -339,6 +357,8 @@ proc loadDotEnvFile*(path: string) =
     discard
 
 proc loadDotEnv*(startDir: string = getCurrentDir()) =
+  when defined(inProcessTest):
+    gInitialEnvKeys.clear()
   let wsDir = findWorkspaceDir(startDir)
   # Precedence cascade: .env -> .rhizo.env -> .env.local -> .rhizo.env.local
   # Later files override earlier files for variables not locked by initial system environment.

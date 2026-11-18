@@ -3,6 +3,7 @@
 
 import std/[unittest, json, tables, os, strutils]
 import ../src/routing
+import ./test_helpers
 
 suite "Route Config Linter & Parser":
   test "valid configuration passes linting with 0 errors":

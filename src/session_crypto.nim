@@ -228,8 +228,6 @@ proc saveSessionPrivKey*(agentName: string, privHex: string) =
   except CatchableError as e:
     stderr.writeLine("[WARNING] Failed to save session private key to " & keyFile & ": " & e.msg)
 
-  putEnv("RHIZO_SESSION_PRIVKEY", privHex.strip())
-
 proc loadSessionPrivKey*(agentName: string): string =
   let envKey = getEnv("RHIZO_SESSION_PRIVKEY", "").strip()
   if envKey.len == 64:

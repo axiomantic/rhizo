@@ -42,6 +42,11 @@ local function update_strand_state(strand_id, old_state, new_state, project)
     end
 end
 
+local function non_empty(val, default)
+    if val and val ~= "" then return val end
+    return default
+end
+
 --------------------------------------------------------------------------------
 -- 1. ACTION: create
 -- ARGV[3]: strand_id
@@ -62,20 +67,22 @@ if action == "create" then
     end
 
     local strand_key = prefix .. "strand:" .. strand_id
+    local prev_state = nil
     if redis.call('EXISTS', strand_key) == 1 then
         local current_state = redis.call('HGET', strand_key, "state") or ""
         if current_state ~= "WOVEN" then
             return redis.error_reply("ERR: Strand '" .. strand_id .. "' already exists in state '" .. current_state .. "'")
         end
+        prev_state = current_state
     end
 
     local project = string.lower(ARGV[4] or "")
     local strand_path = ARGV[5] or ""
     local branch = ARGV[6] or ""
-    local base_branch = ARGV[7] or "main"
+    local base_branch = non_empty(ARGV[7], "main")
     local base_commit = ARGV[8] or ""
     local author = ARGV[9] or ""
-    local author_pubkey = ARGV[10] or author
+    local author_pubkey = non_empty(ARGV[10], author)
     local orchestrator = ARGV[11] or ""
     local canonical_repo = ARGV[12] or ""
 
@@ -109,7 +116,7 @@ if action == "create" then
         "notes", ""
     )
 
-    update_strand_state(strand_id, nil, "PROVISIONED", project)
+    update_strand_state(strand_id, prev_state, "PROVISIONED", project)
 
     return cjson.encode({
         status = "OK",

@@ -27,7 +27,7 @@ proc fingerprintRunLua*(scriptSha: string, evalArgs: seq[string]): string =
   for a in evalArgs: parts.add(a)
   fingerprintOf("runLuaScript", parts)
 
-# Generate TRM templates for arrays of size 2 through 8
+# Generate TRM templates for arrays of size 2 through 16
 macro emitRunLuaScriptArrayVariants(minN: static[int], maxN: static[int]): untyped =
   result = newStmtList()
   let urlI = ident"redisUrl"
@@ -50,4 +50,4 @@ macro emitRunLuaScriptArrayVariants(minN: static[int], maxN: static[int]): untyp
             runLuaScript(`urlI`, `txtI`, `shaI`, `argsI`)
     result.add(tdef)
 
-emitRunLuaScriptArrayVariants(2, 8)
+emitRunLuaScriptArrayVariants(2, 16)

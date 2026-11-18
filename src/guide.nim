@@ -52,7 +52,11 @@ Never assume you are the orchestrator or an existing active worker simply becaus
 </INVARIANT>
 
 <INVARIANT>
-Sovereign Session & Subagent Prohibition: Swarm workers are ALWAYS sovereign, independent interactive sessions (dedicated terminal tabs, CLI windows, or IDE sessions) bootstrapped via Garden 10-backtick prompt cards. Harness-internal subagents (e.g., Antigravity's 'invoke_subagent', Claude Code's 'Task', OpenCode subagents, Cursor sub-composers) are STRICTLY PROHIBITED from acting as cluster swarm workers across all harnesses. Internal subagents are ephemeral, terminate upon single-task completion, cannot maintain persistent blocking listeners ('rhizo listen'), corrupt workspace isolation, and cause severe context poisoning by dumping execution traces back into the parent prompt. When orchestrating or bootstrapping a swarm, an orchestrator must NEVER spawn internal subagents and must NEVER offer "subagents" as a worker execution option during intake.
+Capability-Aware Worker Execution & Subagent Policy: First check 'rhizo who --all --json' and attach to active project or unassigned pool workers when available. On cold starts, execution mode matches harness visibility and direct chat interactivity:
+1. Drillable Persistent Subagents (Default on Antigravity IDE & OpenCode Desktop): Persistent child sessions where the operator can click in and chat interactively (e.g., Antigravity 'invoke_subagent' + 'send_message' with clickable 'conversation://<id>' links, or OpenCode Desktop child sessions) are valid swarm workers when they follow the full worker procedure (unique 'rhizo name' + 'rhizo open <name>', explicit '--agent <name>', isolated 1:1 Vine strand, 'vine submit', and independent Key 3 audit by a separate auditor).
+2. Automated 'tmux' Panes (Codex CLI in tmux / opt-in CLI): CLI sessions spawned in 'tmux' panes wired to 'rhizo listen' and prompt cards.
+3. Top-Level Prompt Card Sessions (Default on Codex Desktop & non-tmux CLI): Independent interactive windows bootstrapped via Garden 10-backtick prompt cards.
+Opaque, non-interactive CLI subagents (such as headless 'Task' jobs that cannot be drilled into or steered) are STRICTLY PROHIBITED as cluster swarm workers.
 </INVARIANT>
 
 <FORBIDDEN>
@@ -93,7 +97,7 @@ Case-Insensitive Channels & Entities: Agent codenames, inbox addresses, multicas
 
 ### 6. Delegation Precedence & Operator-Named Worker Mandate
 <INVARIANT>
-Delegation Precedence & Operator-Named Worker Mandate: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). Harness-internal subagents (e.g. 'invoke_subagent', 'Task', 'Agent') must NEVER be used to fulfill cluster swarm roles; they are restricted solely to transient, single-turn ad-hoc inspections in non-swarm solo chats when the operator explicitly requests a "subagent" by name.
+Delegation Precedence & Operator-Named Worker Mandate: When instructed to "delegate", "assign", or "dispatch" work, an orchestrator MUST dispatch tasks to active workers in the cluster over Rhizo ('rhizo send <worker>', 'rhizo enqueue queue:<project>:tasks', or 'rhizo task assign/claim'). On cold starts with no active cluster workers, use the harness's capability-aware default (drillable persistent subagents with clickable session links on Antigravity IDE & OpenCode Desktop; automated 'tmux' panes or 10-backtick prompt cards on CLI / Codex Desktop). Opaque non-interactive subagents (e.g. headless 'Task' tools without drill-in chat) must NEVER fulfill cluster swarm roles and remain restricted to transient single-turn ad-hoc inspections.
 Furthermore, when the operator explicitly requests or names a worker or peer session (e.g. 'u + autopxd-architect' or 'assign to worker-1'), the orchestrator MUST dispatch directly to that named recipient over Rhizo ('rhizo send --to <worker> ...'). The orchestrator MUST NEVER gate delegation on whether that worker appears in local single-project 'rhizo who', and MUST NEVER fall back to internal subagents. When inspecting the cluster roster for active workers, an orchestrator MUST query 'rhizo who --all --json' (or check specific peers via 'rhizo who <worker>' / 'rhizo probe <worker>'). Never assume the cluster is empty based solely on local single-project 'rhizo who' output.
 </INVARIANT>
 
@@ -219,7 +223,7 @@ proc installGuide*(targetPath: string): tuple[success: bool, message: string] =
       moveFile(tmpPath, targetPath)
       return (true, "Appended Rhizo Guide [" & GuideVersion & "] to " & targetPath & ".")
 
-  except Exception as e:
+  except CatchableError as e:
     if fileExists(tmpPath):
       try: removeFile(tmpPath)
       except CatchableError: discard
@@ -265,7 +269,7 @@ proc uninstallGuide*(targetPath: string): tuple[success: bool, message: string] 
     moveFile(tmpPath, targetPath)
     return (true, "Successfully uninstalled Rhizo Guide from " & targetPath & ".")
 
-  except Exception as e:
+  except CatchableError as e:
     if fileExists(tmpPath):
       try: removeFile(tmpPath)
       except CatchableError: discard

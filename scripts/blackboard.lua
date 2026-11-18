@@ -131,6 +131,11 @@ elseif action == "load" or action == "restore" then
     if not ok or type(snapshot) ~= "table" then
         return redis.error_reply("ERR: Invalid JSON snapshot for blackboard load")
     end
+    local old_list_keys = redis.call('SMEMBERS', lists_index)
+    for _, old_lk in ipairs(old_list_keys) do
+        redis.call('UNLINK', prefix .. "blackboard:{" .. room .. "}:list:" .. old_lk)
+    end
+    redis.call('UNLINK', kv_key, rev_key, lists_index)
     if snapshot.kv and type(snapshot.kv) == "table" then
         for k, v in pairs(snapshot.kv) do
             redis.call('HSET', kv_key, k, tostring(v))
@@ -144,6 +149,9 @@ elseif action == "load" or action == "restore" then
                 redis.call('UNLINK', list_key)
                 for _, item in ipairs(items) do
                     redis.call('RPUSH', list_key, tostring(item))
+                end
+                if ttl > 0 then
+                    redis.call('EXPIRE', list_key, ttl)
                 end
                 redis.call('SADD', lists_index, lk)
             end

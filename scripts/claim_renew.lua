@@ -25,7 +25,7 @@ if not score then
 end
 
 local score_num = tonumber(score)
-if score_num < now_ts then
+if score_num <= now_ts then
     return redis.error_reply("ERR: Lease for task " .. task_id .. " already expired")
 end
 

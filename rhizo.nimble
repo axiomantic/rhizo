@@ -16,6 +16,12 @@ requires "typestates >= 0.13.0"
 task test, "Run test suite":
   exec "nim r tests/test_routing_unit.nim"
   exec "nim r tests/test_protocol_tripwire.nim"
+  exec "nim r tests/test_crypto_primitives.nim"
+  exec "nim r tests/test_changelog_diff.nim"
+  exec "nim r tests/test_upgrade_notify.nim"
+  exec "nim r tests/test_config_and_guide.nim"
+  exec "nim r tests/test_protocol_comprehensive.nim"
+  exec "nim r tests/test_coordination_and_security.nim"
 
 after build:
   when defined(macosx) or defined(darwin):

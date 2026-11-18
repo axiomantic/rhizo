@@ -44,6 +44,8 @@ if action == "open" then
         return redis.error_reply("ERR: Missing options for ballot")
     end
 
+    redis.call("DEL", votes_key)
+    redis.call("DEL", prefix .. "ballot:votes_sig:{" .. ballot_id .. "}")
     redis.call("HSET", meta_key,
         "options", options_raw,
         "voters", voters_raw,
