@@ -52,8 +52,10 @@ proc saveAndInitCoordEnv(fakeHome: string, projectName: string = "test_project")
   putEnv("RHIZO_REDIS_PREFIX", testPrefix)
   putEnv("RHIZO_PROJECT", projectName)
   putEnv("RHIZO_ALLOW_DRIFT", "1")
+  try: setCurrentDir(fakeHome) except CatchableError: discard
 
 proc restoreCoordEnv(saved: seq[tuple[k, v: string, present: bool]]) =
+  try: setCurrentDir(initialWorkingDir) except CatchableError: discard
   for item in saved:
     if item.present: putEnv(item.k, item.v)
     else: delEnv(item.k)
@@ -211,6 +213,7 @@ suite "Rhizo Session Cryptographic Attestation Suite":
   test "Ed25519 keygen 0600, signed send/drain, tamper/forgery/spoof rejection, rotation, lock/task verify, and probe":
     sandbox:
       allow(redisPluginInstance)
+      allow(nfos.osprocPluginInstance)
       let tmpHome = nextTmpDir("crypto_home")
       let saved = saveAndInitCoordEnv(tmpHome, "crypto_project")
       defer:

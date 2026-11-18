@@ -51,8 +51,10 @@ proc saveAndInitProtoEnv(fakeHome: string, projectName: string = "test_project",
   putEnv("RHIZO_ALLOW_DRIFT", "1")
   if secretVal.len > 0:
     putEnv("RHIZO_SECRET", secretVal)
+  try: setCurrentDir(fakeHome) except CatchableError: discard
 
 proc restoreProtoEnv(saved: seq[tuple[k, v: string, present: bool]]) =
+  try: setCurrentDir(initialWorkingDir) except CatchableError: discard
   for item in saved:
     if item.present: putEnv(item.k, item.v)
     else: delEnv(item.k)
