@@ -6,8 +6,8 @@ import ./test_helpers
 suite "Changelog Diff & Compile-Time Embedding":
   test "embedded changelog has entries":
     check EmbeddedChangelog.len > 0
-    check EmbeddedChangelog[0].version == "0.2.34"
-    check EmbeddedChangelog[0].date == "2026-11-12"
+    check EmbeddedChangelog[0].version == "0.2.35"
+    check EmbeddedChangelog[0].date == "2026-11-18"
 
   test "1-version increment (0.2.25 -> 0.2.26)":
     let diff = getChangelogDiff("0.2.25", "0.2.26")

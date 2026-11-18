@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.35] - 2026-11-18
+
 ### Changed
 - **100% In-Process Nim Test Suite Migration (`tests/config.nims`, `tests/test_helpers.nim`, `tests/test_config_and_guide.nim`, `tests/test_protocol_comprehensive.nim`, `tests/test_coordination_and_security.nim`, `src/rhizo.nim`, `src/config.nim`, `src/routing.nim`, `src/guide.nim`, `src/upgrade_notify.nim`, `rhizo.nimble`, `justfile`, `.github/workflows/ci.yml`)**:
   - Parameterized `main*(customArgs, useCustomArgs)` with `-d:inProcessTest` `CliExitError`/`testQuit` and non-blocking POSIX pipe / Windows CRT stdout/stderr capture (`captureIoSplit*`, `runRhizoInProcess*`), migrating all Python test suites (`pytest`, `pytest.ini`, `pyproject.toml`, `requirements.txt` deleted) to native Nim via `nimble test`.
